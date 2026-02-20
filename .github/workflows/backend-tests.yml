@@ -1,0 +1,55 @@
+name: Backend Tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "app/**"
+      - "alembic/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "pytest.ini"
+      - ".github/workflows/backend-tests.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "alembic/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "pytest.ini"
+      - ".github/workflows/backend-tests.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Start dependencies
+        run: docker compose up -d db minio
+
+      - name: Apply migrations
+        run: docker compose run --rm api alembic upgrade head
+
+      - name: Run integration tests
+        run: docker compose run --rm api pytest -q --maxfail=1 tests/integration
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v
