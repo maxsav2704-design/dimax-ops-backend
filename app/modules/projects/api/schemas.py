@@ -35,6 +35,10 @@ class ProjectListResponse(BaseModel):
     items: list[ProjectListItem]
 
 
+class ProjectCreateResponse(BaseModel):
+    id: UUID
+
+
 class DoorImportRow(BaseModel):
     door_type_id: UUID
     unit_label: str = Field(min_length=1, max_length=120)
@@ -43,6 +47,10 @@ class DoorImportRow(BaseModel):
 
 class ImportDoorsBody(BaseModel):
     rows: list[DoorImportRow] = Field(min_length=1, max_length=5000)
+
+
+class ImportDoorsResponse(BaseModel):
+    imported: int
 
 
 class AssignInstallerBody(BaseModel):

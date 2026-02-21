@@ -52,3 +52,7 @@ class ProjectAddonsResponse(BaseModel):
 
 class PlanBatchBody(BaseModel):
     items: list[PlanItemDTO]
+
+
+class OkResponse(BaseModel):
+    ok: bool = True

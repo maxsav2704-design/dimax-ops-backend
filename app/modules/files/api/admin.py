@@ -5,11 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import CurrentUser, get_uow, require_admin
-from app.modules.files.api.admin_schemas import (
-    FileDownloadEventDTO,
-    FileDownloadEventsResponse,
-)
-from app.modules.files.infrastructure.models import FileDownloadEventORM
+from app.modules.files.api.admin_schemas import FileDownloadEventsResponse
+from app.modules.files.application.api_service import FilesAdminService
 
 
 router = APIRouter(prefix="/admin/files", tags=["Admin / Files"])
@@ -23,30 +20,9 @@ def list_downloads(
     uow=Depends(get_uow),
 ):
     with uow:
-        q = uow.session.query(FileDownloadEventORM).filter(
-            FileDownloadEventORM.company_id == user.company_id
-        )
-        if journal_id is not None:
-            q = q.filter(
-                FileDownloadEventORM.correlation_id == journal_id
-            )
-        rows = (
-            q.order_by(FileDownloadEventORM.created_at.desc())
-            .limit(limit)
-            .all()
-        )
-
-        return FileDownloadEventsResponse(
-            items=[
-                FileDownloadEventDTO(
-                    created_at=r.created_at,
-                    source=r.source,
-                    correlation_id=r.correlation_id,
-                    ip=r.ip,
-                    user_agent=r.user_agent,
-                    actor_user_id=r.actor_user_id,
-                    file_name=r.file_name,
-                )
-                for r in rows
-            ]
+        return FilesAdminService.list_downloads(
+            uow,
+            company_id=user.company_id,
+            journal_id=journal_id,
+            limit=limit,
         )

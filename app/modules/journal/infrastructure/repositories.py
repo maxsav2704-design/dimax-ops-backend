@@ -71,6 +71,22 @@ class JournalRepository:
     def add_items(self, items: list[JournalDoorItemORM]) -> None:
         self.session.add_all(items)
 
+    def list_items(
+        self,
+        *,
+        company_id: uuid.UUID,
+        journal_id: uuid.UUID,
+    ) -> list[JournalDoorItemORM]:
+        return (
+            self.session.query(JournalDoorItemORM)
+            .filter(
+                JournalDoorItemORM.company_id == company_id,
+                JournalDoorItemORM.journal_id == journal_id,
+            )
+            .order_by(JournalDoorItemORM.unit_label.asc())
+            .all()
+        )
+
     def add_signature(self, sig: JournalSignatureORM) -> None:
         self.session.add(sig)
 

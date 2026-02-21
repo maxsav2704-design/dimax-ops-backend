@@ -60,6 +60,10 @@ class Settings(BaseSettings):
 
     PUBLIC_FILES_RL_WINDOW_SEC: int = 60
     PUBLIC_FILES_RL_MAX_REQ: int = 30
+    AUTH_LOGIN_RL_WINDOW_SEC: int = 60
+    AUTH_LOGIN_RL_MAX_REQ: int = 60
+    AUTH_REFRESH_RL_WINDOW_SEC: int = 60
+    AUTH_REFRESH_RL_MAX_REQ: int = 120
 
 
 settings = Settings()

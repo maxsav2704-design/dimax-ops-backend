@@ -1,34 +1,34 @@
-# Repository Boundaries Plan
+# Repository Boundaries
 
-Current issue: git root is above project directory, which mixes unrelated files with backend history and CI scope.
+## Target Boundary
 
-## Recommended Target
+- Backend git root must be exactly: `.../DIMAX Operations Suite/backend`
+- CI/workflows/docs are scoped to this repository root.
 
-- Separate repository root = `.../DIMAX Operations Suite/backend`
+## Enforced Contract
 
-## Migration Plan (Safe, Step by Step)
+- Verification script: `scripts/verify_repo_boundary.py`
+- CI check: `Backend Tests / repo-boundary`
+- Aggregated gate: `Backend Tests / quality-gate`
 
-1. Create a new empty GitHub repository for backend.
-2. In `backend` directory, initialize a standalone git repo:
+If git root drifts above/below backend, `repo-boundary` fails and blocks merge.
+
+## Local Verification
 
 ```bash
-cd "C:\Users\Hi-tech\.vscode\DIMAX Operations Suite\backend"
-git init --initial-branch main
-git add .
-git commit -m "Initial backend repository"
-git remote add origin <backend-repo-url>
-git push -u origin main
+python scripts/verify_repo_boundary.py
 ```
 
-3. Configure branch protection using `QUALITY_GATE.md`.
-4. Keep old top-level repo as archive or remove backend subtree from it later.
+Expected output:
 
-## Optional: Preserve Full History
+- `[repo-boundary] OK: <backend-path>`
 
-If you need old commit history for `backend` only, use `git filter-repo` on a clone and publish filtered history to the new backend repository.
+## Recovery (if boundary is broken)
 
-## Why This Matters
-
-- Clean `git status` and PR diffs.
-- Correct workflow discovery under `.github/workflows`.
-- Smaller CI scope and faster checks.
+1. Go to backend folder:
+   - `cd "C:\Users\Hi-tech\.vscode\DIMAX Operations Suite\backend"`
+2. Re-initialize backend git root:
+   - `git init --initial-branch main`
+3. Reconnect remote:
+   - `git remote add origin <backend-repo-url>`
+4. Push and restore branch protection from `QUALITY_GATE.md`.

@@ -46,5 +46,9 @@ class EventListResponse(BaseModel):
     items: list[EventDTO]
 
 
+class EventCreateResponse(BaseModel):
+    id: UUID
+
+
 class OkResponse(BaseModel):
     ok: bool = True

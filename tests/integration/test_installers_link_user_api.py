@@ -40,6 +40,7 @@ def test_link_user_rejects_wrong_role(client, make_installer, make_user):
         json={"user_id": str(admin_user.id)},
     )
     assert link_resp.status_code == 400, link_resp.text
+    assert link_resp.json()["error"]["code"] == "BAD_REQUEST"
 
 
 def test_link_user_rejects_other_company(client, db_session, make_installer, make_user):
@@ -66,6 +67,7 @@ def test_link_user_rejects_other_company(client, db_session, make_installer, mak
             json={"user_id": str(foreign_user.id)},
         )
         assert link_resp.status_code == 400, link_resp.text
+        assert link_resp.json()["error"]["code"] == "BAD_REQUEST"
     finally:
         db_session.rollback()
         db_session.execute(
@@ -95,3 +97,4 @@ def test_link_user_rejects_already_linked_user(client, make_installer, make_user
         json={"user_id": str(user.id)},
     )
     assert second_link_resp.status_code == 409, second_link_resp.text
+    assert second_link_resp.json()["error"]["code"] == "CONFLICT"

@@ -21,6 +21,7 @@ def test_installer_rates_unique_and_delete_flow(client, make_installer, make_doo
 
     duplicate_resp = client.post("/api/v1/admin/installer-rates", json=payload)
     assert duplicate_resp.status_code == 409, duplicate_resp.text
+    assert duplicate_resp.json()["error"]["code"] == "CONFLICT"
 
     list_resp = client.get(
         f"/api/v1/admin/installer-rates?installer_id={payload['installer_id']}"
@@ -35,3 +36,4 @@ def test_installer_rates_unique_and_delete_flow(client, make_installer, make_doo
 
     get_deleted_resp = client.get(f"/api/v1/admin/installer-rates/{rate_id}")
     assert get_deleted_resp.status_code == 404, get_deleted_resp.text
+    assert get_deleted_resp.json()["error"]["code"] == "NOT_FOUND"

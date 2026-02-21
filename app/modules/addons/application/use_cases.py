@@ -188,6 +188,7 @@ class AddonsUseCases:
             client_event_id=client_event_id,
         )
         uow.addon_facts.create(row)
+        uow.session.flush()
 
         uow.sync_change_log.add_change(
             company_id=company_id,

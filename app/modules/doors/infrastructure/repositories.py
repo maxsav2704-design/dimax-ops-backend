@@ -162,37 +162,3 @@ class DoorRepository:
             }
             for r in rows
         ]
-
-    def list_by_project_for_installer(
-        self,
-        *,
-        company_id: uuid.UUID,
-        project_id: uuid.UUID,
-        installer_id: uuid.UUID,
-    ) -> list[DoorORM]:
-        return (
-            self.session.query(DoorORM)
-            .filter(
-                DoorORM.company_id == company_id,
-                DoorORM.project_id == project_id,
-                DoorORM.installer_id == installer_id,
-            )
-            .order_by(DoorORM.unit_label.asc())
-            .all()
-        )
-
-    def list_project_ids_for_installer(
-        self,
-        *,
-        company_id: uuid.UUID,
-        installer_id: uuid.UUID,
-    ) -> list[uuid.UUID]:
-        rows = (
-            self.session.query(distinct(DoorORM.project_id))
-            .filter(
-                DoorORM.company_id == company_id,
-                DoorORM.installer_id == installer_id,
-            )
-            .all()
-        )
-        return [r[0] for r in rows]

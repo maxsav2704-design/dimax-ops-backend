@@ -10,15 +10,11 @@ from app.modules.reports.api.schemas import (
     DashboardResponse,
     DeliveryStatsResponse,
     KpiResponse,
-    ProblemProjectItem,
     ProblemProjectsResponse,
     ProjectProfitResponse,
-    TopReasonItem,
     TopReasonsResponse,
 )
-from app.modules.reports.application.service import ReportsService
-from app.modules.sync.application.health_service import SyncHealthService
-from app.shared.domain.errors import NotFound
+from app.modules.reports.application.admin_api_service import ReportsAdminApiService
 
 
 router = APIRouter(prefix="/admin/reports", tags=["Admin / Reports"])
@@ -32,21 +28,12 @@ def dashboard(
     uow=Depends(get_uow),
 ):
     with uow:
-        kpi_data = ReportsService.kpi(
-            uow.session,
+        return ReportsAdminApiService.dashboard(
+            uow,
             company_id=user.company_id,
             date_from=date_from,
             date_to=date_to,
         )
-        kpi_response = KpiResponse(
-            period_from=date_from,
-            period_to=date_to,
-            **kpi_data,
-        )
-        sync_health = SyncHealthService.run_for_company(
-            uow, company_id=user.company_id
-        )
-        return DashboardResponse(kpi=kpi_response, sync_health=sync_health)
 
 
 @router.get("/kpi", response_model=KpiResponse)
@@ -57,16 +44,11 @@ def kpi(
     uow=Depends(get_uow),
 ):
     with uow:
-        data = ReportsService.kpi(
-            uow.session,
+        return ReportsAdminApiService.kpi(
+            uow,
             company_id=user.company_id,
             date_from=date_from,
             date_to=date_to,
-        )
-        return KpiResponse(
-            period_from=date_from,
-            period_to=date_to,
-            **data,
         )
 
 
@@ -77,13 +59,10 @@ def problem_projects(
     uow=Depends(get_uow),
 ):
     with uow:
-        items = ReportsService.problem_projects(
-            uow.session,
+        return ReportsAdminApiService.problem_projects(
+            uow,
             company_id=user.company_id,
             limit=limit,
-        )
-        return ProblemProjectsResponse(
-            items=[ProblemProjectItem(**x) for x in items]
         )
 
 
@@ -96,15 +75,12 @@ def top_reasons(
     uow=Depends(get_uow),
 ):
     with uow:
-        items = ReportsService.top_reasons(
-            uow.session,
+        return ReportsAdminApiService.top_reasons(
+            uow,
             company_id=user.company_id,
             date_from=date_from,
             date_to=date_to,
             limit=limit,
-        )
-        return TopReasonsResponse(
-            items=[TopReasonItem(**x) for x in items]
         )
 
 
@@ -117,22 +93,13 @@ def project_profit(
     uow=Depends(get_uow),
 ):
     with uow:
-        p = uow.projects.get(
-            company_id=user.company_id, project_id=project_id
-        )
-        if not p:
-            raise NotFound(
-                "Project not found", details={"project_id": str(project_id)}
-            )
-
-        data = ReportsService.project_profit(
-            uow.session,
+        return ReportsAdminApiService.project_profit(
+            uow,
             company_id=user.company_id,
             project_id=project_id,
             date_from=date_from,
             date_to=date_to,
         )
-        return ProjectProfitResponse(project_id=project_id, **data)
 
 
 @router.get("/delivery", response_model=DeliveryStatsResponse)
@@ -143,14 +110,9 @@ def delivery_stats(
     uow=Depends(get_uow),
 ):
     with uow:
-        data = ReportsService.delivery_stats(
-            uow.session,
+        return ReportsAdminApiService.delivery_stats(
+            uow,
             company_id=user.company_id,
             date_from=date_from,
             date_to=date_to,
-        )
-        return DeliveryStatsResponse(
-            period_from=date_from,
-            period_to=date_to,
-            **data,
         )

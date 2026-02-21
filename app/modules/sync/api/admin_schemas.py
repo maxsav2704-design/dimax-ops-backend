@@ -23,3 +23,38 @@ class SyncStateDTO(BaseModel):
 class SyncStatsDTO(BaseModel):
     total_installers: int
     active_last_30_days: int
+
+
+class SyncResetLegacyResponse(BaseModel):
+    status: str
+
+
+class SyncHealthItemDTO(BaseModel):
+    installer_id: str
+    status: str
+    lag: int
+    days_offline: int
+    last_seen_at: str | None = None
+
+
+class SyncHealthCountsDTO(BaseModel):
+    ok: int
+    warn: int
+    danger: int
+    total: int
+    dead: int
+    never_seen: int
+    danger_pct: float
+
+
+class SyncHealthSummaryDTO(BaseModel):
+    max_cursor: int
+    counts: SyncHealthCountsDTO
+    alerts_sent: int
+    top_laggers: list[SyncHealthItemDTO]
+    top_offline: list[SyncHealthItemDTO]
+
+
+class SyncHealthRunResponseDTO(BaseModel):
+    ok: bool
+    data: SyncHealthSummaryDTO

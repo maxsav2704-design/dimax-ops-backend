@@ -36,7 +36,11 @@ class CalendarEventORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     event_type: Mapped[CalendarEventType] = mapped_column(
-        Enum(CalendarEventType, name="calendar_event_type"),
+        Enum(
+            CalendarEventType,
+            name="calendar_event_type",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         nullable=False,
         index=True,
     )

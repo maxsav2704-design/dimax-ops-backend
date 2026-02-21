@@ -20,6 +20,17 @@ Each module should follow the same structure:
 
 If a module is missing one layer, keep changes minimal and align gradually to this template.
 
+## Module Checklist (Definition of Done)
+
+When creating or changing a module, verify:
+
+- `api/*` uses explicit `response_model` (or explicit binary `responses` for streams).
+- request/response DTO live in `api/*schemas.py`.
+- endpoint logic is thin; business behavior is in `application/*`.
+- domain-specific exceptions are declared in `domain/errors.py` and used in `application`.
+- ORM queries are isolated in `infrastructure/repositories.py`.
+- new routes are included only through `app/api/v1/routers.py`.
+
 ## Layer Rules
 
 - `api` can call only `application` and shared dependency providers.
@@ -30,10 +41,20 @@ If a module is missing one layer, keep changes minimal and align gradually to th
 ## Transaction Rules
 
 - Open transaction scope in endpoint: `with uow:`.
-- Mutating endpoints call `uow.commit()` exactly once.
-- Services do not call `commit()`.
-- Use `flush()` only when ID or DB-generated values are needed before commit.
-- On errors, rollback happens via UoW context manager.
+- API layer owns transaction boundary and commit point.
+- Mutating flows call `uow.commit()` exactly once per request path.
+- `application/*` services do not call `commit()`.
+- Use `flush()` only when DB-generated values are required before commit.
+- On exceptions, rollback is handled by UoW context manager.
+
+## API/Error Contract Rules
+
+- Protected routers must expose unified error responses in OpenAPI: `400/401/403/404/409/422` with `ApiErrorResponseDTO`.
+- Public routers expose validation error contract (`422`) with `ApiErrorResponseDTO`.
+- Runtime error envelope is stable:
+  - `{"error": {"code": "...", "message": "...", "details": ...}}`
+- `204 No Content` endpoints must not return JSON body.
+- Binary endpoints must document explicit media type (`application/pdf`, `application/octet-stream`) and `format: binary`.
 
 ## Migration Rules
 
@@ -48,5 +69,14 @@ If a module is missing one layer, keep changes minimal and align gradually to th
 - Use dependency overrides for UoW/auth where needed.
 - Every new admin endpoint should have:
   - success path test
-  - access control test (`403`)
+  - access control test (`401/403`)
   - input validation tests (`422`)
+  - OpenAPI contract assertion for response schema and error statuses
+
+## Quick Anti-Patterns
+
+- fat routers with business logic and DB branching
+- direct ORM usage in `api/*`
+- committing inside `application/*`
+- adding new response shape without updating OpenAPI contract tests
+- introducing migration with runtime/domain behavior

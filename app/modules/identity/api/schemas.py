@@ -19,3 +19,22 @@ class TokenPair(BaseModel):
 
 class RefreshBody(BaseModel):
     refresh_token: str
+
+
+class LogoutRefreshBody(BaseModel):
+    refresh_token: str
+
+
+class LogoutResponse(BaseModel):
+    ok: bool
+    user_id: UUID
+
+
+class LogoutRefreshResponse(BaseModel):
+    ok: bool
+    revoked: bool
+
+
+class LogoutAllResponse(BaseModel):
+    ok: bool
+    revoked_count: int

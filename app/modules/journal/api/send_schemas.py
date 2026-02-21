@@ -13,3 +13,21 @@ class SendJournalBody(BaseModel):
 
     send_email: bool = True
     send_whatsapp: bool = True
+
+
+class SendJournalEnqueuedResponse(BaseModel):
+    email: bool
+    whatsapp: bool
+
+
+class SendJournalOutboxIdsResponse(BaseModel):
+    email: str | None
+    whatsapp: str | None
+
+
+class SendJournalResponse(BaseModel):
+    ok: bool
+    enqueued: SendJournalEnqueuedResponse
+    outbox_ids: SendJournalOutboxIdsResponse
+    public_url: str | None
+    object_key: str

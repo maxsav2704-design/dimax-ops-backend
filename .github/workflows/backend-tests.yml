@@ -31,6 +31,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repo-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify repository boundary
+        run: python scripts/verify_repo_boundary.py
+
+  backup-restore-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Start db
+        run: docker compose up -d db
+
+      - name: Apply migrations
+        run: docker compose run --rm --no-deps api alembic upgrade head
+
+      - name: Backup/restore smoke
+        run: python scripts/db_backup_restore_smoke.py
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v
+
+  architecture-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Run architecture contract test
+        run: docker compose run --rm --no-deps api pytest -q tests/architecture/test_module_structure.py
+
+  api-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Run OpenAPI contract tests
+        run: docker compose run --rm --no-deps api pytest -q tests/integration/test_openapi_contract.py
+
+  error-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Run error envelope contract tests
+        run: >
+          docker compose run --rm --no-deps api pytest -q
+          tests/integration/test_auth_guards_api.py
+          tests/integration/test_admin_access_and_validation.py
+          tests/integration/test_installers_link_user_api.py
+          tests/integration/test_installer_rates_api.py
+
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -53,3 +130,56 @@ jobs:
       - name: Teardown
         if: always()
         run: docker compose down -v
+
+  migration-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Start dependencies
+        run: docker compose up -d db
+
+      - name: Upgrade to head
+        run: docker compose run --rm --no-deps api alembic upgrade head
+
+      - name: Downgrade to base
+        run: docker compose run --rm --no-deps api alembic downgrade base
+
+      - name: Upgrade to head again
+        run: docker compose run --rm --no-deps api alembic upgrade head
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v
+
+  quality-gate:
+    runs-on: ubuntu-latest
+    needs:
+      - repo-boundary
+      - backup-restore-smoke
+      - architecture-contract
+      - api-contract
+      - error-contract
+      - integration
+      - migration-smoke
+    if: always()
+    steps:
+      - name: Enforce required checks
+        run: |
+          echo "repo-boundary: ${{ needs['repo-boundary'].result }}"
+          echo "backup-restore-smoke: ${{ needs['backup-restore-smoke'].result }}"
+          echo "architecture-contract: ${{ needs['architecture-contract'].result }}"
+          echo "api-contract: ${{ needs['api-contract'].result }}"
+          echo "error-contract: ${{ needs['error-contract'].result }}"
+          echo "integration: ${{ needs.integration.result }}"
+          echo "migration-smoke: ${{ needs['migration-smoke'].result }}"
+          if [ "${{ needs['repo-boundary'].result }}" != "success" ] || [ "${{ needs['backup-restore-smoke'].result }}" != "success" ] || [ "${{ needs['architecture-contract'].result }}" != "success" ] || [ "${{ needs['api-contract'].result }}" != "success" ] || [ "${{ needs['error-contract'].result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ] || [ "${{ needs['migration-smoke'].result }}" != "success" ]; then
+            echo "Quality gate failed"
+            exit 1
+          fi
+          echo "Quality gate passed"

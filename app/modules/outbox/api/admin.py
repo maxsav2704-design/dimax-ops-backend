@@ -5,9 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.modules.outbox.application.admin_service import OutboxAdminService
 from app.modules.outbox.api.admin_schemas import OutboxItemDTO, OutboxListResponse
-from app.modules.outbox.infrastructure.models import OutboxMessageORM
-from app.shared.domain.errors import NotFound
 
 
 router = APIRouter(prefix="/admin/outbox", tags=["Admin / Outbox"])
@@ -21,34 +20,11 @@ def list_outbox(
     uow=Depends(get_uow),
 ):
     with uow:
-        q = uow.session.query(OutboxMessageORM).filter(
-            OutboxMessageORM.company_id == user.company_id
-        )
-        if journal_id is not None:
-            q = q.filter(OutboxMessageORM.correlation_id == journal_id)
-
-        rows = (
-            q.order_by(OutboxMessageORM.created_at.desc())
-            .limit(limit)
-            .all()
-        )
-        return OutboxListResponse(
-            items=[
-                OutboxItemDTO(
-                    id=r.id,
-                    channel=str(r.channel),
-                    status=str(r.status),
-                    provider_message_id=r.provider_message_id,
-                    provider_status=r.provider_status,
-                    provider_error=r.provider_error,
-                    attempts=r.attempts,
-                    created_at=r.created_at,
-                    sent_at=r.sent_at,
-                    delivery_status=str(r.delivery_status),
-                    delivered_at=r.delivered_at,
-                )
-                for r in rows
-            ]
+        return OutboxAdminService.list_outbox(
+            uow,
+            company_id=user.company_id,
+            journal_id=journal_id,
+            limit=limit,
         )
 
 
@@ -59,29 +35,8 @@ def get_outbox(
     uow=Depends(get_uow),
 ):
     with uow:
-        r = (
-            uow.session.query(OutboxMessageORM)
-            .filter(
-                OutboxMessageORM.company_id == user.company_id,
-                OutboxMessageORM.id == outbox_id,
-            )
-            .one_or_none()
-        )
-        if not r:
-            raise NotFound(
-                "Outbox message not found",
-                details={"outbox_id": str(outbox_id)},
-            )
-        return OutboxItemDTO(
-            id=r.id,
-            channel=str(r.channel),
-            status=str(r.status),
-            provider_message_id=r.provider_message_id,
-            provider_status=r.provider_status,
-            provider_error=r.provider_error,
-            attempts=r.attempts,
-            created_at=r.created_at,
-            sent_at=r.sent_at,
-            delivery_status=str(r.delivery_status),
-            delivered_at=r.delivered_at,
+        return OutboxAdminService.get_outbox(
+            uow,
+            company_id=user.company_id,
+            outbox_id=outbox_id,
         )

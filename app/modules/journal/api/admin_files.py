@@ -6,23 +6,28 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import CurrentUser, get_uow, require_admin
-from app.integrations.storage.storage_service import StorageService
-from app.modules.files.infrastructure.models import FileDownloadEventORM
-from app.shared.domain.errors import NotFound
+from app.modules.journal.application.admin_files_service import (
+    JournalAdminFilesService,
+)
 
 
 router = APIRouter(prefix="/admin/journals", tags=["Admin / Journal"])
 
 
-def _ensure_pdf(uow, *, company_id: UUID, journal_id: UUID):
-    from app.modules.journal.application.use_cases import JournalUseCases
-
-    return JournalUseCases.export_pdf(
-        uow, company_id=company_id, journal_id=journal_id
-    )
-
-
-@router.get("/{journal_id}/pdf")
+@router.get(
+    "/{journal_id}/pdf",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "Journal PDF stream",
+            "content": {
+                "application/pdf": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            },
+        }
+    },
+)
 def download_journal_pdf(
     journal_id: UUID,
     request: Request,
@@ -33,67 +38,42 @@ def download_journal_pdf(
     ua = request.headers.get("user-agent")
 
     with uow:
-        j = uow.journals.get(company_id=user.company_id, journal_id=journal_id)
-        if not j:
-            raise NotFound(
-                "Journal not found", details={"journal_id": str(journal_id)}
-            )
-
-        f = uow.journals.get_file(
+        result = JournalAdminFilesService.prepare_pdf_download(
+            uow,
             company_id=user.company_id,
             journal_id=journal_id,
-            kind="PDF",
-        )
-        if not f:
-            f = _ensure_pdf(
-                uow,
-                company_id=user.company_id,
-                journal_id=journal_id,
-            )
-
-        obj = StorageService.get_object_stream(
-            bucket=f.bucket, object_key=f.file_path
-        )
-
-        uow.file_download_events.add(
-            FileDownloadEventORM(
-                company_id=user.company_id,
-                source="ADMIN",
-                token=None,
-                object_key=f.file_path,
-                bucket=f.bucket,
-                mime_type=f.mime_type,
-                file_name=f"journal_{journal_id}.pdf",
-                ip=ip,
-                user_agent=ua,
-                actor_user_id=user.id,
-                correlation_id=journal_id,
-            )
+            actor_user_id=user.id,
+            ip=ip,
+            user_agent=ua,
         )
 
         def gen():
             try:
                 while True:
-                    chunk = obj.read(1024 * 1024)
+                    chunk = result.obj.read(1024 * 1024)
                     if not chunk:
                         break
                     yield chunk
             finally:
                 try:
-                    obj.close()
+                    result.obj.close()
                 except Exception:
                     pass
                 try:
-                    obj.release_conn()
+                    result.obj.release_conn()
                 except Exception:
                     pass
 
         headers = {
-            "Content-Disposition": f'attachment; filename="journal_{journal_id}.pdf"',
+            "Content-Disposition": (
+                f'attachment; filename="{result.file_name}"'
+            ),
             "Cache-Control": "no-store",
             "Pragma": "no-cache",
         }
 
         return StreamingResponse(
-            gen(), media_type=f.mime_type, headers=headers
+            gen(),
+            media_type=result.mime_type,
+            headers=headers,
         )

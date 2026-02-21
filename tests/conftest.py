@@ -19,6 +19,7 @@ from app.api.v1.deps import CurrentUser, get_current_user, get_uow, require_admi
 from app.core.config import settings
 from app.core.security.password import hash_password
 from app.main import create_app
+from app.modules.audit.infrastructure.repositories import AuditRepository
 from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.identity.domain.enums import UserRole
 from app.modules.identity.infrastructure.models import CompanyORM, UserORM
@@ -44,6 +45,7 @@ class TestUnitOfWork:
 
     def __enter__(self):
         self.session = self._session_factory()
+        self.audit = AuditRepository(self.session)
         self.users = UserRepository(self.session)
         self.refresh_tokens = RefreshTokenRepository(self.session)
         self.installers = InstallerRepository(self.session)
@@ -88,7 +90,71 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
     finally:
         db_session.rollback()
         db_session.execute(
+            text("DELETE FROM journal_signatures WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM journal_files WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM journal_door_items WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM calendar_event_assignees WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM calendar_events WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM journals WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM issues WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM project_addon_facts WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM project_addon_plans WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM addon_types WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM doors WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
             text("DELETE FROM installer_rates WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM sync_events WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM audit_logs WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM sync_change_log WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM outbox_messages WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM projects WHERE company_id = :cid"),
             {"cid": cid},
         )
         db_session.execute(
@@ -148,6 +214,28 @@ def client(admin_user: CurrentUser) -> Iterator[TestClient]:
 
 
 @pytest.fixture()
+def client_raw() -> Iterator[TestClient]:
+    app = create_app()
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture()
+def client_admin_real_uow(admin_user: CurrentUser) -> Iterator[TestClient]:
+    app = create_app()
+
+    def _require_admin() -> CurrentUser:
+        return admin_user
+
+    app.dependency_overrides[require_admin] = _require_admin
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
 def client_installer(installer_user: CurrentUser) -> Iterator[TestClient]:
     app = create_app()
 
@@ -173,9 +261,11 @@ def make_installer(db_session: Session, company_id: uuid.UUID):
         full_name: str = "Test Installer",
         phone: str | None = None,
         is_active: bool = True,
+        company: uuid.UUID | None = None,
     ) -> InstallerORM:
+        cid = company or company_id
         row = InstallerORM(
-            company_id=company_id,
+            company_id=cid,
             full_name=full_name,
             phone=phone,
             email=None,
@@ -196,9 +286,15 @@ def make_installer(db_session: Session, company_id: uuid.UUID):
 
 @pytest.fixture()
 def make_door_type(db_session: Session, company_id: uuid.UUID):
-    def _factory(*, code: str | None = None, name: str = "Door Type") -> DoorTypeORM:
+    def _factory(
+        *,
+        code: str | None = None,
+        name: str = "Door Type",
+        company: uuid.UUID | None = None,
+    ) -> DoorTypeORM:
+        cid = company or company_id
         row = DoorTypeORM(
-            company_id=company_id,
+            company_id=cid,
             code=code or f"door-{uuid.uuid4().hex[:8]}",
             name=name,
             is_active=True,
