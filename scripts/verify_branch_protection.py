@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         "--required-check",
         action="append",
         dest="required_checks",
-        default=["Backend Tests / quality-gate"],
+        default=[],
     )
     parser.add_argument(
         "--token",
@@ -106,6 +106,8 @@ def main() -> int:
         )
         return 2
 
+    required_checks = args.required_checks or ["Backend Tests / quality-gate"]
+
     try:
         data = fetch_protection(repo, args.branch, token)
     except urllib.error.HTTPError as e:
@@ -119,7 +121,7 @@ def main() -> int:
     contexts = checks.get("contexts") or []
     strict = bool(checks.get("strict"))
 
-    missing = [c for c in args.required_checks if c not in contexts]
+    missing = [c for c in required_checks if c not in contexts]
     if missing:
         print("Branch protection is missing required checks:", file=sys.stderr)
         for item in missing:

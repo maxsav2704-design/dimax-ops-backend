@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
         "--required-check",
         action="append",
         dest="required_checks",
-        default=["Backend Tests / quality-gate"],
+        default=[],
         help="Required status check context. Can be passed multiple times.",
     )
     parser.add_argument("--required-approvals", type=int, default=1)
@@ -139,7 +139,8 @@ def main() -> int:
         print("required-approvals must be in range 0..6", file=sys.stderr)
         return 2
 
-    payload = build_payload(args.required_checks, args.required_approvals)
+    required_checks = args.required_checks or ["Backend Tests / quality-gate"]
+    payload = build_payload(required_checks, args.required_approvals)
     payload_json = json.dumps(payload, indent=2)
     if args.dry_run:
         print(payload_json)
