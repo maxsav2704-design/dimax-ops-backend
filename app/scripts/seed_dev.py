@@ -116,6 +116,9 @@ def seed_dev() -> None:
                     session.add(user)
                 reused_users.append((role.name, u["email"]))
 
+        # SessionLocal has autoflush disabled, flush users before reading them below.
+        session.flush()
+
         # 3) Installers + installer_sync_state (идемпотентно)
         installer_users = (
             session.execute(
