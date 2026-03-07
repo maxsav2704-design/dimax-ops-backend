@@ -34,6 +34,7 @@ class JournalDetailsResponse(BaseModel):
     title: str | None
     notes: str | None
     public_token: str | None
+    public_token_expires_at: datetime | None
     lock_header: bool
     lock_table: bool
     lock_footer: bool

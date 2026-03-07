@@ -29,6 +29,25 @@ def _uuid(val: str) -> UUID:
 
 class AuthApiService:
     @staticmethod
+    def get_me(
+        uow,
+        *,
+        company_id: UUID,
+        user_id: UUID,
+    ) -> dict:
+        user = uow.users.get_by_id(company_id=company_id, user_id=user_id)
+        if not user:
+            raise NotFound("User not found")
+        return {
+            "id": user.id,
+            "company_id": user.company_id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "is_active": user.is_active,
+        }
+
+    @staticmethod
     def login(
         uow,
         *,

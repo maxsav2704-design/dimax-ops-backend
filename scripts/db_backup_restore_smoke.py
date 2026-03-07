@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--source-db", default="dimax")
     parser.add_argument("--restore-db", default="dimax_restore_smoke")
     parser.add_argument(
+        "--compose-file",
+        default=os.getenv("BACKUP_RESTORE_COMPOSE_FILE"),
+        help="Optional docker compose file path.",
+    )
+    parser.add_argument(
+        "--project-name",
+        default=os.getenv("BACKUP_RESTORE_COMPOSE_PROJECT"),
+        help="Optional docker compose project name.",
+    )
+    parser.add_argument(
         "--dump-file",
         default=".tmp/backup_restore_smoke.dump",
         help="Host path for temporary dump artifact.",
@@ -36,17 +47,25 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _compose_base_cmd(args: argparse.Namespace) -> list[str]:
+    cmd = ["docker", "compose"]
+    if args.compose_file:
+        cmd.extend(["-f", args.compose_file])
+    if args.project_name:
+        cmd.extend(["-p", args.project_name])
+    return cmd
+
+
 def main() -> int:
     args = _parse_args()
     dump_path = Path(args.dump_file).resolve()
     dump_path.parent.mkdir(parents=True, exist_ok=True)
+    compose_cmd = _compose_base_cmd(args)
 
     print("[backup-restore] dumping source database...")
     with dump_path.open("wb") as out:
         _run(
-            [
-                "docker",
-                "compose",
+            compose_cmd + [
                 "exec",
                 "-T",
                 args.service,
@@ -62,9 +81,7 @@ def main() -> int:
 
     print("[backup-restore] recreating restore database...")
     _run(
-        [
-            "docker",
-            "compose",
+        compose_cmd + [
             "exec",
             "-T",
             args.service,
@@ -78,9 +95,7 @@ def main() -> int:
         ]
     )
     _run(
-        [
-            "docker",
-            "compose",
+        compose_cmd + [
             "exec",
             "-T",
             args.service,
@@ -94,9 +109,7 @@ def main() -> int:
     print("[backup-restore] restoring dump into restore database...")
     with dump_path.open("rb") as src:
         _run(
-            [
-                "docker",
-                "compose",
+            compose_cmd + [
                 "exec",
                 "-T",
                 args.service,
@@ -113,9 +126,7 @@ def main() -> int:
 
     print("[backup-restore] validating restored schema...")
     result = subprocess.run(
-        [
-            "docker",
-            "compose",
+        compose_cmd + [
             "exec",
             "-T",
             args.service,
@@ -139,9 +150,7 @@ def main() -> int:
 
     print("[backup-restore] cleanup restore database...")
     _run(
-        [
-            "docker",
-            "compose",
+        compose_cmd + [
             "exec",
             "-T",
             args.service,

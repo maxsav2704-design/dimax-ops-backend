@@ -80,6 +80,7 @@ class JournalAdminService:
             "title": j.title,
             "notes": j.notes,
             "public_token": j.public_token,
+            "public_token_expires_at": j.public_token_expires_at,
             "lock_header": j.lock_header,
             "lock_table": j.lock_table,
             "lock_footer": j.lock_footer,

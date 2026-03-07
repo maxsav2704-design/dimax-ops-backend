@@ -9,6 +9,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-heb \
+    tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
 # deps

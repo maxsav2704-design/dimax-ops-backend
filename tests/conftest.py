@@ -20,7 +20,16 @@ from app.core.config import settings
 from app.core.security.password import hash_password
 from app.main import create_app
 from app.modules.audit.infrastructure.repositories import AuditRepository
+from app.modules.addons.infrastructure.repositories import (
+    AddonTypeRepository,
+    ProjectAddonFactRepository,
+    ProjectAddonPlanRepository,
+)
 from app.modules.door_types.infrastructure.models import DoorTypeORM
+from app.modules.door_types.infrastructure.repositories import DoorTypeRepository
+from app.modules.doors.infrastructure.repositories import DoorRepository
+from app.modules.reasons.infrastructure.models import ReasonORM
+from app.modules.reasons.infrastructure.repositories import ReasonRepository
 from app.modules.identity.domain.enums import UserRole
 from app.modules.identity.infrastructure.models import CompanyORM, UserORM
 from app.modules.identity.infrastructure.refresh_tokens_repo import RefreshTokenRepository
@@ -28,6 +37,18 @@ from app.modules.identity.infrastructure.repositories import UserRepository
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.installers.infrastructure.rates_repository import InstallerRatesRepository
 from app.modules.installers.infrastructure.repositories import InstallerRepository
+from app.modules.issues.infrastructure.repositories import IssueRepository
+from app.modules.projects.infrastructure.repositories import (
+    ProjectImportRunRepository,
+    ProjectRepository,
+)
+from app.modules.sync.infrastructure.repositories import (
+    InstallerSyncStateRepository,
+    SyncChangeLogGCRepository,
+    SyncChangeLogRepository,
+    SyncEventRepository,
+)
+from app.modules.settings.infrastructure.repositories import CompanySettingsRepository
 
 
 def _resolve_test_database_url() -> str:
@@ -50,6 +71,20 @@ class TestUnitOfWork:
         self.refresh_tokens = RefreshTokenRepository(self.session)
         self.installers = InstallerRepository(self.session)
         self.installer_rates = InstallerRatesRepository(self.session)
+        self.doors = DoorRepository(self.session)
+        self.issues = IssueRepository(self.session)
+        self.projects = ProjectRepository(self.session)
+        self.project_import_runs = ProjectImportRunRepository(self.session)
+        self.addon_types = AddonTypeRepository(self.session)
+        self.addon_plans = ProjectAddonPlanRepository(self.session)
+        self.addon_facts = ProjectAddonFactRepository(self.session)
+        self.sync_events = SyncEventRepository(self.session)
+        self.sync_change_log = SyncChangeLogRepository(self.session)
+        self.sync_state = InstallerSyncStateRepository(self.session)
+        self.sync_change_gc = SyncChangeLogGCRepository(self.session)
+        self.door_types = DoorTypeRepository(self.session)
+        self.reasons = ReasonRepository(self.session)
+        self.settings = CompanySettingsRepository(self.session)
         return self
 
     def commit(self) -> None:
@@ -114,6 +149,10 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
             {"cid": cid},
         )
         db_session.execute(
+            text("DELETE FROM communication_templates WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
             text("DELETE FROM issues WHERE company_id = :cid"),
             {"cid": cid},
         )
@@ -170,6 +209,10 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
             {"cid": cid},
         )
         db_session.execute(
+            text("DELETE FROM reasons WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
             text("DELETE FROM auth_refresh_tokens WHERE company_id = :cid"),
             {"cid": cid},
         )
@@ -185,13 +228,39 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
 
 
 @pytest.fixture()
-def admin_user(company_id: uuid.UUID) -> CurrentUser:
-    return CurrentUser(id=uuid.uuid4(), company_id=company_id, role="ADMIN")
+def admin_user(db_session: Session, company_id: uuid.UUID) -> CurrentUser:
+    user_id = uuid.uuid4()
+    db_session.add(
+        UserORM(
+            id=user_id,
+            company_id=company_id,
+            email=f"admin-{uuid.uuid4().hex[:8]}@example.com",
+            full_name="Test Admin",
+            role=UserRole.ADMIN,
+            password_hash=hash_password("secret123"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    return CurrentUser(id=user_id, company_id=company_id, role="ADMIN")
 
 
 @pytest.fixture()
-def installer_user(company_id: uuid.UUID) -> CurrentUser:
-    return CurrentUser(id=uuid.uuid4(), company_id=company_id, role="INSTALLER")
+def installer_user(db_session: Session, company_id: uuid.UUID) -> CurrentUser:
+    user_id = uuid.uuid4()
+    db_session.add(
+        UserORM(
+            id=user_id,
+            company_id=company_id,
+            email=f"installer-{uuid.uuid4().hex[:8]}@example.com",
+            full_name="Test Installer User",
+            role=UserRole.INSTALLER,
+            password_hash=hash_password("secret123"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    return CurrentUser(id=user_id, company_id=company_id, role="INSTALLER")
 
 
 @pytest.fixture()
@@ -325,6 +394,29 @@ def make_user(db_session: Session, company_id: uuid.UUID):
             role=role,
             password_hash=hash_password(password),
             is_active=is_active,
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        return row
+
+    return _factory
+
+
+@pytest.fixture()
+def make_reason(db_session: Session, company_id: uuid.UUID):
+    def _factory(
+        *,
+        code: str | None = None,
+        name: str = "Reason",
+        company: uuid.UUID | None = None,
+    ) -> ReasonORM:
+        cid = company or company_id
+        row = ReasonORM(
+            company_id=cid,
+            code=code or f"reason-{uuid.uuid4().hex[:8]}",
+            name=name,
+            is_active=True,
         )
         db_session.add(row)
         db_session.commit()

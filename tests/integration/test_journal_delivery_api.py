@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import io
 import uuid
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from app.core.config import settings
+from app.integrations.storage.storage_service import StorageService
 from app.modules.files.infrastructure.models import (
     FileDownloadEventORM,
     FileDownloadTokenORM,
@@ -11,6 +16,43 @@ from app.modules.outbox.domain.enums import OutboxChannel
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
+from app.workers import outbox_worker
+
+
+@pytest.fixture(autouse=True)
+def fake_storage(monkeypatch):
+    storage: dict[str, bytes] = {}
+
+    class _Obj:
+        def __init__(self, payload: bytes) -> None:
+            self._buf = io.BytesIO(payload)
+
+        def read(self, size: int = -1) -> bytes:
+            return self._buf.read(size)
+
+        def close(self) -> None:
+            self._buf.close()
+
+        def release_conn(self) -> None:
+            return None
+
+    def _put_pdf(*, object_key: str, content: bytes) -> None:
+        storage[object_key] = content
+
+    def _get_pdf(*, object_key: str) -> bytes:
+        return storage[object_key]
+
+    def _get_object_stream(*, bucket: str, object_key: str):
+        _ = bucket
+        return _Obj(payload=storage[object_key])
+
+    monkeypatch.setattr(StorageService, "put_pdf", staticmethod(_put_pdf))
+    monkeypatch.setattr(StorageService, "get_pdf", staticmethod(_get_pdf))
+    monkeypatch.setattr(
+        StorageService,
+        "get_object_stream",
+        staticmethod(_get_object_stream),
+    )
 
 
 def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectORM:
@@ -109,6 +151,10 @@ def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
     assert whatsapp_msg.channel == OutboxChannel.WHATSAPP
     assert whatsapp_msg.payload["to_phone"] == "+15551234567"
     assert "media_url" in whatsapp_msg.payload
+    assert whatsapp_msg.payload["fallback_email"] is None
+    assert "fallback_subject" in whatsapp_msg.payload
+    assert "fallback_body_text" in whatsapp_msg.payload
+    assert "object_key" in whatsapp_msg.payload
 
     journal_resp = client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}")
     assert journal_resp.status_code == 200, journal_resp.text
@@ -127,6 +173,126 @@ def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
     )
     assert wa_token is not None
     assert wa_token.uses_left == 2
+
+
+def test_journal_send_uses_backend_template_preview_when_requested(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Template Project {uuid.uuid4().hex[:8]}",
+    )
+    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+
+    create_template_resp = client_admin_real_uow.post(
+        "/api/v1/admin/settings/communication-templates",
+        json={
+            "name": "Template Delivery Notice",
+            "subject": "Delivery for {{project_name}}",
+            "message": "Review {{journal_title}} via {{public_url}}",
+            "send_email": True,
+            "send_whatsapp": False,
+            "is_active": True,
+        },
+    )
+    assert create_template_resp.status_code == 201, create_template_resp.text
+    template_id = create_template_resp.json()["id"]
+
+    mark_ready_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/mark-ready"
+    )
+    assert mark_ready_resp.status_code == 200, mark_ready_resp.text
+
+    send_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/send",
+        json={
+            "template_id": template_id,
+            "email_to": "templated@example.com",
+            "send_email": True,
+            "send_whatsapp": False,
+        },
+    )
+    assert send_resp.status_code == 200, send_resp.text
+
+    journal_uuid = uuid.UUID(journal_id)
+    email_msg = (
+        db_session.query(OutboxMessageORM)
+        .filter(
+            OutboxMessageORM.company_id == company_id,
+            OutboxMessageORM.correlation_id == journal_uuid,
+            OutboxMessageORM.channel == OutboxChannel.EMAIL,
+        )
+        .order_by(OutboxMessageORM.created_at.desc())
+        .first()
+    )
+    assert email_msg is not None
+    assert project.name in email_msg.payload["subject"]
+    assert "Delivery Journal" in email_msg.payload["body_text"]
+    assert "Public link:" in email_msg.payload["body_text"]
+    assert email_msg.payload["template_id"] == template_id
+    assert email_msg.payload["template_code"] == "template-delivery-notice"
+    assert email_msg.payload["template_name"] == "Template Delivery Notice"
+
+
+def test_whatsapp_failure_enqueues_email_fallback_when_enabled(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    monkeypatch,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Fallback Project {uuid.uuid4().hex[:8]}",
+    )
+    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+
+    mark_ready_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/mark-ready"
+    )
+    assert mark_ready_resp.status_code == 200, mark_ready_resp.text
+
+    send_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/send",
+        json={
+            "email_to": "fallback@example.com",
+            "whatsapp_to": "+15557778888",
+            "send_email": False,
+            "send_whatsapp": True,
+            "subject": "Fallback Subject",
+            "message": "Fallback message",
+        },
+    )
+    assert send_resp.status_code == 200, send_resp.text
+
+    monkeypatch.setattr(settings, "WHATSAPP_FALLBACK_TO_EMAIL", True)
+
+    def _raise_wa_error(**_kwargs):
+        raise RuntimeError("twilio unavailable")
+
+    monkeypatch.setattr(outbox_worker.wa_sender, "send", _raise_wa_error)
+
+    processed = outbox_worker.run_once(limit=20)
+    assert processed == 0
+
+    journal_uuid = uuid.UUID(journal_id)
+    fallback_email_msg = (
+        db_session.query(OutboxMessageORM)
+        .filter(
+            OutboxMessageORM.company_id == company_id,
+            OutboxMessageORM.correlation_id == journal_uuid,
+            OutboxMessageORM.channel == OutboxChannel.EMAIL,
+        )
+        .order_by(OutboxMessageORM.created_at.desc())
+        .first()
+    )
+    assert fallback_email_msg is not None
+    assert fallback_email_msg.payload["to_email"] == "fallback@example.com"
+    assert fallback_email_msg.payload["subject"] == "Fallback Subject"
+    assert "object_key" in fallback_email_msg.payload
 
 
 def test_journal_share_pdf_creates_download_token(

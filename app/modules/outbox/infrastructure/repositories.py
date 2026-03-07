@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from app.modules.outbox.domain.enums import OutboxStatus
+from app.modules.journal.infrastructure.models import JournalORM
+from app.modules.outbox.domain.enums import DeliveryStatus, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 
 
@@ -15,6 +17,18 @@ class OutboxRepository:
 
     def enqueue(self, msg: OutboxMessageORM) -> None:
         self.session.add(msg)
+
+    def get(
+        self, *, company_id: uuid.UUID, outbox_id: uuid.UUID
+    ) -> OutboxMessageORM | None:
+        return (
+            self.session.query(OutboxMessageORM)
+            .filter(
+                OutboxMessageORM.company_id == company_id,
+                OutboxMessageORM.id == outbox_id,
+            )
+            .one_or_none()
+        )
 
     def lock_next_batch(
         self,
@@ -74,3 +88,35 @@ class OutboxRepository:
             )
             .one_or_none()
         )
+
+    def count_failed_delivery_for_project(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+        window_hours: int,
+    ) -> int:
+        since = datetime.now(timezone.utc)
+        if int(window_hours) > 0:
+            since = since - timedelta(hours=int(window_hours))
+
+        q = (
+            self.session.query(OutboxMessageORM.id)
+            .join(
+                JournalORM,
+                and_(
+                    JournalORM.company_id == OutboxMessageORM.company_id,
+                    JournalORM.id == OutboxMessageORM.correlation_id,
+                ),
+            )
+            .filter(
+                OutboxMessageORM.company_id == company_id,
+                JournalORM.project_id == project_id,
+                OutboxMessageORM.created_at >= since,
+                or_(
+                    OutboxMessageORM.delivery_status == DeliveryStatus.FAILED,
+                    OutboxMessageORM.status == OutboxStatus.FAILED,
+                ),
+            )
+        )
+        return int(q.count())

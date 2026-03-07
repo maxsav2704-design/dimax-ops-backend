@@ -10,6 +10,9 @@ class UserRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def add(self, user: UserORM) -> None:
+        self.session.add(user)
+
     def get_by_email(
         self, *, company_id: uuid.UUID, email: str
     ) -> UserORM | None:

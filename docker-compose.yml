@@ -80,6 +80,38 @@ services:
     command: python -m app.scripts.run_sync_health_job
     restart: unless-stopped
 
+  outbox-worker:
+    image: backend-api
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: python -m app.workers.outbox_worker
+    restart: unless-stopped
+
+  maintenance-worker:
+    image: backend-api
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    command: python -m app.workers.maintenance_worker
+    restart: unless-stopped
+
+  sync-gc-worker:
+    image: backend-api
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    command: python -m app.workers.sync_gc_worker
+    restart: unless-stopped
+
 volumes:
   pgdata:
   minio_data:

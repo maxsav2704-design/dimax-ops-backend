@@ -27,6 +27,32 @@ def test_login_success_returns_token_pair(client, company_id, make_user):
     assert body["token_type"] == "bearer"
 
 
+def test_auth_me_returns_current_user_profile(client, company_id, make_user):
+    password = "MePass123"
+    user = make_user(role=UserRole.INSTALLER, password=password)
+
+    login_resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "company_id": str(company_id),
+            "email": user.email,
+            "password": password,
+        },
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    token = login_resp.json()["access_token"]
+
+    me_resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_resp.status_code == 200, me_resp.text
+    body = me_resp.json()
+    assert body["id"] == str(user.id)
+    assert body["company_id"] == str(company_id)
+    assert body["email"] == user.email
+    assert body["full_name"] == user.full_name
+    assert body["role"] == "INSTALLER"
+    assert body["is_active"] is True
+
+
 def test_login_invalid_password_returns_403(client, company_id, make_user):
     user = make_user(role=UserRole.ADMIN, password="CorrectPass123")
 

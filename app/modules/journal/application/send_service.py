@@ -11,6 +11,7 @@ from app.modules.outbox.domain.enums import OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.files.application.service import FileTokenService
 from app.modules.journal.domain.enums import JournalDeliveryStatus
+from app.modules.settings.application.admin_service import SettingsAdminService
 
 
 def utcnow() -> datetime:
@@ -43,6 +44,7 @@ class JournalSendService:
         *,
         company_id: uuid.UUID,
         journal_id: uuid.UUID,
+        template_id: uuid.UUID | None,
         email_to: str | None,
         whatsapp_to: str | None,
         subject: str | None,
@@ -52,6 +54,10 @@ class JournalSendService:
     ) -> dict:
         if not send_email and not send_whatsapp:
             raise ValidationError("At least one channel must be enabled")
+        if send_email and not settings.EMAIL_ENABLED:
+            raise ValidationError("Email channel is disabled")
+        if send_whatsapp and not settings.WHATSAPP_ENABLED:
+            raise ValidationError("WhatsApp channel is disabled")
 
         j = uow.journals.get(company_id=company_id, journal_id=journal_id)
         if not j:
@@ -70,8 +76,33 @@ class JournalSendService:
                 f"{j.public_token}"
             )
 
-        subject_final = subject or (j.title or f"Journal {journal_id}")
+        subject_final = (subject or "").strip()
         message_final = (message or "").strip()
+        template_meta = {
+            "template_id": None,
+            "template_code": None,
+            "template_name": None,
+        }
+        if template_id is not None:
+            template_row, _, rendered_subject, rendered_message = (
+                SettingsAdminService.render_template_preview(
+                    uow,
+                    company_id=company_id,
+                    template_id=template_id,
+                    journal_id=journal_id,
+                )
+            )
+            template_meta = {
+                "template_id": str(template_row.id),
+                "template_code": template_row.code,
+                "template_name": template_row.name,
+            }
+            if not subject_final:
+                subject_final = rendered_subject.strip()
+            if not message_final:
+                message_final = rendered_message.strip()
+        if not subject_final:
+            subject_final = j.title or f"Journal {journal_id}"
 
         enqueued = {"email": False, "whatsapp": False}
         outbox_ids = {"email": None, "whatsapp": None}
@@ -90,6 +121,7 @@ class JournalSendService:
                     "body_text": _compose_email_body(
                         message_final, public_url
                     ),
+                    **template_meta,
                     "object_key": pdf_file.file_path,
                     "attachment_name": f"journal_{journal_id}.pdf",
                 },
@@ -129,6 +161,11 @@ class JournalSendService:
                 f"?aud={quote(whatsapp_to, safe='')}"
             )
             wa_text = _compose_whatsapp_body(message_final, public_url)
+            fallback_email = (
+                email_to.strip()
+                if (email_to and not send_email)
+                else None
+            )
             msg = OutboxMessageORM(
                 company_id=company_id,
                 channel=OutboxChannel.WHATSAPP,
@@ -138,6 +175,14 @@ class JournalSendService:
                     "to_phone": whatsapp_to,
                     "body_text": wa_text,
                     "media_url": media_url,
+                    **template_meta,
+                    "object_key": pdf_file.file_path,
+                    "attachment_name": f"journal_{journal_id}.pdf",
+                    "fallback_email": fallback_email,
+                    "fallback_subject": subject_final,
+                    "fallback_body_text": _compose_email_body(
+                        message_final, public_url
+                    ),
                 },
                 attempts=0,
                 max_attempts=5,

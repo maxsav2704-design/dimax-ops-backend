@@ -50,6 +50,10 @@ from app.modules.sync.infrastructure.models import (  # noqa: F401
     SyncChangeLogORM,
     SyncEventORM,
 )
+from app.modules.companies.infrastructure.models import CompanyPlanORM  # noqa: F401
+from app.modules.settings.infrastructure.models import (  # noqa: F401
+    CommunicationTemplateORM,
+)
 # -------------------------------------------------------------------------
 
 config = context.config

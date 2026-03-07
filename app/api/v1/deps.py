@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from hmac import compare_digest
 import uuid
 from dataclasses import dataclass
 
-from fastapi import Depends
+from fastapi import Depends, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.core.config import settings
 from app.core.security.jwt import decode_and_validate_access
 from app.shared.domain.errors import Forbidden
 from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
@@ -52,3 +54,13 @@ def require_installer(
     if user.role not in ("INSTALLER", "ADMIN"):
         raise Forbidden("Installer only")
     return user
+
+
+def require_platform_token(
+    x_platform_token: str | None = Header(default=None, alias="X-Platform-Token"),
+) -> None:
+    expected = settings.PLATFORM_API_TOKEN.strip()
+    if not expected:
+        raise Forbidden("Platform API is disabled")
+    if not x_platform_token or not compare_digest(x_platform_token, expected):
+        raise Forbidden("Invalid platform token")

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.modules.journal.domain.enums import JournalDeliveryStatus
@@ -31,9 +32,16 @@ class JournalRepository:
         )
 
     def get_by_token(self, *, token: str) -> JournalORM | None:
+        now = datetime.now(timezone.utc)
         return (
             self.session.query(JournalORM)
-            .filter(JournalORM.public_token == token)
+            .filter(
+                JournalORM.public_token == token,
+                or_(
+                    JournalORM.public_token_expires_at.is_(None),
+                    JournalORM.public_token_expires_at > now,
+                ),
+            )
             .one_or_none()
         )
 

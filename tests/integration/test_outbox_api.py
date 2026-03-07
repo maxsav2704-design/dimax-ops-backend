@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import uuid
 
+from app.modules.audit.infrastructure.models import AuditLogORM
+from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, OutboxStatus
+from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 
@@ -60,14 +63,205 @@ def test_outbox_admin_list_and_get(client_admin_real_uow, db_session, company_id
     assert len(payload["items"]) >= 2
 
     first = payload["items"][0]
+    assert "correlation_id" in first
+    assert "scheduled_at" in first
+    assert "max_attempts" in first
     assert first["status"].endswith(("PENDING", "SENT", "FAILED"))
-    assert first["delivery_status"].endswith(
-        ("NONE", "PENDING", "DELIVERED", "FAILED")
-    )
+    assert first["delivery_status"].endswith(("PENDING", "DELIVERED", "FAILED"))
 
     get_resp = client_admin_real_uow.get(f"/api/v1/admin/outbox/{first['id']}")
     assert get_resp.status_code == 200, get_resp.text
     assert get_resp.json()["id"] == first["id"]
+
+
+def test_outbox_admin_filters_and_summary(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Outbox Filter Project {uuid.uuid4().hex[:8]}",
+    )
+    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    ready_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/mark-ready"
+    )
+    assert ready_resp.status_code == 200, ready_resp.text
+
+    send_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/send",
+        json={
+            "email_to": "client@example.com",
+            "whatsapp_to": "+15550007777",
+            "send_email": True,
+            "send_whatsapp": True,
+        },
+    )
+    assert send_resp.status_code == 200, send_resp.text
+
+    filtered = client_admin_real_uow.get(
+        "/api/v1/admin/outbox",
+        params={"journal_id": journal_id, "channel": "EMAIL", "limit": 20},
+    )
+    assert filtered.status_code == 200, filtered.text
+    items = filtered.json()["items"]
+    assert len(items) >= 1
+    assert all(item["channel"] == "EMAIL" for item in items)
+
+    invalid_filter = client_admin_real_uow.get(
+        "/api/v1/admin/outbox",
+        params={"channel": "UNKNOWN"},
+    )
+    assert invalid_filter.status_code == 422, invalid_filter.text
+    assert invalid_filter.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    summary_resp = client_admin_real_uow.get(
+        "/api/v1/admin/outbox/summary",
+        params={"journal_id": journal_id},
+    )
+    assert summary_resp.status_code == 200, summary_resp.text
+    summary = summary_resp.json()
+    for key in (
+        "total",
+        "by_channel",
+        "by_status",
+        "by_delivery_status",
+        "pending_overdue_15m",
+        "failed_total",
+    ):
+        assert key in summary
+    assert summary["total"] >= 2
+
+
+def test_outbox_admin_retry_failed_message_and_writes_audit(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    admin_user,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Outbox Retry Project {uuid.uuid4().hex[:8]}",
+    )
+    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    ready_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/mark-ready"
+    )
+    assert ready_resp.status_code == 200, ready_resp.text
+    send_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/send",
+        json={
+            "email_to": "client@example.com",
+            "send_email": True,
+            "send_whatsapp": False,
+        },
+    )
+    assert send_resp.status_code == 200, send_resp.text
+
+    journal_uuid = uuid.UUID(journal_id)
+    msg = (
+        db_session.query(OutboxMessageORM)
+        .filter(
+            OutboxMessageORM.company_id == company_id,
+            OutboxMessageORM.correlation_id == journal_uuid,
+            OutboxMessageORM.channel == OutboxChannel.EMAIL,
+        )
+        .order_by(OutboxMessageORM.created_at.desc())
+        .first()
+    )
+    assert msg is not None
+    original_max = msg.max_attempts
+    msg.status = OutboxStatus.FAILED
+    msg.delivery_status = DeliveryStatus.FAILED
+    msg.attempts = msg.max_attempts
+    msg.last_error = "smtp unavailable"
+    db_session.add(msg)
+    db_session.commit()
+
+    retry_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/outbox/{msg.id}/retry",
+        json={"reason": "manual retry from reports"},
+    )
+    assert retry_resp.status_code == 200, retry_resp.text
+    retry_item = retry_resp.json()["item"]
+    assert retry_item["id"] == str(msg.id)
+    assert retry_item["status"] == "PENDING"
+    assert retry_item["delivery_status"] == "PENDING"
+
+    db_session.refresh(msg)
+    assert msg.status == OutboxStatus.PENDING
+    assert msg.delivery_status == DeliveryStatus.PENDING
+    assert msg.last_error is None
+    assert msg.max_attempts == original_max + 1
+
+    audit_row = (
+        db_session.query(AuditLogORM)
+        .filter(
+            AuditLogORM.company_id == company_id,
+            AuditLogORM.actor_user_id == admin_user.id,
+            AuditLogORM.entity_type == "outbox_message",
+            AuditLogORM.entity_id == msg.id,
+            AuditLogORM.action == "OUTBOX_RETRY",
+        )
+        .order_by(AuditLogORM.created_at.desc())
+        .first()
+    )
+    assert audit_row is not None
+    assert audit_row.reason == "manual retry from reports"
+    assert audit_row.before["status"] == "FAILED"
+    assert audit_row.after["status"] == "PENDING"
+
+
+def test_outbox_admin_retry_sent_message_returns_422(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Outbox Retry Sent Project {uuid.uuid4().hex[:8]}",
+    )
+    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    ready_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/mark-ready"
+    )
+    assert ready_resp.status_code == 200, ready_resp.text
+    send_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/send",
+        json={
+            "email_to": "client@example.com",
+            "send_email": True,
+            "send_whatsapp": False,
+        },
+    )
+    assert send_resp.status_code == 200, send_resp.text
+
+    journal_uuid = uuid.UUID(journal_id)
+    msg = (
+        db_session.query(OutboxMessageORM)
+        .filter(
+            OutboxMessageORM.company_id == company_id,
+            OutboxMessageORM.correlation_id == journal_uuid,
+            OutboxMessageORM.channel == OutboxChannel.EMAIL,
+        )
+        .order_by(OutboxMessageORM.created_at.desc())
+        .first()
+    )
+    assert msg is not None
+    msg.status = OutboxStatus.SENT
+    db_session.add(msg)
+    db_session.commit()
+
+    retry_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/outbox/{msg.id}/retry",
+        json={"reason": "must fail"},
+    )
+    assert retry_resp.status_code == 422, retry_resp.text
+    assert retry_resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_outbox_admin_get_not_found(client_admin_real_uow):
@@ -76,12 +270,30 @@ def test_outbox_admin_get_not_found(client_admin_real_uow):
     assert resp.status_code == 404, resp.text
     assert resp.json()["error"]["code"] == "NOT_FOUND"
 
+    retry_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/outbox/{missing_id}/retry",
+        json={"reason": "missing"},
+    )
+    assert retry_resp.status_code == 404, retry_resp.text
+    assert retry_resp.json()["error"]["code"] == "NOT_FOUND"
+
 
 def test_outbox_admin_endpoints_forbidden_for_installer(client_installer):
     list_resp = client_installer.get("/api/v1/admin/outbox")
     assert list_resp.status_code == 403, list_resp.text
     assert list_resp.json()["error"]["code"] == "FORBIDDEN"
 
+    summary_resp = client_installer.get("/api/v1/admin/outbox/summary")
+    assert summary_resp.status_code == 403, summary_resp.text
+    assert summary_resp.json()["error"]["code"] == "FORBIDDEN"
+
     get_resp = client_installer.get(f"/api/v1/admin/outbox/{uuid.uuid4()}")
     assert get_resp.status_code == 403, get_resp.text
     assert get_resp.json()["error"]["code"] == "FORBIDDEN"
+
+    retry_resp = client_installer.post(
+        f"/api/v1/admin/outbox/{uuid.uuid4()}/retry",
+        json={"reason": "forbidden"},
+    )
+    assert retry_resp.status_code == 403, retry_resp.text
+    assert retry_resp.json()["error"]["code"] == "FORBIDDEN"

@@ -217,6 +217,45 @@ def test_installer_calendar_lists_only_assigned_events(
     items = list_resp.json()["items"]
     assert len(items) == 1
     assert items[0]["id"] == my_event_id
+    assert "waze_url" in items[0]
+
+
+def test_calendar_event_uses_project_address_for_waze_navigation(
+    client_admin_real_uow,
+    client_installer_calendar,
+    db_session,
+    company_id,
+):
+    client_installer, installer_id = client_installer_calendar
+    starts = datetime.now(timezone.utc).replace(microsecond=0)
+    ends = starts + timedelta(hours=1)
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Waze Project {uuid.uuid4().hex[:8]}",
+    )
+
+    create_resp = client_admin_real_uow.post(
+        "/api/v1/admin/calendar/events",
+        json={
+            "title": "Install with route",
+            "event_type": "installation",
+            "starts_at": _iso(starts),
+            "ends_at": _iso(ends),
+            "project_id": str(project.id),
+            "installer_ids": [str(installer_id)],
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+
+    q = f"starts_at={_iso(starts - timedelta(hours=1))}&ends_at={_iso(ends + timedelta(hours=2))}"
+    list_resp = client_installer.get(f"/api/v1/installer/calendar/events?{q}")
+    assert list_resp.status_code == 200, list_resp.text
+    items = list_resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["location"] == project.address
+    assert items[0]["waze_url"] is not None
+    assert "navigate=yes" in items[0]["waze_url"]
 
 
 def test_calendar_admin_forbidden_for_installer_role(client_installer):

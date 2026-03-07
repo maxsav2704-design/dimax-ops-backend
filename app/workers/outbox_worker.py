@@ -11,13 +11,53 @@ from app.integrations.storage.storage_service import StorageService
 from app.integrations.whatsapp.twilio_sender import TwilioWhatsAppSender
 from app.modules.journal.domain.enums import JournalDeliveryStatus
 from app.modules.journal.infrastructure.repositories import JournalRepository
-from app.modules.outbox.domain.enums import OutboxChannel
+from app.modules.outbox.domain.enums import OutboxChannel, OutboxStatus
+from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.outbox.infrastructure.repositories import OutboxRepository
 from app.shared.infrastructure.db.session import SessionLocal
 
 
 email_sender = SmtpEmailSender()
 wa_sender = TwilioWhatsAppSender()
+
+
+def _enqueue_whatsapp_fallback_email(
+    repo: OutboxRepository,
+    msg,
+    *,
+    payload: dict,
+    error: str,
+) -> bool:
+    if not settings.WHATSAPP_FALLBACK_TO_EMAIL:
+        return False
+
+    fallback_email = payload.get("fallback_email")
+    object_key = payload.get("object_key")
+    if not fallback_email or not object_key:
+        return False
+
+    fallback = OutboxMessageORM(
+        company_id=msg.company_id,
+        channel=OutboxChannel.EMAIL,
+        status=OutboxStatus.PENDING,
+        correlation_id=msg.correlation_id,
+        payload={
+            "to_email": fallback_email,
+            "subject": payload.get("fallback_subject") or "Journal delivery",
+            "body_text": (
+                payload.get("fallback_body_text")
+                or "WhatsApp delivery failed; PDF sent by email."
+            ),
+            "object_key": object_key,
+            "attachment_name": payload.get("attachment_name"),
+            "fallback_reason": error[:500],
+        },
+        attempts=0,
+        max_attempts=5,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+    repo.enqueue(fallback)
+    return True
 
 
 def run_once(limit: int = 20) -> int:
@@ -97,10 +137,20 @@ def run_once(limit: int = 20) -> int:
                 processed += 1
 
             except Exception as e:
-                repo.mark_failed(m, error=str(e))
+                err = str(e)
+                payload = m.payload if isinstance(m.payload, dict) else {}
+                fallback_email_enqueued = False
+                if m.channel == OutboxChannel.WHATSAPP:
+                    fallback_email_enqueued = _enqueue_whatsapp_fallback_email(
+                        repo,
+                        m,
+                        payload=payload,
+                        error=err,
+                    )
+
+                repo.mark_failed(m, error=err)
                 if m.correlation_id:
                     jr = JournalRepository(session)
-                    err = str(e)
                     if m.channel == OutboxChannel.EMAIL:
                         jr.set_email_status(
                             company_id=m.company_id,
@@ -109,6 +159,14 @@ def run_once(limit: int = 20) -> int:
                             error=err,
                         )
                     elif m.channel == OutboxChannel.WHATSAPP:
+                        if fallback_email_enqueued:
+                            jr.set_email_status(
+                                company_id=m.company_id,
+                                journal_id=m.correlation_id,
+                                status=JournalDeliveryStatus.PENDING,
+                                sent_at=None,
+                                error=None,
+                            )
                         jr.set_whatsapp_status(
                             company_id=m.company_id,
                             journal_id=m.correlation_id,

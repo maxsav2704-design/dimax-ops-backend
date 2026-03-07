@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.modules.identity.domain.enums import UserRole
+
 
 class LoginBody(BaseModel):
     company_id: UUID
@@ -38,3 +40,12 @@ class LogoutRefreshResponse(BaseModel):
 class LogoutAllResponse(BaseModel):
     ok: bool
     revoked_count: int
+
+
+class AuthMeResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    email: EmailStr
+    full_name: str
+    role: UserRole
+    is_active: bool

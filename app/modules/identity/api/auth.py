@@ -6,6 +6,7 @@ from app.api.v1.deps import CurrentUser, get_current_user, get_uow
 from app.api.v1.rate_limit import rate_limit_auth_login, rate_limit_auth_refresh
 from app.modules.identity.application.auth_api_service import AuthApiService
 from app.modules.identity.api.schemas import (
+    AuthMeResponse,
     LoginBody,
     LogoutAllResponse,
     LogoutRefreshResponse,
@@ -16,6 +17,19 @@ from app.modules.identity.api.schemas import (
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+@router.get("/me", response_model=AuthMeResponse)
+def auth_me(
+    current: CurrentUser = Depends(get_current_user),
+    uow=Depends(get_uow),
+):
+    with uow:
+        return AuthApiService.get_me(
+            uow,
+            company_id=current.company_id,
+            user_id=current.id,
+        )
 
 
 @router.post("/login", response_model=TokenPair)

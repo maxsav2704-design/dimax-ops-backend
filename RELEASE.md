@@ -16,6 +16,21 @@ docker compose run --rm api pytest -q tests/integration
 docker compose down -v
 ```
 
+From workspace root you can run the same gate through the isolated test runtime:
+
+```powershell
+.\workspace.cmd test-backend-gate
+.\workspace.cmd test-frontend-gate
+.\workspace.cmd test-mobile-gate
+.\workspace.cmd test-release-gate
+```
+
+This avoids the dev workspace API process with `--reload` and gives explicit gates for:
+
+- backend integration/runtime
+- admin frontend (`vitest + next build`)
+- mobile installer app (`vitest + expo config + tsc`)
+
 ## 2. Deployment Order
 
 1. Pull release commit/tag to target environment.
@@ -52,6 +67,14 @@ Manual API checks:
 - Admin dashboard (`/api/v1/admin/dashboard`)
 - Public file/journal route (if token exists)
 
+Mobile checks before calling release complete:
+
+- `.\workspace.cmd preflight-mobile-device`
+- `.\workspace.cmd smoke-mobile`
+- manual installer login on emulator/device
+- manual open of assigned projects list
+- manual open of one project with doors/issues/add-ons
+
 ## 4. Rollback
 
 If deploy fails after migration:
@@ -72,3 +95,4 @@ If rollback safety is unclear, keep DB at current schema and roll forward with h
 - Production `/health` is OK.
 - OpenAPI contract smoke passes.
 - No error spike in first monitoring window.
+- Mobile gate is green and manual installer smoke is completed on a real device/emulator.

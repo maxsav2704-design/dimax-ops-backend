@@ -44,6 +44,7 @@ def send_journal(
             uow,
             company_id=user.company_id,
             journal_id=journal_id,
+            template_id=body.template_id,
             email_to=str(body.email_to) if body.email_to else None,
             whatsapp_to=body.whatsapp_to,
             subject=body.subject,

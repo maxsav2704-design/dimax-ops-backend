@@ -90,6 +90,14 @@ docker compose run --rm api pytest -q tests/integration
 docker compose down -v
 ```
 
+Workspace shortcut from repo root:
+
+```powershell
+.\workspace.cmd test-backend-gate
+```
+
+This shortcut uses the isolated workspace test runtime (`docker-compose.workspace.test.yml`) and avoids dev `--reload` restarts during verification.
+
 `error-contract` validates unified API error envelope (`error.code`, `error.message`, `error.details`) for key `400/401/403/404/409/422` paths.
 
 `architecture-contract` validates module folder shape against architecture conventions with explicit allowlist exceptions.

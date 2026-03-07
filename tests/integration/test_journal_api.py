@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import text
@@ -208,6 +208,66 @@ def test_journal_validation_returns_422(client_admin_real_uow):
         },
     )
     assert sign_resp.status_code == 422, sign_resp.text
+
+
+def test_journal_public_link_expired_returns_not_found(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name="Journal Expire Project",
+    )
+    door_type = make_door_type(name="Journal Expire Door Type")
+    _create_door(
+        db_session,
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="E-01",
+        status=DoorStatus.INSTALLED,
+    )
+
+    create_resp = client_admin_real_uow.post(
+        "/api/v1/admin/journals",
+        json={"project_id": str(project.id), "title": "Expiring Journal"},
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    journal_id = create_resp.json()["id"]
+
+    ready_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/mark-ready"
+    )
+    assert ready_resp.status_code == 200, ready_resp.text
+    token = ready_resp.json()["public_token"]
+
+    journal_row = (
+        db_session.query(JournalORM)
+        .filter(JournalORM.id == uuid.UUID(journal_id))
+        .one()
+    )
+    journal_row.public_token_expires_at = datetime.now(timezone.utc) - timedelta(
+        minutes=1
+    )
+    db_session.add(journal_row)
+    db_session.commit()
+
+    public_get_resp = client_admin_real_uow.get(f"/api/v1/public/journals/{token}")
+    assert public_get_resp.status_code == 404, public_get_resp.text
+    assert public_get_resp.json()["error"]["code"] == "NOT_FOUND"
+
+    sign_resp = client_admin_real_uow.post(
+        f"/api/v1/public/journals/{token}/sign",
+        json={
+            "signer_name": "Client Name",
+            "signature_payload": {"strokes": [1]},
+        },
+    )
+    assert sign_resp.status_code == 404, sign_resp.text
+    assert sign_resp.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_journal_multi_tenant_isolation_for_admin(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
@@ -120,6 +120,9 @@ class JournalUseCases:
 
         token = uuid.uuid4().hex
         j.public_token = token
+        j.public_token_expires_at = utcnow() + timedelta(
+            seconds=int(settings.JOURNAL_PUBLIC_TOKEN_TTL_SEC)
+        )
         j.status = JournalStatus.ACTIVE
         uow.journals.save(j)
         return token

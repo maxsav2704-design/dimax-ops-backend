@@ -5,6 +5,21 @@
 - Docker Desktop is running.
 - Workdir: `backend`.
 
+## Workspace Test Runtime
+
+From workspace root you can use the isolated test compose without `uvicorn --reload`:
+
+```powershell
+.\workspace.cmd smoke-test-backend
+.\workspace.cmd test-backend
+.\workspace.cmd test-backend-gate
+.\workspace.cmd test-frontend-gate
+```
+
+This path uses `docker-compose.workspace.test.yml` and is safer than the dev workspace stack for integration verification.
+It expects the local workspace backend image `dimaxoperationssuite-api` to exist. If it is missing, build/start the dev workspace API once.
+The workspace wrapper disables pytest plugin autoload for deterministic container runs.
+
 ## Local Run (Fast)
 
 ```bash
