@@ -28,7 +28,13 @@ from app.modules.sync.api.installer_sync import router as installer_sync
 from app.modules.files.api.public import router as public_files
 from app.modules.files.api.admin import router as admin_files
 from app.modules.outbox.api.admin import router as admin_outbox
+from app.modules.door_types.api.admin import router as admin_door_types
+from app.modules.reasons.api.admin import router as admin_reasons
+from app.modules.settings.api.admin import router as admin_settings
+from app.modules.issues.api.admin import router as admin_issues
+from app.modules.companies.api.platform import router as platform_companies
 from app.webhooks.twilio import router as twilio_webhooks
+from app.webhooks.outbox import router as outbox_webhooks
 
 
 router = APIRouter(prefix="/api/v1")
@@ -80,6 +86,7 @@ router.include_router(public_files, responses=VALIDATION_ERROR_RESPONSE)
 router.include_router(admin_files, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_outbox, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(twilio_webhooks)
+router.include_router(outbox_webhooks)
 router.include_router(admin_calendar, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(installer_calendar, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_installers, responses=SECURED_ROUTE_RESPONSES)
@@ -93,3 +100,8 @@ router.include_router(admin_sync_health, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(installer_sync, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_doors, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(installer_doors, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_door_types, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_reasons, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_settings, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_issues, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(platform_companies, responses=SECURED_ROUTE_RESPONSES)

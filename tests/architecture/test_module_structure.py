@@ -13,12 +13,8 @@ STANDARD_MODULE_LAYERS = {
 # Explicit exceptions for technical/infrastructure-first modules.
 MODULE_LAYER_ALLOWLIST = {
     "audit": {"application", "infrastructure"},
-    "companies": {"infrastructure"},
-    "door_types": {"infrastructure"},
     "files": {"api", "application", "infrastructure"},
-    "issues": {"domain", "infrastructure"},
     "rates": {"infrastructure"},
-    "reasons": {"infrastructure"},
 }
 
 
