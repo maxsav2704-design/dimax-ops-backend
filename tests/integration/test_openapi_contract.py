@@ -293,6 +293,22 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     assert _response_ref(
         spec,
         path="/api/v1/admin/installer-rates",
+        method="get",
+    ) == "#/components/schemas/InstallerRateDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/installer-rates",
+        method="post",
+        status="201",
+    ) == "#/components/schemas/InstallerRateDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/installer-rates/{rate_id}",
+        method="get",
+    ) == "#/components/schemas/InstallerRateDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/installer-rates",
         method="post",
         status="400",
     ) == "#/components/schemas/ApiErrorResponseDTO"
@@ -744,6 +760,21 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         path="/api/v1/installer/projects",
         method="get",
     )
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/projects",
+        method="get",
+    ) == "#/components/schemas/InstallerProjectListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/projects/{project_id}",
+        method="get",
+    ) == "#/components/schemas/InstallerProjectDetailsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/calendar/events",
+        method="get",
+    ) == "#/components/schemas/EventListResponse"
     assert "401" in installer_projects_statuses
     assert "403" in installer_projects_statuses
     assert _response_ref(
@@ -755,6 +786,30 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     assert _response_ref(
         spec,
         path="/api/v1/installer/projects",
+        method="get",
+        status="403",
+    ) == "#/components/schemas/ApiErrorResponseDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/projects/{project_id}",
+        method="get",
+        status="401",
+    ) == "#/components/schemas/ApiErrorResponseDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/projects/{project_id}",
+        method="get",
+        status="403",
+    ) == "#/components/schemas/ApiErrorResponseDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/calendar/events",
+        method="get",
+        status="401",
+    ) == "#/components/schemas/ApiErrorResponseDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/calendar/events",
         method="get",
         status="403",
     ) == "#/components/schemas/ApiErrorResponseDTO"

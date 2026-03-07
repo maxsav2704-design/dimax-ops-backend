@@ -92,6 +92,10 @@ def _make_door(
     )
 
 
+def _assert_exact_keys(payload: dict, expected: set[str]) -> None:
+    assert set(payload.keys()) == expected
+
+
 def test_installer_projects_list_shows_only_assigned_projects(
     client_installer_projects,
     db_session,
@@ -178,6 +182,7 @@ def test_installer_projects_list_shows_only_assigned_projects(
     assert str(project_foreign.id) not in item_ids
     assert item_ids.count(str(project_a.id)) == 1
     row_a = next(x for x in items if x["id"] == str(project_a.id))
+    _assert_exact_keys(row_a, {"id", "name", "address", "status", "waze_url"})
     assert row_a["waze_url"] is not None
     assert "navigate=yes" in row_a["waze_url"]
 
@@ -303,6 +308,22 @@ def test_installer_project_details_returns_scoped_data(
     assert resp.status_code == 200, resp.text
 
     body = resp.json()
+    _assert_exact_keys(
+        body,
+        {
+            "id",
+            "name",
+            "address",
+            "waze_url",
+            "status",
+            "doors",
+            "issues_open",
+            "door_types_catalog",
+            "reasons_catalog",
+            "addons",
+            "server_time",
+        },
+    )
     assert body["id"] == str(project.id)
     assert body["name"] == "Installer Details Project"
     assert body["waze_url"] is not None
@@ -310,22 +331,53 @@ def test_installer_project_details_returns_scoped_data(
 
     doors = body["doors"]
     assert [d["unit_label"] for d in doors] == ["A-01", "A-02"]
+    _assert_exact_keys(
+        doors[0],
+        {
+            "id",
+            "unit_label",
+            "door_type_id",
+            "our_price",
+            "order_number",
+            "house_number",
+            "floor_label",
+            "apartment_number",
+            "location_code",
+            "door_marking",
+            "status",
+            "reason_id",
+            "comment",
+            "is_locked",
+        },
+    )
 
     issues = body["issues_open"]
     assert len(issues) == 1
+    _assert_exact_keys(issues[0], {"id", "door_id", "status", "title", "details"})
     assert issues[0]["id"] == str(issue_open.id)
 
     door_types_catalog = body["door_types_catalog"]
+    _assert_exact_keys(door_types_catalog[0], {"id", "code", "name"})
     assert any(x["id"] == str(door_type.id) for x in door_types_catalog)
     reasons_catalog = body["reasons_catalog"]
     assert isinstance(reasons_catalog, list)
 
     addons = body["addons"]
+    _assert_exact_keys(addons, {"types", "plan", "facts"})
     assert len(addons["types"]) == 1
+    _assert_exact_keys(addons["types"][0], {"id", "name", "unit"})
     assert addons["types"][0]["id"] == str(addon_type.id)
     assert len(addons["plan"]) == 1
+    _assert_exact_keys(
+        addons["plan"][0],
+        {"addon_type_id", "qty_planned", "client_price", "installer_price"},
+    )
     assert addons["plan"][0]["addon_type_id"] == str(addon_type.id)
     assert len(addons["facts"]) == 1
+    _assert_exact_keys(
+        addons["facts"][0],
+        {"id", "addon_type_id", "qty_done", "done_at", "comment", "source"},
+    )
     assert addons["facts"][0]["id"] == str(addon_fact_my.id)
 
 

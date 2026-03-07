@@ -5,6 +5,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 
+def _assert_exact_keys(payload: dict, expected: set[str]) -> None:
+    assert set(payload.keys()) == expected
+
+
 def test_installer_rates_unique_and_delete_flow(client, make_installer, make_door_type):
     installer = make_installer(full_name="Rate Installer", phone="+10000000002")
     door_type = make_door_type(name="Main Door")
@@ -20,6 +24,19 @@ def test_installer_rates_unique_and_delete_flow(client, make_installer, make_doo
     assert create_resp.status_code == 201, create_resp.text
     created = create_resp.json()
     rate_id = created["id"]
+    _assert_exact_keys(
+        created,
+        {
+            "id",
+            "company_id",
+            "installer_id",
+            "door_type_id",
+            "price",
+            "effective_from",
+            "created_at",
+            "updated_at",
+        },
+    )
     assert created["installer_id"] == payload["installer_id"]
     assert created["door_type_id"] == payload["door_type_id"]
     assert created["price"] == payload["price"]
@@ -229,12 +246,42 @@ def test_installer_rates_timeline_supports_as_of_resolution(
     )
     assert timeline_resp.status_code == 200, timeline_resp.text
     payload = timeline_resp.json()
+    _assert_exact_keys(
+        payload,
+        {"installer_id", "door_type_id", "as_of", "effective_rate", "versions"},
+    )
     assert payload["installer_id"] == str(installer.id)
     assert payload["door_type_id"] == str(door_type.id)
     assert payload["as_of"] in {as_of, as_of.replace("Z", "+00:00")}
     assert len(payload["versions"]) == 3
+    _assert_exact_keys(
+        payload["versions"][0],
+        {
+            "id",
+            "company_id",
+            "installer_id",
+            "door_type_id",
+            "price",
+            "effective_from",
+            "created_at",
+            "updated_at",
+        },
+    )
     assert Decimal(str(payload["versions"][0]["price"])) == Decimal("150.00")
     assert Decimal(str(payload["versions"][1]["price"])) == Decimal("120.00")
     assert Decimal(str(payload["versions"][2]["price"])) == Decimal("100.00")
     assert payload["effective_rate"] is not None
+    _assert_exact_keys(
+        payload["effective_rate"],
+        {
+            "id",
+            "company_id",
+            "installer_id",
+            "door_type_id",
+            "price",
+            "effective_from",
+            "created_at",
+            "updated_at",
+        },
+    )
     assert Decimal(str(payload["effective_rate"]["price"])) == Decimal("120.00")

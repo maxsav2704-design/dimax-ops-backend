@@ -25,6 +25,10 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _assert_exact_keys(payload: dict, expected: set[str]) -> None:
+    assert set(payload.keys()) == expected
+
+
 def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectORM:
     row = ProjectORM(
         company_id=company_id,
@@ -216,6 +220,21 @@ def test_installer_calendar_lists_only_assigned_events(
     assert list_resp.status_code == 200, list_resp.text
     items = list_resp.json()["items"]
     assert len(items) == 1
+    _assert_exact_keys(
+        items[0],
+        {
+            "id",
+            "title",
+            "event_type",
+            "starts_at",
+            "ends_at",
+            "location",
+            "waze_url",
+            "description",
+            "project_id",
+            "installer_ids",
+        },
+    )
     assert items[0]["id"] == my_event_id
     assert "waze_url" in items[0]
 
