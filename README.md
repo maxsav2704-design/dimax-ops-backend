@@ -63,6 +63,7 @@ Workspace shortcut:
 - `PRODUCTION_CHECKLIST.md`
 - `ARCHITECTURE.md`
 - `OBSERVABILITY.md`
+- `OBSERVABILITY_CHEATSHEET.md`
 - `INCIDENT_RUNBOOKS.md`
 
 Production env validation:

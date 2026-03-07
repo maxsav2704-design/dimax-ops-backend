@@ -66,6 +66,10 @@ Minimum recommendation:
    - `project.import.failed`
    - `outbox.message.failed`
 
+Operator quick reference:
+
+- `OBSERVABILITY_CHEATSHEET.md`
+
 ## Note
 
 These logs are observability-only changes. They do not change domain behavior or API contracts.
