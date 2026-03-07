@@ -1,5 +1,8 @@
 # Release Runbook
 
+Before each release, fill the workspace-level template in `../RELEASE_TEMPLATE.md`
+and use `../POST_DEPLOY_SMOKE.md` as the default smoke checklist record.
+
 ## 1. Pre-Release Gate
 
 From `backend`:
@@ -66,6 +69,8 @@ Manual API checks:
 - Admin login (`/api/v1/auth/login`)
 - Admin dashboard (`/api/v1/admin/dashboard`)
 - Public file/journal route (if token exists)
+- Installer login + workspace/projects/schedule path
+- Record outcome in `../POST_DEPLOY_SMOKE.md`
 
 Mobile checks before calling release complete:
 
