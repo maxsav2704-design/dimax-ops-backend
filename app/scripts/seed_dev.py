@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import uuid
 
 from sqlalchemy import select
 
-from app.shared.infrastructure.db.session import SessionLocal
-
+from app.core.security.password import hash_password
 from app.modules.identity.domain.enums import UserRole
 from app.modules.identity.infrastructure.models import CompanyORM, UserORM
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.sync.infrastructure.models import InstallerSyncStateORM
-
-from app.core.security.password import hash_password
+from app.shared.infrastructure.db.session import SessionLocal
 
 
 SEED_USERS = [
@@ -41,20 +41,35 @@ SEED_USERS = [
 
 
 def _env(name: str, default: str) -> str:
-    v = os.getenv(name)
-    return v if v and v.strip() else default
+    value = os.getenv(name)
+    return value if value and value.strip() else default
 
 
-def seed_dev() -> None:
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Seed reproducible dev users/installers.")
+    parser.add_argument(
+        "--emit-json",
+        action="store_true",
+        help="Emit machine-readable JSON summary instead of human-readable output.",
+    )
+    return parser.parse_args()
+
+
+def _primary_installer_seed() -> dict:
+    for item in SEED_USERS:
+        if str(item["role"]).upper() == "INSTALLER":
+            return item
+    raise RuntimeError("No installer user configured in SEED_USERS.")
+
+
+def seed_dev() -> dict:
     app_env = _env("APP_ENV", "dev")
     if app_env.lower() != "dev":
-        raise SystemExit(f"❌ seed_dev запрещён в APP_ENV={app_env}. Поставь APP_ENV=dev.")
+        raise SystemExit(f"seed_dev is blocked for APP_ENV={app_env}. Set APP_ENV=dev.")
 
     company_name = _env("DEV_SEED_COMPANY_NAME", "DIMAX DEV")
 
-    # ВАЖНО: работаем через session, без миграций.
     with SessionLocal() as session:
-        # 1) Company (идемпотентно)
         company = session.execute(
             select(CompanyORM).where(CompanyORM.name == company_name)
         ).scalars().first()
@@ -64,97 +79,79 @@ def seed_dev() -> None:
             session.add(company)
             session.flush()
 
-        # запоминаем до commit, чтобы не трогать ORM после него
         company_id = company.id
         company_name = company.name
 
-        # 2) Users (идемпотентно, с починкой full_name/role при REUSED)
-        created_users = []
-        reused_users = []
+        created_users: list[tuple[str, str]] = []
+        reused_users: list[tuple[str, str]] = []
 
-        for u in SEED_USERS:
-            role = UserRole[u["role"]] if isinstance(u["role"], str) else u["role"]
-
-            user = (
-                session.execute(
-                    select(UserORM).where(
-                        UserORM.company_id == company_id,
-                        UserORM.email == u["email"],
-                    )
+        for seed_user in SEED_USERS:
+            role = UserRole[seed_user["role"]] if isinstance(seed_user["role"], str) else seed_user["role"]
+            user = session.execute(
+                select(UserORM).where(
+                    UserORM.company_id == company_id,
+                    UserORM.email == seed_user["email"],
                 )
-                .scalars()
-                .first()
-            )
+            ).scalars().first()
 
             if user is None:
-                raw = (u["password"] or "").strip()
-                b = raw.encode("utf-8")
-                if len(b) > 72:
+                raw_password = str(seed_user["password"] or "").strip()
+                password_bytes = raw_password.encode("utf-8")
+                if len(password_bytes) > 72:
                     raise SystemExit(
-                        f"❌ DEV password too long for bcrypt: {len(b)} bytes (limit 72). Fix DEV_SEED_* env."
+                        f"DEV password too long for bcrypt: {len(password_bytes)} bytes (limit 72)."
                     )
                 user = UserORM(
                     id=uuid.uuid4(),
                     company_id=company_id,
-                    email=u["email"],
-                    full_name=u["full_name"],
+                    email=seed_user["email"],
+                    full_name=seed_user["full_name"],
                     role=role,
-                    password_hash=hash_password(raw),
+                    password_hash=hash_password(raw_password),
                     is_active=True,
                 )
                 session.add(user)
-                created_users.append((role.name, u["email"]))
+                created_users.append((role.name, seed_user["email"]))
             else:
                 changed = False
-                if user.full_name != u["full_name"]:
-                    user.full_name = u["full_name"]
+                if user.full_name != seed_user["full_name"]:
+                    user.full_name = seed_user["full_name"]
                     changed = True
                 if user.role != role:
                     user.role = role
                     changed = True
                 if changed:
                     session.add(user)
-                reused_users.append((role.name, u["email"]))
+                reused_users.append((role.name, seed_user["email"]))
 
-        # SessionLocal has autoflush disabled, flush users before reading them below.
         session.flush()
 
-        # 3) Installers + installer_sync_state (идемпотентно)
-        installer_users = (
-            session.execute(
-                select(UserORM).where(
-                    UserORM.company_id == company_id,
-                    UserORM.role == UserRole.INSTALLER,
-                )
+        installer_users = session.execute(
+            select(UserORM).where(
+                UserORM.company_id == company_id,
+                UserORM.role == UserRole.INSTALLER,
             )
-            .scalars()
-            .all()
-        )
+        ).scalars().all()
 
         created_installers = 0
         reused_installers = 0
         created_sync = 0
         reused_sync = 0
 
-        for u in installer_users:
-            # --- ensure Installer exists for this user ---
-            installer = (
-                session.execute(
-                    select(InstallerORM).where(
-                        InstallerORM.company_id == company_id,
-                        InstallerORM.user_id == u.id,
-                    )
+        for installer_user in installer_users:
+            installer = session.execute(
+                select(InstallerORM).where(
+                    InstallerORM.company_id == company_id,
+                    InstallerORM.user_id == installer_user.id,
                 )
-                .scalars()
-                .first()
-            )
+            ).scalars().first()
 
             if installer is None:
                 installer = InstallerORM(
                     company_id=company_id,
-                    user_id=u.id,
-                    full_name=u.full_name,
-                    email=u.email,
+                    user_id=installer_user.id,
+                    full_name=installer_user.full_name,
+                    email=installer_user.email,
                     phone=None,
                     status="ACTIVE",
                     is_active=True,
@@ -165,17 +162,12 @@ def seed_dev() -> None:
             else:
                 reused_installers += 1
 
-            # --- ensure InstallerSyncState exists for this installer ---
-            sync_state = (
-                session.execute(
-                    select(InstallerSyncStateORM).where(
-                        InstallerSyncStateORM.company_id == company_id,
-                        InstallerSyncStateORM.installer_id == installer.id,
-                    )
+            sync_state = session.execute(
+                select(InstallerSyncStateORM).where(
+                    InstallerSyncStateORM.company_id == company_id,
+                    InstallerSyncStateORM.installer_id == installer.id,
                 )
-                .scalars()
-                .first()
-            )
+            ).scalars().first()
 
             if sync_state is None:
                 sync_state = InstallerSyncStateORM(
@@ -198,25 +190,60 @@ def seed_dev() -> None:
 
         session.commit()
 
-    print("✅ DEV SEED DONE")
-    print(f"company_name: {company_name}")
-    print(f"company_id:   {company_id}")
+    primary_installer = _primary_installer_seed()
+    return {
+        "company_name": company_name,
+        "company_id": str(company_id),
+        "created": created_users,
+        "reused": reused_users,
+        "created_installers": created_installers,
+        "reused_installers": reused_installers,
+        "created_sync_state": created_sync,
+        "reused_sync_state": reused_sync,
+        "users": [
+            {
+                "role": item["role"],
+                "email": item["email"],
+                "password": item["password"],
+            }
+            for item in SEED_USERS
+        ],
+        "primary_installer": {
+            "email": primary_installer["email"],
+            "password": primary_installer["password"],
+        },
+    }
+
+
+def _print_human(summary: dict) -> None:
+    print("DEV SEED DONE")
+    print(f"company_name: {summary['company_name']}")
+    print(f"company_id:   {summary['company_id']}")
     print("")
-    print("CREATED:", created_users if created_users else "none")
-    print("REUSED: ", reused_users if reused_users else "none")
+    print("CREATED:", summary["created"] if summary["created"] else "none")
+    print("REUSED: ", summary["reused"] if summary["reused"] else "none")
     print("")
     print("INSTALLERS / SYNC_STATE:")
-    print(f"CREATED installers: {created_installers}, REUSED installers: {reused_installers}")
-    print(f"CREATED sync_state: {created_sync}, REUSED sync_state: {reused_sync}")
+    print(
+        f"CREATED installers: {summary['created_installers']}, REUSED installers: {summary['reused_installers']}"
+    )
+    print(
+        f"CREATED sync_state: {summary['created_sync_state']}, REUSED sync_state: {summary['reused_sync_state']}"
+    )
     print("")
     print("LOGIN CREDS:")
-    for u in SEED_USERS:
-        label = "ADMIN" if u["role"] == "ADMIN" else u["email"].split("@")[0].upper()
-        print(f"  {label}: {u['email']} / {u['password']}")
+    for item in summary["users"]:
+        label = "ADMIN" if item["role"] == "ADMIN" else item["email"].split("@")[0].upper()
+        print(f"  {label}: {item['email']} / {item['password']}")
 
 
 def main() -> None:
-    seed_dev()
+    args = _parse_args()
+    summary = seed_dev()
+    if args.emit_json:
+        print(json.dumps(summary, ensure_ascii=True))
+        return
+    _print_human(summary)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,27 @@ docker compose exec api alembic upgrade head
 docker compose exec api pytest -q tests/integration
 ```
 
+## Dev seed for local/e2e
+
+Idempotent dev seed:
+
+```bash
+docker compose exec -T -e APP_ENV=dev api python -m app.scripts.seed_dev
+```
+
+Machine-readable output for workspace/e2e bootstrap:
+
+```bash
+docker compose exec -T -e APP_ENV=dev api python -m app.scripts.seed_dev --emit-json
+```
+
+This seed guarantees:
+
+- dev company exists
+- admin + installer users exist
+- installer records exist for installer users
+- `installer_sync_state` exists for seeded installers
+
 ## Local Run (CI Equivalent)
 
 ```bash
