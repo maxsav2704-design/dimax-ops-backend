@@ -89,6 +89,8 @@ If deploy fails after migration:
 
 If rollback safety is unclear, keep DB at current schema and roll forward with hotfix.
 
+If the incident is operational rather than deployment-related, use `INCIDENT_RUNBOOKS.md` instead of improvising direct DB fixes.
+
 ## 5. Release Done Criteria
 
 - `quality-gate` is green in CI.
