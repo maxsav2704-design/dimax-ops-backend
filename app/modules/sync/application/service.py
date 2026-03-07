@@ -14,6 +14,10 @@ from app.modules.doors.application.use_cases import DoorUseCases
 from app.modules.sync.domain.enums import SyncEventType
 from app.shared.application.navigation import build_waze_url
 from app.shared.domain.errors import Forbidden, NotFound, ValidationError
+from app.shared.infrastructure.observability import get_logger, log_event
+
+
+logger = get_logger(__name__)
 
 
 def utcnow() -> datetime:
@@ -34,6 +38,18 @@ class InstallerSyncService:
         device_id: str | None,
         events: list[dict],
     ) -> dict:
+        log_event(
+            logger,
+            "installer.sync.requested",
+            company_id=company_id,
+            installer_id=installer_id,
+            actor_user_id=actor_user_id,
+            since_cursor=since_cursor,
+            ack_cursor=ack_cursor,
+            events_count=len(events),
+            app_version=app_version,
+            device_id=device_id,
+        )
         uow.sync_state.ack_cursor(
             company_id=company_id,
             installer_id=installer_id,
@@ -61,6 +77,23 @@ class InstallerSyncService:
                 company_id=company_id,
                 installer_id=installer_id,
             )
+            ack_ok = sum(1 for item in acks if item.get("ok"))
+            ack_failed = sum(1 for item in acks if not item.get("ok"))
+            ack_duplicates = sum(1 for item in acks if not item.get("applied") and item.get("ok"))
+            log_event(
+                logger,
+                "installer.sync.completed",
+                company_id=company_id,
+                installer_id=installer_id,
+                next_cursor=max_now,
+                reset_required=True,
+                ack_ok=ack_ok,
+                ack_failed=ack_failed,
+                ack_duplicates=ack_duplicates,
+                changes_count=0,
+                snapshot_projects=len(snapshot.get("projects") or []),
+                snapshot_doors=len(snapshot.get("doors") or []),
+            )
             return {
                 "server_time": utcnow(),
                 "next_cursor": max_now,
@@ -87,6 +120,22 @@ class InstallerSyncService:
             for r in rows
         ]
         next_cursor = rows[-1].cursor_id if rows else since_cursor
+
+        ack_ok = sum(1 for item in acks if item.get("ok"))
+        ack_failed = sum(1 for item in acks if not item.get("ok"))
+        ack_duplicates = sum(1 for item in acks if not item.get("applied") and item.get("ok"))
+        log_event(
+            logger,
+            "installer.sync.completed",
+            company_id=company_id,
+            installer_id=installer_id,
+            next_cursor=next_cursor,
+            reset_required=False,
+            ack_ok=ack_ok,
+            ack_failed=ack_failed,
+            ack_duplicates=ack_duplicates,
+            changes_count=len(changes),
+        )
 
         return {
             "server_time": utcnow(),
@@ -173,6 +222,18 @@ class InstallerSyncService:
                 )
 
             except Exception as e:
+                log_event(
+                    logger,
+                    "installer.sync.event_failed",
+                    level="warning",
+                    company_id=company_id,
+                    installer_id=installer_id,
+                    actor_user_id=actor_user_id,
+                    client_event_id=cid,
+                    event_type=ev.get("type"),
+                    project_id=ev.get("project_id"),
+                    error=str(e),
+                )
                 try:
                     if row is not None and getattr(row, "client_event_id", None) == cid:
                         uow.sync_events.mark_failed(row, error=str(e))

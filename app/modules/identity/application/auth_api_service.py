@@ -13,6 +13,10 @@ from app.core.security.password import verify_password
 from app.modules.identity.api.schemas import TokenPair
 from app.modules.identity.infrastructure.refresh_tokens_models import RefreshTokenORM
 from app.shared.domain.errors import Forbidden, NotFound
+from app.shared.infrastructure.observability import get_logger, log_event
+
+
+logger = get_logger(__name__)
 
 
 def _hash_token(token: str) -> str:
@@ -55,14 +59,38 @@ class AuthApiService:
         email: str,
         password: str,
     ) -> TokenPair:
+        normalized_email = email.lower()
+        log_event(
+            logger,
+            "auth.login.attempt",
+            company_id=company_id,
+            email=normalized_email,
+        )
         user = uow.users.get_by_email(
             company_id=company_id,
-            email=email.lower(),
+            email=normalized_email,
         )
         if not user:
+            log_event(
+                logger,
+                "auth.login.failed",
+                level="warning",
+                company_id=company_id,
+                email=normalized_email,
+                reason="user_not_found",
+            )
             raise NotFound("User not found")
 
         if not verify_password(password, user.password_hash):
+            log_event(
+                logger,
+                "auth.login.failed",
+                level="warning",
+                company_id=company_id,
+                user_id=user.id,
+                email=normalized_email,
+                reason="invalid_credentials",
+            )
             raise Forbidden("Invalid credentials")
 
         access, _ = create_access_token(
@@ -89,6 +117,15 @@ class AuthApiService:
             )
         )
 
+        log_event(
+            logger,
+            "auth.login.succeeded",
+            company_id=user.company_id,
+            user_id=user.id,
+            email=user.email,
+            role=user.role,
+        )
+
         return TokenPair(access_token=access, refresh_token=refresh)
 
     @staticmethod
@@ -108,9 +145,25 @@ class AuthApiService:
             jti=old_jti,
         )
         if not db_token:
+            log_event(
+                logger,
+                "auth.refresh.failed",
+                level="warning",
+                company_id=company_id,
+                user_id=user_id,
+                reason="refresh_not_found",
+            )
             raise Forbidden("Refresh token revoked or not found")
 
         if db_token.token_hash != _hash_token(refresh_token):
+            log_event(
+                logger,
+                "auth.refresh.failed",
+                level="warning",
+                company_id=company_id,
+                user_id=user_id,
+                reason="refresh_mismatch",
+            )
             raise Forbidden("Refresh token mismatch")
 
         access, _ = create_access_token(
@@ -142,6 +195,13 @@ class AuthApiService:
             )
         )
 
+        log_event(
+            logger,
+            "auth.refresh.succeeded",
+            company_id=company_id,
+            user_id=user_id,
+        )
+
         return TokenPair(access_token=access, refresh_token=new_refresh)
 
     @staticmethod
@@ -159,12 +219,32 @@ class AuthApiService:
             jti=old_jti,
         )
         if not db_token:
+            log_event(
+                logger,
+                "auth.logout_refresh.missed",
+                company_id=company_id,
+                reason="refresh_not_found",
+            )
             return {"ok": True, "revoked": False}
 
         if db_token.token_hash != _hash_token(refresh_token):
+            log_event(
+                logger,
+                "auth.logout_refresh.failed",
+                level="warning",
+                company_id=company_id,
+                user_id=db_token.user_id,
+                reason="refresh_mismatch",
+            )
             raise Forbidden("Refresh token mismatch")
 
         uow.refresh_tokens.revoke(db_token, revoked_at=utcnow())
+        log_event(
+            logger,
+            "auth.logout_refresh.succeeded",
+            company_id=company_id,
+            user_id=db_token.user_id,
+        )
         return {"ok": True, "revoked": True}
 
     @staticmethod
@@ -178,5 +258,12 @@ class AuthApiService:
             company_id=company_id,
             user_id=user_id,
             revoked_at=utcnow(),
+        )
+        log_event(
+            logger,
+            "auth.logout_all.succeeded",
+            company_id=company_id,
+            user_id=user_id,
+            revoked_count=revoked_count,
         )
         return {"ok": True, "revoked_count": revoked_count}

@@ -62,6 +62,7 @@ Workspace shortcut:
 - `RELEASE.md`
 - `PRODUCTION_CHECKLIST.md`
 - `ARCHITECTURE.md`
+- `OBSERVABILITY.md`
 
 Production env validation:
 

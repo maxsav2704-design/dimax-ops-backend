@@ -15,10 +15,12 @@ from app.modules.outbox.domain.enums import OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.outbox.infrastructure.repositories import OutboxRepository
 from app.shared.infrastructure.db.session import SessionLocal
+from app.shared.infrastructure.observability import get_logger, log_event
 
 
 email_sender = SmtpEmailSender()
 wa_sender = TwilioWhatsAppSender()
+logger = get_logger(__name__)
 
 
 def _enqueue_whatsapp_fallback_email(
@@ -65,6 +67,13 @@ def run_once(limit: int = 20) -> int:
     try:
         repo = OutboxRepository(session)
         msgs = repo.lock_next_batch(company_id=None, limit=limit)
+        if msgs:
+            log_event(
+                logger,
+                "outbox.batch.locked",
+                batch_size=len(msgs),
+                limit=limit,
+            )
 
         processed = 0
         for m in msgs:
@@ -135,6 +144,15 @@ def run_once(limit: int = 20) -> int:
 
                 repo.mark_sent(m)
                 processed += 1
+                log_event(
+                    logger,
+                    "outbox.message.sent",
+                    outbox_id=m.id,
+                    company_id=m.company_id,
+                    correlation_id=m.correlation_id,
+                    channel=m.channel,
+                    attempts=m.attempts,
+                )
 
             except Exception as e:
                 err = str(e)
@@ -173,8 +191,29 @@ def run_once(limit: int = 20) -> int:
                             status=JournalDeliveryStatus.FAILED,
                             error=err,
                         )
+                log_event(
+                    logger,
+                    "outbox.message.failed",
+                    level="warning",
+                    outbox_id=m.id,
+                    company_id=m.company_id,
+                    correlation_id=m.correlation_id,
+                    channel=m.channel,
+                    attempts=m.attempts,
+                    max_attempts=m.max_attempts,
+                    fallback_email_enqueued=fallback_email_enqueued,
+                    error=err,
+                )
 
         session.commit()
+        if msgs:
+            log_event(
+                logger,
+                "outbox.batch.completed",
+                batch_size=len(msgs),
+                processed=processed,
+                failed=(len(msgs) - processed),
+            )
         return processed
 
     except Exception:

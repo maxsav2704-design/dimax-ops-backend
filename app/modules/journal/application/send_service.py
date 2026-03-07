@@ -12,6 +12,10 @@ from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.files.application.service import FileTokenService
 from app.modules.journal.domain.enums import JournalDeliveryStatus
 from app.modules.settings.application.admin_service import SettingsAdminService
+from app.shared.infrastructure.observability import get_logger, log_event
+
+
+logger = get_logger(__name__)
 
 
 def utcnow() -> datetime:
@@ -52,6 +56,17 @@ class JournalSendService:
         send_email: bool,
         send_whatsapp: bool,
     ) -> dict:
+        log_event(
+            logger,
+            "journal.send.requested",
+            company_id=company_id,
+            journal_id=journal_id,
+            template_id=template_id,
+            send_email=send_email,
+            send_whatsapp=send_whatsapp,
+            has_email_to=bool(email_to),
+            has_whatsapp_to=bool(whatsapp_to),
+        )
         if not send_email and not send_whatsapp:
             raise ValidationError("At least one channel must be enabled")
         if send_email and not settings.EMAIL_ENABLED:
@@ -200,10 +215,20 @@ class JournalSendService:
                 error=None,
             )
 
-        return {
+        result = {
             "ok": True,
             "enqueued": enqueued,
             "outbox_ids": outbox_ids,
             "public_url": public_url,
             "object_key": pdf_file.file_path,
         }
+        log_event(
+            logger,
+            "journal.send.enqueued",
+            company_id=company_id,
+            journal_id=journal_id,
+            template_id=template_id,
+            enqueued=enqueued,
+            outbox_ids=outbox_ids,
+        )
+        return result

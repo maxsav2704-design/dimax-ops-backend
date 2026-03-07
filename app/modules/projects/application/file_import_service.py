@@ -31,6 +31,10 @@ from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.projects.application.use_cases import ProjectUseCases
 from app.modules.projects.infrastructure.models import ProjectImportRunORM
 from app.shared.domain.errors import NotFound
+from app.shared.infrastructure.observability import get_logger, log_event
+
+
+logger = get_logger(__name__)
 
 
 def _normalize_token(value: str) -> str:
@@ -1097,6 +1101,17 @@ class ProjectFileImportService:
         alias_groups = _build_alias_groups(profile_code)
         effective_delimiter = delimiter or _profile_preferred_delimiter(profile_code)
         import_mode = "analyze" if analyze_only else "import"
+        log_event(
+            logger,
+            "project.import.started",
+            company_id=company_id,
+            project_id=project_id,
+            filename=filename,
+            import_mode=import_mode,
+            mapping_profile=profile_code,
+            strict_required_fields=strict_required,
+            create_missing_door_types=create_missing_door_types,
+        )
         fingerprint = _import_fingerprint(
             content=content,
             filename=filename,
@@ -1109,216 +1124,299 @@ class ProjectFileImportService:
             analyze_only=analyze_only,
         )
 
-        existing_run = uow.project_import_runs.get_by_fingerprint(
-            company_id=company_id,
-            project_id=project_id,
-            fingerprint=fingerprint,
-            import_mode=import_mode,
-        )
-        if existing_run is not None and isinstance(existing_run.result_payload, dict):
-            cached = _public_result_payload(existing_run.result_payload)
-            cached["idempotency_hit"] = True
-            return cached
-
-        parsed_rows = _parse_rows_by_filename(
-            filename=filename,
-            content=content,
-            delimiter=effective_delimiter,
-            alias_groups=alias_groups,
-        )
-        if not parsed_rows:
-            raise HTTPException(status_code=422, detail="no rows found in file")
-        diagnostics = _collect_columns_diagnostics(
-            parsed_rows,
-            alias_groups=alias_groups,
-            mapping_profile=profile_code,
-            strict_required_fields=strict_required,
-        )
-        missing_required_columns = list(diagnostics.get("missing_required_fields") or [])
-        if strict_required and missing_required_columns:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "missing required columns: "
-                    + ", ".join(missing_required_columns)
-                ),
+        try:
+            existing_run = uow.project_import_runs.get_by_fingerprint(
+                company_id=company_id,
+                project_id=project_id,
+                fingerprint=fingerprint,
+                import_mode=import_mode,
             )
-
-        prepared_rows: list[dict] = []
-        errors: list[dict] = []
-        payload_keys_seen: set[tuple[str, uuid.UUID]] = set()
-        skipped_duplicates_in_payload = 0
-
-        for idx, source in enumerate(parsed_rows, start=1):
-            try:
-                raw_unit_label = _first_value(source, alias_groups["unit_label"])
-                order_number = _normalize_optional_value(
-                    _first_value(source, alias_groups["order_number"]),
-                    max_len=80,
-                )
-                house_number = _normalize_optional_value(
-                    _first_value(source, alias_groups["house"]),
-                    max_len=40,
-                )
-                floor_label = _normalize_optional_value(
-                    _first_value(source, alias_groups["floor"]),
-                    max_len=40,
-                )
-                apartment_number = _normalize_optional_value(
-                    _first_value(source, alias_groups["apartment"]),
-                    max_len=40,
-                )
-                location_raw = _first_value(source, alias_groups["location"])
-                marking_raw = _first_value(source, alias_groups["marking"])
-                location_code = _normalize_location_code(location_raw)
-                if location_code is None:
-                    location_code = _normalize_location_code(
-                        marking_raw,
-                        aliases_only=True,
-                    )
-                door_marking = _normalize_marking(marking_raw)
-                if strict_required:
-                    missing_required_values = _required_row_missing_fields(
-                        order_number=order_number,
-                        house_number=house_number,
-                        floor_label=floor_label,
-                        apartment_number=apartment_number,
-                        door_marking=door_marking,
-                    )
-                    if missing_required_values:
-                        raise HTTPException(
-                            status_code=422,
-                            detail=(
-                                "missing required row values: "
-                                + ", ".join(missing_required_values)
-                            ),
-                        )
-
-                qty = _parse_quantity(_first_value(source, alias_groups["qty"]))
-                price = _parse_price(
-                    _first_value(source, alias_groups["price"]),
-                    default_our_price,
-                )
-
-                door_type_id_raw = _first_value(source, alias_groups["door_type_id"])
-                door_type_code = _first_value(source, alias_groups["door_type_code"])
-                if not door_type_code:
-                    door_type_code = _factory_profile_door_type_code_fallback(
-                        profile_code=profile_code,
-                        door_marking=door_marking,
-                        source=source,
-                        alias_groups=alias_groups,
-                    )
-                door_type_id: uuid.UUID | None = None
-
-                if door_type_id_raw:
-                    door_type_id = uuid.UUID(door_type_id_raw)
-                elif door_type_code:
-                    code = re.sub(r"[^a-z0-9_-]+", "-", door_type_code.strip().lower())
-                    code = code.strip("-")[:64]
-                    if len(code) < 2:
-                        raise HTTPException(status_code=422, detail="door_type_code is invalid")
-
-                    dt = uow.door_types.get_by_code(
-                        company_id=company_id,
-                        code=code,
-                        include_deleted=True,
-                    )
-                    if dt is None and create_missing_door_types:
-                        dt = DoorTypeORM(
-                            company_id=company_id,
-                            code=code,
-                            name=door_type_code.strip()[:256],
-                            is_active=True,
-                            deleted_at=None,
-                        )
-                        uow.door_types.save(dt)
-                        uow.session.flush()
-                    if dt is not None:
-                        door_type_id = dt.id
-
-                if door_type_id is None:
-                    door_type_id = default_door_type_id
-                if door_type_id is None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="door_type_id or door_type_code is required",
-                    )
-
-                for q_idx in range(qty):
-                    unit_label = _build_unit_label(
-                        raw_unit_label=raw_unit_label,
-                        house_number=house_number,
-                        floor_label=floor_label,
-                        apartment_number=apartment_number,
-                        location_code=location_code,
-                        door_marking=door_marking,
-                        quantity_index=q_idx,
-                        quantity=qty,
-                        row_number=idx,
-                    )
-                    key = (unit_label, door_type_id)
-                    if key in payload_keys_seen:
-                        skipped_duplicates_in_payload += 1
-                        continue
-                    payload_keys_seen.add(key)
-                    prepared_rows.append(
-                        {
-                            "door_type_id": door_type_id,
-                            "unit_label": unit_label,
-                            "our_price": price,
-                            "order_number": order_number,
-                            "house_number": house_number,
-                            "floor_label": floor_label,
-                            "apartment_number": apartment_number,
-                            "location_code": location_code,
-                            "door_marking": door_marking,
-                        }
-                    )
-            except Exception as e:
-                message = str(e.detail) if isinstance(e, HTTPException) else str(e)
-                errors.append({"row": idx, "message": message[:500]})
-
-        if not prepared_rows:
-            if errors:
-                preview = "; ".join(
-                    f"row {x.get('row')}: {x.get('message')}" for x in errors[:3]
-                )
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"no valid rows to import ({preview})",
-                )
-            raise HTTPException(status_code=422, detail="no valid rows to import")
-
-        diagnostics["data_summary"] = _collect_data_summary(
-            parsed_rows=parsed_rows,
-            prepared_rows=prepared_rows,
-            errors=errors,
-            skipped_duplicates_in_payload=skipped_duplicates_in_payload,
-        )
-        diagnostics["preview_groups"] = _collect_preview_groups(prepared_rows)
-
-        if analyze_only:
-            # Use nested transaction so all domain checks run but no rows are persisted.
-            with uow.session.begin_nested() as preview_tx:
-                would_import, skipped_existing = ProjectUseCases.import_doors(
-                    uow,
+            if existing_run is not None and isinstance(existing_run.result_payload, dict):
+                cached = _public_result_payload(existing_run.result_payload)
+                cached["idempotency_hit"] = True
+                log_event(
+                    logger,
+                    "project.import.idempotency_hit",
                     company_id=company_id,
                     project_id=project_id,
-                    rows=prepared_rows,
-                    skip_existing=True,
+                    filename=filename,
+                    import_mode=import_mode,
+                    mapping_profile=profile_code,
                 )
-                preview_tx.rollback()
+                return cached
+
+            parsed_rows = _parse_rows_by_filename(
+                filename=filename,
+                content=content,
+                delimiter=effective_delimiter,
+                alias_groups=alias_groups,
+            )
+            if not parsed_rows:
+                raise HTTPException(status_code=422, detail="no rows found in file")
+            diagnostics = _collect_columns_diagnostics(
+                parsed_rows,
+                alias_groups=alias_groups,
+                mapping_profile=profile_code,
+                strict_required_fields=strict_required,
+            )
+            missing_required_columns = list(diagnostics.get("missing_required_fields") or [])
+            if strict_required and missing_required_columns:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "missing required columns: "
+                        + ", ".join(missing_required_columns)
+                    ),
+                )
+
+            prepared_rows: list[dict] = []
+            errors: list[dict] = []
+            payload_keys_seen: set[tuple[str, uuid.UUID]] = set()
+            skipped_duplicates_in_payload = 0
+
+            for idx, source in enumerate(parsed_rows, start=1):
+                try:
+                    raw_unit_label = _first_value(source, alias_groups["unit_label"])
+                    order_number = _normalize_optional_value(
+                        _first_value(source, alias_groups["order_number"]),
+                        max_len=80,
+                    )
+                    house_number = _normalize_optional_value(
+                        _first_value(source, alias_groups["house"]),
+                        max_len=40,
+                    )
+                    floor_label = _normalize_optional_value(
+                        _first_value(source, alias_groups["floor"]),
+                        max_len=40,
+                    )
+                    apartment_number = _normalize_optional_value(
+                        _first_value(source, alias_groups["apartment"]),
+                        max_len=40,
+                    )
+                    location_raw = _first_value(source, alias_groups["location"])
+                    marking_raw = _first_value(source, alias_groups["marking"])
+                    location_code = _normalize_location_code(location_raw)
+                    if location_code is None:
+                        location_code = _normalize_location_code(
+                            marking_raw,
+                            aliases_only=True,
+                        )
+                    door_marking = _normalize_marking(marking_raw)
+                    if strict_required:
+                        missing_required_values = _required_row_missing_fields(
+                            order_number=order_number,
+                            house_number=house_number,
+                            floor_label=floor_label,
+                            apartment_number=apartment_number,
+                            door_marking=door_marking,
+                        )
+                        if missing_required_values:
+                            raise HTTPException(
+                                status_code=422,
+                                detail=(
+                                    "missing required row values: "
+                                    + ", ".join(missing_required_values)
+                                ),
+                            )
+
+                    qty = _parse_quantity(_first_value(source, alias_groups["qty"]))
+                    price = _parse_price(
+                        _first_value(source, alias_groups["price"]),
+                        default_our_price,
+                    )
+
+                    door_type_id_raw = _first_value(source, alias_groups["door_type_id"])
+                    door_type_code = _first_value(source, alias_groups["door_type_code"])
+                    if not door_type_code:
+                        door_type_code = _factory_profile_door_type_code_fallback(
+                            profile_code=profile_code,
+                            door_marking=door_marking,
+                            source=source,
+                            alias_groups=alias_groups,
+                        )
+                    door_type_id: uuid.UUID | None = None
+
+                    if door_type_id_raw:
+                        door_type_id = uuid.UUID(door_type_id_raw)
+                    elif door_type_code:
+                        code = re.sub(r"[^a-z0-9_-]+", "-", door_type_code.strip().lower())
+                        code = code.strip("-")[:64]
+                        if len(code) < 2:
+                            raise HTTPException(status_code=422, detail="door_type_code is invalid")
+
+                        dt = uow.door_types.get_by_code(
+                            company_id=company_id,
+                            code=code,
+                            include_deleted=True,
+                        )
+                        if dt is None and create_missing_door_types:
+                            dt = DoorTypeORM(
+                                company_id=company_id,
+                                code=code,
+                                name=door_type_code.strip()[:256],
+                                is_active=True,
+                                deleted_at=None,
+                            )
+                            uow.door_types.save(dt)
+                            uow.session.flush()
+                        if dt is not None:
+                            door_type_id = dt.id
+
+                    if door_type_id is None:
+                        door_type_id = default_door_type_id
+                    if door_type_id is None:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="door_type_id or door_type_code is required",
+                        )
+
+                    for q_idx in range(qty):
+                        unit_label = _build_unit_label(
+                            raw_unit_label=raw_unit_label,
+                            house_number=house_number,
+                            floor_label=floor_label,
+                            apartment_number=apartment_number,
+                            location_code=location_code,
+                            door_marking=door_marking,
+                            quantity_index=q_idx,
+                            quantity=qty,
+                            row_number=idx,
+                        )
+                        key = (unit_label, door_type_id)
+                        if key in payload_keys_seen:
+                            skipped_duplicates_in_payload += 1
+                            continue
+                        payload_keys_seen.add(key)
+                        prepared_rows.append(
+                            {
+                                "door_type_id": door_type_id,
+                                "unit_label": unit_label,
+                                "our_price": price,
+                                "order_number": order_number,
+                                "house_number": house_number,
+                                "floor_label": floor_label,
+                                "apartment_number": apartment_number,
+                                "location_code": location_code,
+                                "door_marking": door_marking,
+                            }
+                        )
+                except Exception as e:
+                    message = str(e.detail) if isinstance(e, HTTPException) else str(e)
+                    errors.append({"row": idx, "message": message[:500]})
+
+            if not prepared_rows:
+                if errors:
+                    preview = "; ".join(
+                        f"row {x.get('row')}: {x.get('message')}" for x in errors[:3]
+                    )
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"no valid rows to import ({preview})",
+                    )
+                raise HTTPException(status_code=422, detail="no valid rows to import")
+
+            diagnostics["data_summary"] = _collect_data_summary(
+                parsed_rows=parsed_rows,
+                prepared_rows=prepared_rows,
+                errors=errors,
+                skipped_duplicates_in_payload=skipped_duplicates_in_payload,
+            )
+            diagnostics["preview_groups"] = _collect_preview_groups(prepared_rows)
+
+            if analyze_only:
+                # Use nested transaction so all domain checks run but no rows are persisted.
+                with uow.session.begin_nested() as preview_tx:
+                    would_import, skipped_existing = ProjectUseCases.import_doors(
+                        uow,
+                        company_id=company_id,
+                        project_id=project_id,
+                        rows=prepared_rows,
+                        skip_existing=True,
+                    )
+                    preview_tx.rollback()
+                would_skip = skipped_existing + skipped_duplicates_in_payload
+                result = {
+                    "parsed_rows": len(parsed_rows),
+                    "prepared_rows": len(prepared_rows),
+                    "imported": 0,
+                    "skipped": would_skip,
+                    "errors": errors[:500],
+                    "diagnostics": diagnostics,
+                    "mode": "analyze",
+                    "would_import": would_import,
+                    "would_skip": would_skip,
+                    "idempotency_hit": False,
+                }
+                try:
+                    _save_import_run(
+                        uow,
+                        company_id=company_id,
+                        project_id=project_id,
+                        fingerprint=fingerprint,
+                        import_mode="analyze",
+                        source_filename=filename,
+                        mapping_profile=profile_code,
+                        result_payload=_build_persist_payload(
+                            result=result,
+                            prepared_rows=prepared_rows,
+                            filename=filename,
+                            mapping_profile=profile_code,
+                        ),
+                    )
+                except IntegrityError:
+                    uow.session.rollback()
+                    existing_run = uow.project_import_runs.get_by_fingerprint(
+                        company_id=company_id,
+                        project_id=project_id,
+                        fingerprint=fingerprint,
+                        import_mode="analyze",
+                    )
+                    if existing_run is not None and isinstance(existing_run.result_payload, dict):
+                        cached = _public_result_payload(existing_run.result_payload)
+                        cached["idempotency_hit"] = True
+                        log_event(
+                            logger,
+                            "project.import.idempotency_hit",
+                            company_id=company_id,
+                            project_id=project_id,
+                            filename=filename,
+                            import_mode="analyze",
+                            mapping_profile=profile_code,
+                        )
+                        return cached
+                log_event(
+                    logger,
+                    "project.import.completed",
+                    company_id=company_id,
+                    project_id=project_id,
+                    filename=filename,
+                    import_mode="analyze",
+                    mapping_profile=profile_code,
+                    parsed_rows=len(parsed_rows),
+                    prepared_rows=len(prepared_rows),
+                    imported=0,
+                    skipped=would_skip,
+                    errors_count=len(errors),
+                )
+                return result
+
+            imported, skipped_existing = ProjectUseCases.import_doors(
+                uow,
+                company_id=company_id,
+                project_id=project_id,
+                rows=prepared_rows,
+                skip_existing=True,
+            )
             would_skip = skipped_existing + skipped_duplicates_in_payload
             result = {
                 "parsed_rows": len(parsed_rows),
                 "prepared_rows": len(prepared_rows),
-                "imported": 0,
+                "imported": imported,
                 "skipped": would_skip,
                 "errors": errors[:500],
                 "diagnostics": diagnostics,
-                "mode": "analyze",
-                "would_import": would_import,
+                "mode": "import",
+                "would_import": imported,
                 "would_skip": would_skip,
                 "idempotency_hit": False,
             }
@@ -1328,7 +1426,7 @@ class ProjectFileImportService:
                     company_id=company_id,
                     project_id=project_id,
                     fingerprint=fingerprint,
-                    import_mode="analyze",
+                    import_mode="import",
                     source_filename=filename,
                     mapping_profile=profile_code,
                     result_payload=_build_persist_payload(
@@ -1344,60 +1442,48 @@ class ProjectFileImportService:
                     company_id=company_id,
                     project_id=project_id,
                     fingerprint=fingerprint,
-                    import_mode="analyze",
+                    import_mode="import",
                 )
                 if existing_run is not None and isinstance(existing_run.result_payload, dict):
                     cached = _public_result_payload(existing_run.result_payload)
                     cached["idempotency_hit"] = True
+                    log_event(
+                        logger,
+                        "project.import.idempotency_hit",
+                        company_id=company_id,
+                        project_id=project_id,
+                        filename=filename,
+                        import_mode="import",
+                        mapping_profile=profile_code,
+                    )
                     return cached
-            return result
-
-        imported, skipped_existing = ProjectUseCases.import_doors(
-            uow,
-            company_id=company_id,
-            project_id=project_id,
-            rows=prepared_rows,
-            skip_existing=True,
-        )
-        would_skip = skipped_existing + skipped_duplicates_in_payload
-        result = {
-            "parsed_rows": len(parsed_rows),
-            "prepared_rows": len(prepared_rows),
-            "imported": imported,
-            "skipped": would_skip,
-            "errors": errors[:500],
-            "diagnostics": diagnostics,
-            "mode": "import",
-            "would_import": imported,
-            "would_skip": would_skip,
-            "idempotency_hit": False,
-        }
-        try:
-            _save_import_run(
-                uow,
+            log_event(
+                logger,
+                "project.import.completed",
                 company_id=company_id,
                 project_id=project_id,
-                fingerprint=fingerprint,
+                filename=filename,
                 import_mode="import",
-                source_filename=filename,
                 mapping_profile=profile_code,
-                result_payload=_build_persist_payload(
-                    result=result,
-                    prepared_rows=prepared_rows,
-                    filename=filename,
-                    mapping_profile=profile_code,
-                ),
+                parsed_rows=len(parsed_rows),
+                prepared_rows=len(prepared_rows),
+                imported=imported,
+                skipped=would_skip,
+                errors_count=len(errors),
             )
-        except IntegrityError:
-            uow.session.rollback()
-            existing_run = uow.project_import_runs.get_by_fingerprint(
+            return result
+        except Exception as exc:
+            error_message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+            log_event(
+                logger,
+                "project.import.failed",
+                level="warning",
                 company_id=company_id,
                 project_id=project_id,
-                fingerprint=fingerprint,
-                import_mode="import",
+                filename=filename,
+                import_mode=import_mode,
+                mapping_profile=profile_code,
+                error=error_message,
+                status_code=(exc.status_code if isinstance(exc, HTTPException) else None),
             )
-            if existing_run is not None and isinstance(existing_run.result_payload, dict):
-                cached = _public_result_payload(existing_run.result_payload)
-                cached["idempotency_hit"] = True
-                return cached
-        return result
+            raise

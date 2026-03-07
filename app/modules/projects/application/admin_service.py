@@ -25,6 +25,10 @@ from app.modules.projects.application.file_import_service import (
 from app.modules.projects.application.use_cases import ProjectUseCases
 from app.modules.projects.infrastructure.models import ProjectImportRunORM
 from app.shared.domain.errors import NotFound, ValidationError
+from app.shared.infrastructure.observability import get_logger, log_event
+
+
+logger = get_logger(__name__)
 
 
 def _status_value(s) -> str:
@@ -344,6 +348,17 @@ def _run_retry_import(
             actor_user_id=actor_user_id,
             metric_keys=["doors_per_project"],
         )
+    log_event(
+        logger,
+        "project.import.retry_completed",
+        company_id=company_id,
+        project_id=project_id,
+        actor_user_id=actor_user_id,
+        source_run_id=source_run.id,
+        retry_run_id=retry_run.id,
+        imported=imported,
+        skipped=skipped_existing,
+    )
     return ImportDoorsFromFileResponse(**result)
 
 
