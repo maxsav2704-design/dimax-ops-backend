@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -53,22 +54,25 @@ class RatesAdminService:
             company_id, data.installer_id
         )
         self._ensure_door_type_exists(company_id, data.door_type_id)
+        effective_from = data.effective_from or datetime.now(timezone.utc)
         existing = self.session.execute(
             select(InstallerRateORM).where(
                 InstallerRateORM.company_id == company_id,
                 InstallerRateORM.installer_id == data.installer_id,
                 InstallerRateORM.door_type_id == data.door_type_id,
+                InstallerRateORM.effective_from == effective_from,
             )
         ).scalars().first()
         if existing:
             raise InstallerRateAlreadyExists(
-                "rate already exists for this installer and door type"
+                "rate already exists for this installer, door type and effective_from"
             )
         obj = InstallerRateORM(
             company_id=company_id,
             installer_id=data.installer_id,
             door_type_id=data.door_type_id,
             price=data.price,
+            effective_from=effective_from,
         )
         self.session.add(obj)
         self.session.flush()
@@ -80,6 +84,8 @@ class RatesAdminService:
         payload = data.model_dump(exclude_unset=True)
         if "price" in payload:
             rate.price = payload["price"]
+        if "effective_from" in payload and payload["effective_from"] is not None:
+            rate.effective_from = payload["effective_from"]
         self.session.add(rate)
         return rate
 

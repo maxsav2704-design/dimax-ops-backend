@@ -37,6 +37,7 @@ class EventDTO(BaseModel):
     starts_at: datetime
     ends_at: datetime
     location: str | None
+    waze_url: str | None
     description: str | None
     project_id: UUID | None
     installer_ids: list[UUID]

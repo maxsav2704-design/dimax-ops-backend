@@ -9,6 +9,7 @@ from app.modules.calendar.api.schemas import (
     EventListResponse,
 )
 from app.modules.calendar.application.use_cases import CalendarUseCases
+from app.shared.application.navigation import build_waze_url
 
 
 def _event_type_value(e) -> str:
@@ -36,10 +37,22 @@ class CalendarApiService:
             event_type=event_type,
         )
         items: list[EventDTO] = []
+        project_addresses: dict[uuid.UUID, str | None] = {}
         for e in events:
             assignees = uow.calendar.get_assignee_ids(
                 company_id=company_id, event_id=e.id
             )
+            navigation_address = e.location
+            if (not navigation_address) and e.project_id:
+                if e.project_id not in project_addresses:
+                    project = uow.projects.get(
+                        company_id=company_id,
+                        project_id=e.project_id,
+                    )
+                    project_addresses[e.project_id] = (
+                        project.address if project else None
+                    )
+                navigation_address = project_addresses[e.project_id]
             items.append(
                 EventDTO(
                     id=e.id,
@@ -48,6 +61,7 @@ class CalendarApiService:
                     starts_at=e.starts_at,
                     ends_at=e.ends_at,
                     location=e.location,
+                    waze_url=build_waze_url(address=navigation_address),
                     description=e.description,
                     project_id=e.project_id,
                     installer_ids=assignees,

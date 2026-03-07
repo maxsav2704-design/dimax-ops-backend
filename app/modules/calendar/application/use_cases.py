@@ -26,13 +26,26 @@ class CalendarUseCases:
         if ends_at <= starts_at:
             raise ValidationError("ends_at must be after starts_at")
 
+        location_final = location.strip() if location else None
+        if project_id is not None:
+            project = uow.projects.get(
+                company_id=company_id,
+                project_id=project_id,
+            )
+            if not project:
+                raise NotFound(
+                    "Project not found", details={"project_id": str(project_id)}
+                )
+            if not location_final:
+                location_final = project.address
+
         e = CalendarEventORM(
             company_id=company_id,
             title=title,
             event_type=CalendarEventType(event_type),
             starts_at=starts_at,
             ends_at=ends_at,
-            location=location,
+            location=location_final,
             description=description,
             project_id=project_id,
         )
@@ -75,7 +88,23 @@ class CalendarUseCases:
                 val = kwargs[field]
                 if field == "event_type":
                     val = CalendarEventType(val)
+                if field == "location" and isinstance(val, str):
+                    val = val.strip() or None
                 setattr(e, field, val)
+
+        if "project_id" in kwargs and kwargs["project_id"] is not None:
+            project = uow.projects.get(
+                company_id=company_id,
+                project_id=kwargs["project_id"],
+            )
+            if not project:
+                raise NotFound(
+                    "Project not found",
+                    details={"project_id": str(kwargs["project_id"])},
+                )
+            if "location" not in kwargs or kwargs["location"] is None:
+                if not e.location:
+                    e.location = project.address
 
         if e.ends_at <= e.starts_at:
             raise ValidationError("ends_at must be after starts_at")

@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.shared.domain.errors import Forbidden, NotFound
+from app.shared.application.navigation import build_waze_url
 
 
 def _status_value(s) -> str:
@@ -29,6 +30,7 @@ class ProjectInstallerService:
                     "name": p.name,
                     "address": p.address,
                     "status": _status_value(p.status),
+                    "waze_url": build_waze_url(address=getattr(p, "address", None)),
                 }
                 for p in projects
             ]
@@ -69,11 +71,14 @@ class ProjectInstallerService:
             project_id=project_id,
             installer_id=installer_id,
         )
+        door_types = uow.door_types.list_active(company_id=company_id)
+        reasons = uow.reasons.list_active(company_id=company_id)
 
         return {
             "id": project.id,
             "name": project.name,
             "address": getattr(project, "address", None),
+            "waze_url": build_waze_url(address=getattr(project, "address", None)),
             "status": _status_value(project.status),
             "doors": [
                 {
@@ -81,6 +86,12 @@ class ProjectInstallerService:
                     "unit_label": d.unit_label,
                     "door_type_id": d.door_type_id,
                     "our_price": d.our_price,
+                    "order_number": getattr(d, "order_number", None),
+                    "house_number": getattr(d, "house_number", None),
+                    "floor_label": getattr(d, "floor_label", None),
+                    "apartment_number": getattr(d, "apartment_number", None),
+                    "location_code": getattr(d, "location_code", None),
+                    "door_marking": getattr(d, "door_marking", None),
                     "status": _status_value(d.status),
                     "reason_id": d.reason_id,
                     "comment": d.comment,
@@ -97,6 +108,12 @@ class ProjectInstallerService:
                     "details": i.details,
                 }
                 for i in issues
+            ],
+            "door_types_catalog": [
+                {"id": x.id, "code": x.code, "name": x.name} for x in door_types
+            ],
+            "reasons_catalog": [
+                {"id": x.id, "code": x.code, "name": x.name} for x in reasons
             ],
             "addons": {
                 "types": [

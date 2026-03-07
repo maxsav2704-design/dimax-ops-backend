@@ -4,6 +4,7 @@ import uuid
 from decimal import Decimal
 
 from app.shared.domain.errors import Conflict, NotFound
+from app.modules.companies.application.limits_service import CompanyLimitsService
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.projects.infrastructure.models import ProjectORM
@@ -22,6 +23,7 @@ class ProjectUseCases:
         address: str,
         **kwargs,
     ) -> ProjectORM:
+        CompanyLimitsService.assert_can_create_project(uow, company_id=company_id)
         project = ProjectORM(
             company_id=company_id,
             name=name,
@@ -85,7 +87,8 @@ class ProjectUseCases:
         company_id: uuid.UUID,
         project_id: uuid.UUID,
         rows: list[dict],
-    ) -> int:
+        skip_existing: bool = False,
+    ) -> tuple[int, int]:
         project = uow.projects.get(company_id=company_id, project_id=project_id)
         if not project:
             raise NotFound(
@@ -93,7 +96,30 @@ class ProjectUseCases:
             )
 
         doors: list[DoorORM] = []
+        skipped = 0
         for r in rows:
+            door_type = uow.door_types.get(
+                company_id=company_id,
+                door_type_id=r["door_type_id"],
+            )
+            if door_type is None:
+                raise NotFound(
+                    "Door type not found",
+                    details={"door_type_id": str(r["door_type_id"])},
+                )
+            if not door_type.is_active:
+                raise Conflict(
+                    "Door type is inactive",
+                    details={"door_type_id": str(r["door_type_id"])},
+                )
+            if skip_existing and uow.doors.exists_by_project_unit_and_type(
+                company_id=company_id,
+                project_id=project_id,
+                unit_label=str(r["unit_label"]).strip(),
+                door_type_id=r["door_type_id"],
+            ):
+                skipped += 1
+                continue
             doors.append(
                 DoorORM(
                     company_id=company_id,
@@ -101,6 +127,12 @@ class ProjectUseCases:
                     door_type_id=r["door_type_id"],
                     unit_label=r["unit_label"],
                     our_price=Decimal(str(r["our_price"])),
+                    order_number=r.get("order_number"),
+                    house_number=r.get("house_number"),
+                    floor_label=r.get("floor_label"),
+                    apartment_number=r.get("apartment_number"),
+                    location_code=r.get("location_code"),
+                    door_marking=r.get("door_marking"),
                     status=DoorStatus.NOT_INSTALLED,
                     installer_id=None,
                     reason_id=None,
@@ -110,6 +142,12 @@ class ProjectUseCases:
                 )
             )
 
+        CompanyLimitsService.assert_can_add_doors_to_project(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+            adding_count=len(doors),
+        )
         uow.doors.add_many(doors)
         uow.session.flush()
 
@@ -118,7 +156,7 @@ class ProjectUseCases:
             company_id=company_id,
             project_id=project_id,
         )
-        return len(doors)
+        return len(doors), skipped
 
     @staticmethod
     def assign_installer_to_door(
@@ -136,6 +174,13 @@ class ProjectUseCases:
             raise Conflict(
                 "Door is locked. Cannot reassign installer.",
                 details={"door_id": str(door_id)},
+            )
+
+        installer = uow.installers.get(company_id=company_id, installer_id=installer_id)
+        if installer is None or installer.deleted_at is not None or not installer.is_active:
+            raise NotFound(
+                "Installer not found",
+                details={"installer_id": str(installer_id)},
             )
 
         old_installer_id = door.installer_id

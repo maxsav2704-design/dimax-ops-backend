@@ -20,6 +20,35 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def _ensure_reason_exists(uow, *, company_id, reason_id) -> None:
+    reason = uow.reasons.get(company_id=company_id, reason_id=reason_id)
+    if reason is None:
+        raise ValidationError("reason_id not found")
+    if not reason.is_active:
+        raise ValidationError("reason is inactive")
+
+
+def _resolve_installer_rate_snapshot(
+    uow,
+    *,
+    company_id,
+    installer_id,
+    door_type_id,
+    at=None,
+):
+    if installer_id is None:
+        return None
+    rate = uow.installer_rates.get_by_keys(
+        company_id=company_id,
+        installer_id=installer_id,
+        door_type_id=door_type_id,
+        at=at,
+    )
+    if rate is None:
+        return None
+    return rate.price
+
+
 class DoorUseCases:
     @staticmethod
     def mark_installed(uow, cmd: MarkDoorInstalled) -> None:
@@ -40,6 +69,13 @@ class DoorUseCases:
         door.is_locked = True
         door.reason_id = None
         door.comment = None
+        door.installer_rate_snapshot = _resolve_installer_rate_snapshot(
+            uow,
+            company_id=cmd.company_id,
+            installer_id=door.installer_id,
+            door_type_id=door.door_type_id,
+            at=door.installed_at,
+        )
 
         uow.doors.save(door)
 
@@ -68,6 +104,12 @@ class DoorUseCases:
                 "project_id": str(door.project_id),
                 "door_type_id": str(door.door_type_id),
                 "unit_label": door.unit_label,
+                "order_number": door.order_number,
+                "house_number": door.house_number,
+                "floor_label": door.floor_label,
+                "apartment_number": door.apartment_number,
+                "location_code": door.location_code,
+                "door_marking": door.door_marking,
                 "status": str(door.status),
                 "comment": door.comment,
                 "updated_at": utcnow().isoformat(),
@@ -88,11 +130,17 @@ class DoorUseCases:
 
         if not cmd.reason_id:
             raise ValidationError("reason_id is required for NOT_INSTALLED")
+        _ensure_reason_exists(
+            uow,
+            company_id=cmd.company_id,
+            reason_id=cmd.reason_id,
+        )
 
         door.status = DoorStatus.NOT_INSTALLED
         door.reason_id = cmd.reason_id
         door.comment = cmd.comment
         door.installed_at = None
+        door.installer_rate_snapshot = None
 
         uow.doors.save(door)
 
@@ -131,6 +179,12 @@ class DoorUseCases:
                 "project_id": str(door.project_id),
                 "door_type_id": str(door.door_type_id),
                 "unit_label": door.unit_label,
+                "order_number": door.order_number,
+                "house_number": door.house_number,
+                "floor_label": door.floor_label,
+                "apartment_number": door.apartment_number,
+                "location_code": door.location_code,
+                "door_marking": door.door_marking,
                 "status": str(door.status),
                 "comment": door.comment,
                 "updated_at": utcnow().isoformat(),
@@ -154,6 +208,11 @@ class DoorUseCases:
                 door.installed_at.isoformat() if door.installed_at else None
             ),
             "is_locked": door.is_locked,
+            "installer_rate_snapshot": (
+                str(door.installer_rate_snapshot)
+                if door.installer_rate_snapshot is not None
+                else None
+            ),
         }
 
         if cmd.new_status == "INSTALLED":
@@ -162,6 +221,13 @@ class DoorUseCases:
             door.is_locked = True
             door.reason_id = None
             door.comment = None
+            door.installer_rate_snapshot = _resolve_installer_rate_snapshot(
+                uow,
+                company_id=cmd.company_id,
+                installer_id=door.installer_id,
+                door_type_id=door.door_type_id,
+                at=door.installed_at,
+            )
 
             issue = uow.issues.get_by_door(
                 company_id=cmd.company_id, door_id=cmd.door_id
@@ -175,12 +241,18 @@ class DoorUseCases:
                 raise ValidationError(
                     "reason_id is required for NOT_INSTALLED"
                 )
+            _ensure_reason_exists(
+                uow,
+                company_id=cmd.company_id,
+                reason_id=cmd.reason_id,
+            )
 
             door.status = DoorStatus.NOT_INSTALLED
             door.reason_id = cmd.reason_id
             door.comment = cmd.comment
             door.installed_at = None
             door.is_locked = False
+            door.installer_rate_snapshot = None
 
             issue = uow.issues.get_by_door(
                 company_id=cmd.company_id, door_id=cmd.door_id
@@ -213,6 +285,11 @@ class DoorUseCases:
                 door.installed_at.isoformat() if door.installed_at else None
             ),
             "is_locked": door.is_locked,
+            "installer_rate_snapshot": (
+                str(door.installer_rate_snapshot)
+                if door.installer_rate_snapshot is not None
+                else None
+            ),
         }
 
         uow.audit.add(
@@ -245,6 +322,12 @@ class DoorUseCases:
                 "project_id": str(door.project_id),
                 "door_type_id": str(door.door_type_id),
                 "unit_label": door.unit_label,
+                "order_number": door.order_number,
+                "house_number": door.house_number,
+                "floor_label": door.floor_label,
+                "apartment_number": door.apartment_number,
+                "location_code": door.location_code,
+                "door_marking": door.door_marking,
                 "status": str(door.status),
                 "comment": door.comment,
                 "updated_at": utcnow().isoformat(),

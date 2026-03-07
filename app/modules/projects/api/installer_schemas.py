@@ -35,11 +35,24 @@ class InstallerProjectAddonsDTO(BaseModel):
     facts: list[AddonFactDTO]
 
 
+class DoorTypeMiniDTO(BaseModel):
+    id: UUID
+    code: str
+    name: str
+
+
+class ReasonMiniDTO(BaseModel):
+    id: UUID
+    code: str
+    name: str
+
+
 class InstallerProjectListItem(BaseModel):
     id: UUID
     name: str
     address: str
     status: str
+    waze_url: str | None
 
 
 class InstallerProjectListResponse(BaseModel):
@@ -51,6 +64,12 @@ class InstallerDoorDTO(BaseModel):
     unit_label: str
     door_type_id: UUID
     our_price: Decimal
+    order_number: str | None
+    house_number: str | None
+    floor_label: str | None
+    apartment_number: str | None
+    location_code: str | None
+    door_marking: str | None
     status: str
     reason_id: UUID | None
     comment: str | None
@@ -69,8 +88,11 @@ class InstallerProjectDetailsResponse(BaseModel):
     id: UUID
     name: str
     address: str | None
+    waze_url: str | None
     status: str
     doors: list[InstallerDoorDTO]
     issues_open: list[InstallerIssueDTO]
+    door_types_catalog: list[DoorTypeMiniDTO]
+    reasons_catalog: list[ReasonMiniDTO]
     addons: InstallerProjectAddonsDTO
     server_time: datetime

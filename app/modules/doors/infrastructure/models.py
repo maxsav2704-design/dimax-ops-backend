@@ -55,8 +55,17 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
 
     # "квартира/номер" — универсальная метка (apt 12, stair A-3, storage 7 и т.д.)
     unit_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    order_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    house_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    floor_label: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    apartment_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    location_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    door_marking: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     our_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    installer_rate_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
 
     status: Mapped[DoorStatus] = mapped_column(
         Enum(DoorStatus, name="door_status"),

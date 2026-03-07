@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -40,6 +41,7 @@ class InstallerRatesRepository:
         stmt = stmt.order_by(
             InstallerRateORM.installer_id.asc(),
             InstallerRateORM.door_type_id.asc(),
+            InstallerRateORM.effective_from.desc(),
         ).limit(limit).offset(offset)
         return list(self.session.execute(stmt).scalars().all())
 
@@ -48,12 +50,17 @@ class InstallerRatesRepository:
         company_id: uuid.UUID,
         installer_id: uuid.UUID,
         door_type_id: uuid.UUID,
+        at: datetime | None = None,
     ) -> InstallerRateORM | None:
+        if at is None:
+            at = datetime.now(timezone.utc)
         stmt = select(InstallerRateORM).where(
             InstallerRateORM.company_id == company_id,
             InstallerRateORM.installer_id == installer_id,
             InstallerRateORM.door_type_id == door_type_id,
+            InstallerRateORM.effective_from <= at,
         )
+        stmt = stmt.order_by(InstallerRateORM.effective_from.desc())
         return self.session.execute(stmt).scalars().first()
 
     def add(self, obj: InstallerRateORM) -> None:
@@ -61,3 +68,38 @@ class InstallerRatesRepository:
 
     def delete(self, obj: InstallerRateORM) -> None:
         self.session.delete(obj)
+
+    def get_by_scope_effective_from(
+        self,
+        company_id: uuid.UUID,
+        installer_id: uuid.UUID,
+        door_type_id: uuid.UUID,
+        effective_from: datetime,
+    ) -> InstallerRateORM | None:
+        stmt = select(InstallerRateORM).where(
+            InstallerRateORM.company_id == company_id,
+            InstallerRateORM.installer_id == installer_id,
+            InstallerRateORM.door_type_id == door_type_id,
+            InstallerRateORM.effective_from == effective_from,
+        )
+        return self.session.execute(stmt).scalars().first()
+
+    def list_by_scope(
+        self,
+        *,
+        company_id: uuid.UUID,
+        installer_id: uuid.UUID,
+        door_type_id: uuid.UUID,
+        limit: int = 500,
+    ) -> list[InstallerRateORM]:
+        stmt = (
+            select(InstallerRateORM)
+            .where(
+                InstallerRateORM.company_id == company_id,
+                InstallerRateORM.installer_id == installer_id,
+                InstallerRateORM.door_type_id == door_type_id,
+            )
+            .order_by(InstallerRateORM.effective_from.desc())
+            .limit(limit)
+        )
+        return list(self.session.execute(stmt).scalars().all())

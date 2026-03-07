@@ -177,6 +177,9 @@ def test_installer_projects_list_shows_only_assigned_projects(
     assert str(project_b.id) in item_ids
     assert str(project_foreign.id) not in item_ids
     assert item_ids.count(str(project_a.id)) == 1
+    row_a = next(x for x in items if x["id"] == str(project_a.id))
+    assert row_a["waze_url"] is not None
+    assert "navigate=yes" in row_a["waze_url"]
 
 
 def test_installer_project_details_returns_scoped_data(
@@ -302,6 +305,8 @@ def test_installer_project_details_returns_scoped_data(
     body = resp.json()
     assert body["id"] == str(project.id)
     assert body["name"] == "Installer Details Project"
+    assert body["waze_url"] is not None
+    assert "navigate=yes" in body["waze_url"]
 
     doors = body["doors"]
     assert [d["unit_label"] for d in doors] == ["A-01", "A-02"]
@@ -309,6 +314,11 @@ def test_installer_project_details_returns_scoped_data(
     issues = body["issues_open"]
     assert len(issues) == 1
     assert issues[0]["id"] == str(issue_open.id)
+
+    door_types_catalog = body["door_types_catalog"]
+    assert any(x["id"] == str(door_type.id) for x in door_types_catalog)
+    reasons_catalog = body["reasons_catalog"]
+    assert isinstance(reasons_catalog, list)
 
     addons = body["addons"]
     assert len(addons["types"]) == 1

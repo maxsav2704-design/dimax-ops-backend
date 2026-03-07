@@ -55,6 +55,16 @@ class DoorRepository:
             .count()
         )
 
+    def count_by_project(self, *, company_id: uuid.UUID, project_id: uuid.UUID) -> int:
+        return (
+            self.session.query(DoorORM.id)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.project_id == project_id,
+            )
+            .count()
+        )
+
     def list_by_project_for_installer(
         self,
         *,
@@ -126,6 +136,12 @@ class DoorRepository:
                 "project_id": str(r.project_id),
                 "door_type_id": str(r.door_type_id),
                 "unit_label": r.unit_label,
+                "order_number": r.order_number,
+                "house_number": r.house_number,
+                "floor_label": r.floor_label,
+                "apartment_number": r.apartment_number,
+                "location_code": r.location_code,
+                "door_marking": r.door_marking,
                 "status": str(r.status),
                 "comment": r.comment,
                 "updated_at": (
@@ -156,9 +172,35 @@ class DoorRepository:
                 "project_id": r.project_id,
                 "door_type_id": r.door_type_id,
                 "unit_label": r.unit_label,
+                "order_number": r.order_number,
+                "house_number": r.house_number,
+                "floor_label": r.floor_label,
+                "apartment_number": r.apartment_number,
+                "location_code": r.location_code,
+                "door_marking": r.door_marking,
                 "status": str(r.status),
                 "comment": r.comment,
                 "updated_at": r.updated_at,
             }
             for r in rows
         ]
+
+    def exists_by_project_unit_and_type(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+        unit_label: str,
+        door_type_id: uuid.UUID,
+    ) -> bool:
+        row = (
+            self.session.query(DoorORM.id)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.project_id == project_id,
+                DoorORM.unit_label == unit_label,
+                DoorORM.door_type_id == door_type_id,
+            )
+            .first()
+        )
+        return row is not None

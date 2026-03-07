@@ -37,8 +37,19 @@ class SyncChangeDTO(BaseModel):
     payload: dict
 
 
+class ColdSnapshotProjectDTO(BaseModel):
+    id: UUID
+    name: str
+    address: str | None
+    status: str
+    waze_url: str | None
+
+
 class ColdSnapshotDTO(BaseModel):
+    projects: list[ColdSnapshotProjectDTO]
     doors: list[dict]
+    door_types: list[dict]
+    reasons: list[dict]
     addon_types: list[dict]
     addon_plans: list[dict]
     addon_facts: list[dict]

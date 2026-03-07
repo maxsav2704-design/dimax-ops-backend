@@ -16,4 +16,8 @@ def get_dashboard(
     uow: SqlAlchemyUnitOfWork = Depends(get_uow),
 ) -> DashboardResponseDTO:
     with uow:
-        return DashboardService.get_dashboard(uow, company_id=user.company_id)
+        return DashboardService.get_dashboard(
+            uow,
+            company_id=user.company_id,
+            actor_user_id=user.id,
+        )

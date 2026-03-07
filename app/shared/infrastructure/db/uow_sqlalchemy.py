@@ -5,10 +5,16 @@ from sqlalchemy.orm import Session
 from app.shared.application.uow import AbstractUnitOfWork
 from app.shared.infrastructure.db.session import SessionLocal
 from app.modules.audit.infrastructure.repositories import AuditRepository
-from app.modules.companies.infrastructure.repositories import CompanyRepository
+from app.modules.companies.infrastructure.repositories import (
+    CompanyPlanRepository,
+    CompanyRepository,
+)
 from app.modules.doors.infrastructure.repositories import DoorRepository
 from app.modules.issues.infrastructure.repositories import IssueRepository
-from app.modules.projects.infrastructure.repositories import ProjectRepository
+from app.modules.projects.infrastructure.repositories import (
+    ProjectImportRunRepository,
+    ProjectRepository,
+)
 from app.modules.identity.infrastructure.repositories import UserRepository
 from app.modules.identity.infrastructure.refresh_tokens_repo import (
     RefreshTokenRepository,
@@ -33,6 +39,10 @@ from app.modules.sync.infrastructure.repositories import (
     SyncChangeLogRepository,
     SyncEventRepository,
 )
+from app.modules.door_types.infrastructure.repositories import DoorTypeRepository
+from app.modules.reasons.infrastructure.repositories import ReasonRepository
+from app.modules.settings.infrastructure.repositories import CompanySettingsRepository
+from app.modules.settings.infrastructure.models import CommunicationTemplateORM  # noqa: F401
 
 
 class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
@@ -46,9 +56,11 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
         self.users = UserRepository(self.session)
         self.refresh_tokens = RefreshTokenRepository(self.session)
         self.companies = CompanyRepository(self.session)
+        self.company_plans = CompanyPlanRepository(self.session)
         self.doors = DoorRepository(self.session)
         self.issues = IssueRepository(self.session)
         self.projects = ProjectRepository(self.session)
+        self.project_import_runs = ProjectImportRunRepository(self.session)
         self.audit = AuditRepository(self.session)
         self.journals = JournalRepository(self.session)
         self.calendar = CalendarRepository(self.session)
@@ -64,6 +76,9 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
         self.sync_change_log = SyncChangeLogRepository(self.session)
         self.sync_state = InstallerSyncStateRepository(self.session)
         self.sync_change_gc = SyncChangeLogGCRepository(self.session)
+        self.door_types = DoorTypeRepository(self.session)
+        self.reasons = ReasonRepository(self.session)
+        self.settings = CompanySettingsRepository(self.session)
 
         return self
 

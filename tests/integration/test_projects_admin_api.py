@@ -155,6 +155,149 @@ def test_projects_import_doors_and_assign_installer(
     assert door["installer_id"] == str(installer.id)
 
 
+def test_project_doors_layout_groups_by_floor_location_marking(
+    client_admin_real_uow, make_door_type
+):
+    project_id = _create_project(
+        client_admin_real_uow,
+        "Project Layout",
+        "Layout address",
+    )
+    door_type = make_door_type(name="Layout Door Type")
+
+    import_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import",
+        json={
+            "rows": [
+                {
+                    "door_type_id": str(door_type.id),
+                    "unit_label": "A-3-12-D12",
+                    "our_price": "100.00",
+                    "order_number": "AZ-LAYOUT-1",
+                    "house_number": "A",
+                    "floor_label": "3",
+                    "apartment_number": "12",
+                    "location_code": "dira",
+                    "door_marking": "D12",
+                },
+                {
+                    "door_type_id": str(door_type.id),
+                    "unit_label": "A-3-13-M13",
+                    "our_price": "100.00",
+                    "order_number": "AZ-LAYOUT-1",
+                    "house_number": "A",
+                    "floor_label": "3",
+                    "apartment_number": "13",
+                    "location_code": "mamad",
+                    "door_marking": "M13",
+                },
+                {
+                    "door_type_id": str(door_type.id),
+                    "unit_label": "A-3-14-M13",
+                    "our_price": "100.00",
+                    "order_number": "AZ-LAYOUT-1",
+                    "house_number": "A",
+                    "floor_label": "3",
+                    "apartment_number": "14",
+                    "location_code": "mamad",
+                    "door_marking": "M13",
+                },
+            ]
+        },
+    )
+    assert import_resp.status_code == 200, import_resp.text
+    assert import_resp.json()["imported"] == 3
+
+    layout_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/projects/{project_id}/doors/layout"
+    )
+    assert layout_resp.status_code == 200, layout_resp.text
+    body = layout_resp.json()
+    assert body["project_id"] == project_id
+    assert body["total_doors"] == 3
+    assert len(body["buckets"]) == 2
+
+    mamad_bucket = next(
+        b
+        for b in body["buckets"]
+        if b["location_code"] == "mamad" and b["door_marking"] == "M13"
+    )
+    assert mamad_bucket["total"] == 2
+    assert mamad_bucket["order_number"] == "AZ-LAYOUT-1"
+    assert mamad_bucket["status_breakdown"][DoorStatus.NOT_INSTALLED.value] == 2
+    assert [d["apartment_number"] for d in mamad_bucket["doors"]] == ["13", "14"]
+
+
+def test_project_details_and_layout_can_filter_by_order_number(
+    client_admin_real_uow, make_door_type
+):
+    project_id = _create_project(
+        client_admin_real_uow,
+        "Project Order Filter",
+        "Order filter address",
+    )
+    door_type = make_door_type(name="Order Filter Door Type")
+
+    import_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import",
+        json={
+            "rows": [
+                {
+                    "door_type_id": str(door_type.id),
+                    "unit_label": "A-1-101",
+                    "our_price": "100.00",
+                    "order_number": "AZ-100",
+                    "house_number": "A",
+                    "floor_label": "1",
+                    "apartment_number": "101",
+                    "door_marking": "D-101",
+                },
+                {
+                    "door_type_id": str(door_type.id),
+                    "unit_label": "A-1-102",
+                    "our_price": "100.00",
+                    "order_number": "AZ-100",
+                    "house_number": "A",
+                    "floor_label": "1",
+                    "apartment_number": "102",
+                    "door_marking": "D-102",
+                },
+                {
+                    "door_type_id": str(door_type.id),
+                    "unit_label": "A-2-201",
+                    "our_price": "100.00",
+                    "order_number": "AZ-200",
+                    "house_number": "A",
+                    "floor_label": "2",
+                    "apartment_number": "201",
+                    "door_marking": "D-201",
+                },
+            ]
+        },
+    )
+    assert import_resp.status_code == 200, import_resp.text
+    assert import_resp.json()["imported"] == 3
+
+    details_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/projects/{project_id}?order_number=az-100"
+    )
+    assert details_resp.status_code == 200, details_resp.text
+    details = details_resp.json()
+    assert len(details["doors"]) == 2
+    assert all(d["order_number"] == "AZ-100" for d in details["doors"])
+
+    layout_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/projects/{project_id}/doors/layout?order_number=AZ-200"
+    )
+    assert layout_resp.status_code == 200, layout_resp.text
+    layout = layout_resp.json()
+    assert layout["total_doors"] == 1
+    assert len(layout["buckets"]) == 1
+    bucket = layout["buckets"][0]
+    assert bucket["order_number"] == "AZ-200"
+    assert bucket["total"] == 1
+
+
 def test_projects_validation_returns_422(client_admin_real_uow):
     create_invalid_resp = client_admin_real_uow.post(
         "/api/v1/admin/projects",
@@ -184,6 +327,12 @@ def test_projects_forbidden_for_installer_role(client_installer):
     resp = client_installer.get("/api/v1/admin/projects")
     assert resp.status_code == 403, resp.text
     assert resp.json()["error"]["code"] == "FORBIDDEN"
+
+    layout_resp = client_installer.get(
+        f"/api/v1/admin/projects/{uuid.uuid4()}/doors/layout"
+    )
+    assert layout_resp.status_code == 403, layout_resp.text
+    assert layout_resp.json()["error"]["code"] == "FORBIDDEN"
 
 
 def test_projects_multi_tenant_isolation(

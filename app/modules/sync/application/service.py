@@ -12,6 +12,7 @@ from app.modules.doors.application.commands import (
 )
 from app.modules.doors.application.use_cases import DoorUseCases
 from app.modules.sync.domain.enums import SyncEventType
+from app.shared.application.navigation import build_waze_url
 from app.shared.domain.errors import Forbidden, NotFound, ValidationError
 
 
@@ -325,6 +326,27 @@ class InstallerSyncService:
             installer_id=installer_id,
         )
         project_ids = sorted({d["project_id"] for d in doors})
+        projects = [
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "address": getattr(p, "address", None),
+                "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+                "waze_url": build_waze_url(address=getattr(p, "address", None)),
+            }
+            for p in uow.projects.list_by_ids(
+                company_id=company_id,
+                ids=[uuid.UUID(pid) for pid in project_ids],
+            )
+        ]
+        door_types = [
+            {"id": str(t.id), "code": t.code, "name": t.name}
+            for t in uow.door_types.list_active(company_id=company_id)
+        ]
+        reasons = [
+            {"id": str(r.id), "code": r.code, "name": r.name}
+            for r in uow.reasons.list_active(company_id=company_id)
+        ]
 
         addon_types = [
             {"id": str(t.id), "name": t.name, "unit": t.unit}
@@ -371,7 +393,10 @@ class InstallerSyncService:
                 f["updated_at"] = f["updated_at"].isoformat()
 
         return {
+            "projects": projects,
             "doors": doors,
+            "door_types": door_types,
+            "reasons": reasons,
             "addon_types": addon_types,
             "addon_plans": plans,
             "addon_facts": addon_facts,
