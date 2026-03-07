@@ -20,6 +20,13 @@ Upstream jobs included in `quality-gate`:
 
 This job must pass for every PR before merge.
 
+Normal workflow rule:
+
+- open a PR
+- wait for `Backend Tests / quality-gate`
+- merge only after review
+- do not rely on admin bypass except for emergency recovery/setup
+
 ## GitHub Settings (Repository Admin)
 
 1. Open `Settings -> Branches -> Add branch protection rule`.
@@ -105,3 +112,7 @@ This shortcut uses the isolated workspace test runtime (`docker-compose.workspac
 `repo-boundary` validates that git root is exactly the backend folder.
 
 `backup-restore-smoke` validates PostgreSQL dump/restore path after migrations.
+
+Merge checklist reference:
+
+- `../PR_MERGE_CHECKLIST.md`
