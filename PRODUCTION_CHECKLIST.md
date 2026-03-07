@@ -7,6 +7,16 @@
 - `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` are rotated production credentials.
 - `SEED_ADMIN_PASSWORD` is changed from default.
 - `PUBLIC_BASE_URL` is production HTTPS URL.
+- `CORS_ALLOW_ORIGINS` does not contain localhost values.
+- `MINIO_SECURE=true` in production.
+- If `EMAIL_ENABLED=true`, SMTP points to a real provider and `SMTP_FROM` is not `.local`.
+- If `WHATSAPP_ENABLED=true`, Twilio credentials are present or `WHATSAPP_FALLBACK_TO_EMAIL=true`.
+
+Validate before deploy:
+
+```bash
+python scripts/validate_production_env.py --env-file .env
+```
 
 ## Safety Gates
 
@@ -28,3 +38,18 @@ docker compose down -v
 Expected result:
 
 - `[backup-restore] OK: restored tables=<N>`
+
+## Deploy Smoke
+
+After deploy:
+
+```bash
+curl -fsS https://<api-host>/health
+```
+
+Manual checks:
+
+- admin login
+- installer login
+- one file/journal public route
+- one report endpoint

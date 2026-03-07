@@ -63,6 +63,12 @@ Workspace shortcut:
 - `PRODUCTION_CHECKLIST.md`
 - `ARCHITECTURE.md`
 
+Production env validation:
+
+```bash
+python scripts/validate_production_env.py --env-file .env
+```
+
 ## Repository role
 
 This repository is intentionally isolated from frontend/mobile/workspace repositories.
