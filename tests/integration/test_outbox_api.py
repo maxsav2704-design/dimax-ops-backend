@@ -291,6 +291,103 @@ def test_outbox_admin_retry_failed_message_and_writes_audit(
     assert audit_row.after["status"] == "PENDING"
 
 
+def test_outbox_admin_bulk_retry_and_retry_audits(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    admin_user,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Outbox Bulk Retry Project {uuid.uuid4().hex[:8]}",
+    )
+    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    ready_resp = client_admin_real_uow.post(f"/api/v1/admin/journals/{journal_id}/mark-ready")
+    assert ready_resp.status_code == 200, ready_resp.text
+    send_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/send",
+        json={
+            "email_to": "ops1@example.com",
+            "whatsapp_to": "+15551112222",
+            "send_email": True,
+            "send_whatsapp": True,
+        },
+    )
+    assert send_resp.status_code == 200, send_resp.text
+
+    journal_uuid = uuid.UUID(journal_id)
+    messages = (
+        db_session.query(OutboxMessageORM)
+        .filter(
+            OutboxMessageORM.company_id == company_id,
+            OutboxMessageORM.correlation_id == journal_uuid,
+        )
+        .order_by(OutboxMessageORM.created_at.asc())
+        .all()
+    )
+    assert len(messages) >= 2
+
+    failed_msg, sent_msg = messages[0], messages[1]
+    failed_msg.status = OutboxStatus.FAILED
+    failed_msg.delivery_status = DeliveryStatus.FAILED
+    failed_msg.attempts = failed_msg.max_attempts
+    failed_msg.last_error = "provider timeout"
+    sent_msg.status = OutboxStatus.SENT
+    db_session.add_all([failed_msg, sent_msg])
+    db_session.commit()
+
+    retry_resp = client_admin_real_uow.post(
+        "/api/v1/admin/outbox/retry-failed",
+        json={
+            "outbox_ids": [str(failed_msg.id), str(sent_msg.id)],
+            "reason": "operations_center_bulk_retry",
+        },
+    )
+    assert retry_resp.status_code == 200, retry_resp.text
+    body = retry_resp.json()
+    assert body["total_messages"] == 2
+    assert body["successful_messages"] == 1
+    assert body["failed_messages"] == 0
+    assert body["skipped_messages"] == 1
+    by_id = {item["outbox_id"]: item for item in body["items"]}
+    assert by_id[str(failed_msg.id)]["status"] == "retried"
+    assert by_id[str(failed_msg.id)]["item"]["status"] == "PENDING"
+    assert by_id[str(sent_msg.id)]["status"] == "skipped"
+
+    db_session.refresh(failed_msg)
+    assert failed_msg.status == OutboxStatus.PENDING
+    assert failed_msg.delivery_status == DeliveryStatus.PENDING
+    assert failed_msg.last_error is None
+
+    audits_resp = client_admin_real_uow.get(
+        "/api/v1/admin/outbox/retry-audits",
+        params={"limit": 10},
+    )
+    assert audits_resp.status_code == 200, audits_resp.text
+    audits = audits_resp.json()["items"]
+    assert any(item["outbox_id"] == str(failed_msg.id) for item in audits)
+    matching = next(item for item in audits if item["outbox_id"] == str(failed_msg.id))
+    assert matching["reason"] == "operations_center_bulk_retry"
+    assert matching["before_status"] == "FAILED"
+    assert matching["after_status"] == "PENDING"
+
+    audit_row = (
+        db_session.query(AuditLogORM)
+        .filter(
+            AuditLogORM.company_id == company_id,
+            AuditLogORM.actor_user_id == admin_user.id,
+            AuditLogORM.entity_type == "outbox_message",
+            AuditLogORM.entity_id == failed_msg.id,
+            AuditLogORM.action == "OUTBOX_RETRY",
+        )
+        .order_by(AuditLogORM.created_at.desc())
+        .first()
+    )
+    assert audit_row is not None
+    assert audit_row.reason == "operations_center_bulk_retry"
+
+
 def test_outbox_admin_retry_sent_message_returns_422(
     client_admin_real_uow,
     db_session,
@@ -371,6 +468,10 @@ def test_outbox_admin_endpoints_forbidden_for_installer(client_installer):
     assert webhook_list_resp.status_code == 403, webhook_list_resp.text
     assert webhook_list_resp.json()["error"]["code"] == "FORBIDDEN"
 
+    retry_audits_resp = client_installer.get("/api/v1/admin/outbox/retry-audits")
+    assert retry_audits_resp.status_code == 403, retry_audits_resp.text
+    assert retry_audits_resp.json()["error"]["code"] == "FORBIDDEN"
+
     get_resp = client_installer.get(f"/api/v1/admin/outbox/{uuid.uuid4()}")
     assert get_resp.status_code == 403, get_resp.text
     assert get_resp.json()["error"]["code"] == "FORBIDDEN"
@@ -381,3 +482,10 @@ def test_outbox_admin_endpoints_forbidden_for_installer(client_installer):
     )
     assert retry_resp.status_code == 403, retry_resp.text
     assert retry_resp.json()["error"]["code"] == "FORBIDDEN"
+
+    bulk_retry_resp = client_installer.post(
+        "/api/v1/admin/outbox/retry-failed",
+        json={"outbox_ids": [str(uuid.uuid4())], "reason": "forbidden"},
+    )
+    assert bulk_retry_resp.status_code == 403, bulk_retry_resp.text
+    assert bulk_retry_resp.json()["error"]["code"] == "FORBIDDEN"

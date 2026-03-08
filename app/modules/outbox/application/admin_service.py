@@ -7,13 +7,18 @@ from enum import Enum
 from sqlalchemy import func
 
 from app.modules.outbox.api.admin_schemas import (
+    OutboxBulkRetryItemDTO,
+    OutboxBulkRetryResponse,
     OutboxItemDTO,
     OutboxListResponse,
+    OutboxRetryAuditItemDTO,
+    OutboxRetryAuditListResponse,
     OutboxSummaryResponse,
     OutboxWebhookSignalItemDTO,
     OutboxWebhookSignalListResponse,
     OutboxWebhookSignalSummaryResponse,
 )
+from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.outbox.domain.enums import (
     DeliveryStatus,
     OutboxChannel,
@@ -112,6 +117,30 @@ def _to_webhook_dto(row: WebhookEventORM) -> OutboxWebhookSignalItemDTO:
         status=str(payload.get("status")) if payload.get("status") is not None else None,
         error=str(payload.get("error")) if payload.get("error") is not None else None,
         outbox_id=str(payload.get("outbox_id")) if payload.get("outbox_id") is not None else None,
+        created_at=row.created_at,
+    )
+
+
+def _to_retry_audit_dto(row: AuditLogORM) -> OutboxRetryAuditItemDTO:
+    before = row.before if isinstance(row.before, dict) else {}
+    after = row.after if isinstance(row.after, dict) else {}
+    return OutboxRetryAuditItemDTO(
+        id=row.id,
+        outbox_id=row.entity_id,
+        actor_user_id=row.actor_user_id,
+        reason=row.reason,
+        before_status=str(before.get("status")) if before.get("status") is not None else None,
+        after_status=str(after.get("status")) if after.get("status") is not None else None,
+        before_delivery_status=(
+            str(before.get("delivery_status"))
+            if before.get("delivery_status") is not None
+            else None
+        ),
+        after_delivery_status=(
+            str(after.get("delivery_status"))
+            if after.get("delivery_status") is not None
+            else None
+        ),
         created_at=row.created_at,
     )
 
@@ -252,6 +281,26 @@ class OutboxAdminService:
         return OutboxWebhookSignalListResponse(items=[_to_webhook_dto(row) for row in rows])
 
     @staticmethod
+    def list_retry_audits(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        limit: int,
+    ) -> OutboxRetryAuditListResponse:
+        rows = (
+            uow.session.query(AuditLogORM)
+            .filter(
+                AuditLogORM.company_id == company_id,
+                AuditLogORM.entity_type == "outbox_message",
+                AuditLogORM.action == "OUTBOX_RETRY",
+            )
+            .order_by(AuditLogORM.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return OutboxRetryAuditListResponse(items=[_to_retry_audit_dto(row) for row in rows])
+
+    @staticmethod
     def get_outbox(
         uow,
         *,
@@ -330,3 +379,78 @@ class OutboxAdminService:
             "last_error": row.last_error,
         }
         return _to_dto(row), before, after
+
+    @staticmethod
+    def retry_failed_outbox_bulk(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        outbox_ids: list[uuid.UUID],
+    ) -> tuple[OutboxBulkRetryResponse, list[tuple[uuid.UUID, dict, dict]]]:
+        unique_ids = []
+        seen: set[uuid.UUID] = set()
+        for outbox_id in outbox_ids:
+            if outbox_id in seen:
+                continue
+            seen.add(outbox_id)
+            unique_ids.append(outbox_id)
+
+        audit_entries: list[tuple[uuid.UUID, dict, dict]] = []
+        items: list[OutboxBulkRetryItemDTO] = []
+        successful = 0
+        failed = 0
+        skipped = 0
+
+        for outbox_id in unique_ids:
+            try:
+                item, before, after = OutboxAdminService.retry_outbox(
+                    uow,
+                    company_id=company_id,
+                    outbox_id=outbox_id,
+                )
+                items.append(
+                    OutboxBulkRetryItemDTO(
+                        outbox_id=outbox_id,
+                        status="retried",
+                        item=item,
+                    )
+                )
+                audit_entries.append((outbox_id, before, after))
+                successful += 1
+            except NotFound as exc:
+                items.append(
+                    OutboxBulkRetryItemDTO(
+                        outbox_id=outbox_id,
+                        status="failed",
+                        error=str(exc),
+                    )
+                )
+                failed += 1
+            except ValidationError as exc:
+                status = "skipped"
+                details = exc.details if isinstance(exc.details, dict) else {}
+                current_status = str(details.get("status") or "").upper()
+                if current_status and current_status != "SENT":
+                    status = "failed"
+                items.append(
+                    OutboxBulkRetryItemDTO(
+                        outbox_id=outbox_id,
+                        status=status,
+                        error=str(exc),
+                    )
+                )
+                if status == "skipped":
+                    skipped += 1
+                else:
+                    failed += 1
+
+        return (
+            OutboxBulkRetryResponse(
+                items=items,
+                total_messages=len(unique_ids),
+                successful_messages=successful,
+                failed_messages=failed,
+                skipped_messages=skipped,
+            ),
+            audit_entries,
+        )

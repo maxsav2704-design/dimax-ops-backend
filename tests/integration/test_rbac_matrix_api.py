@@ -145,6 +145,13 @@ def test_rbac_matrix_admin_endpoints(client_raw, rbac_tokens):
         ("GET", "/api/v1/admin/projects/import-mapping-profiles", None, 200),
         ("GET", "/api/v1/admin/outbox", None, 200),
         ("GET", "/api/v1/admin/outbox/summary", None, 200),
+        ("GET", "/api/v1/admin/outbox/retry-audits", None, 200),
+        (
+            "POST",
+            "/api/v1/admin/outbox/retry-failed",
+            {"outbox_ids": [str(uuid.uuid4())], "reason": "rbac"},
+            200,
+        ),
         ("GET", "/api/v1/admin/addons/types", None, 200),
         ("GET", f"/api/v1/admin/calendar/events?starts_at={starts}&ends_at={ends}", None, 200),
         ("GET", "/api/v1/admin/sync/health/summary", None, 200),

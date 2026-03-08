@@ -668,6 +668,11 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     ) == "#/components/schemas/OutboxWebhookSignalListResponse"
     assert _response_ref(
         spec,
+        path="/api/v1/admin/outbox/retry-audits",
+        method="get",
+    ) == "#/components/schemas/OutboxRetryAuditListResponse"
+    assert _response_ref(
+        spec,
         path="/api/v1/admin/outbox/{outbox_id}",
         method="get",
     ) == "#/components/schemas/OutboxItemDTO"
@@ -676,6 +681,11 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         path="/api/v1/admin/outbox/{outbox_id}/retry",
         method="post",
     ) == "#/components/schemas/OutboxRetryResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/outbox/retry-failed",
+        method="post",
+    ) == "#/components/schemas/OutboxBulkRetryResponse"
     outbox_webhook_schema = _response_schema(
         spec,
         path="/api/v1/webhooks/outbox/status",

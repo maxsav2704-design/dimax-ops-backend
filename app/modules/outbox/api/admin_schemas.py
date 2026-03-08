@@ -75,3 +75,39 @@ class OutboxRetryBody(BaseModel):
 
 class OutboxRetryResponse(BaseModel):
     item: OutboxItemDTO
+
+
+class OutboxBulkRetryBody(BaseModel):
+    outbox_ids: list[UUID]
+    reason: str | None = None
+
+
+class OutboxBulkRetryItemDTO(BaseModel):
+    outbox_id: UUID
+    status: str
+    error: str | None = None
+    item: OutboxItemDTO | None = None
+
+
+class OutboxBulkRetryResponse(BaseModel):
+    items: list[OutboxBulkRetryItemDTO]
+    total_messages: int
+    successful_messages: int
+    failed_messages: int
+    skipped_messages: int
+
+
+class OutboxRetryAuditItemDTO(BaseModel):
+    id: UUID
+    outbox_id: UUID
+    actor_user_id: UUID
+    reason: str | None = None
+    before_status: str | None = None
+    after_status: str | None = None
+    before_delivery_status: str | None = None
+    after_delivery_status: str | None = None
+    created_at: datetime
+
+
+class OutboxRetryAuditListResponse(BaseModel):
+    items: list[OutboxRetryAuditItemDTO]

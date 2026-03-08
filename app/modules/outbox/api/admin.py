@@ -8,9 +8,12 @@ from app.api.v1.deps import CurrentUser, get_uow, require_admin
 from app.modules.audit.application.service import AuditService
 from app.modules.outbox.application.admin_service import OutboxAdminService
 from app.modules.outbox.api.admin_schemas import (
+    OutboxBulkRetryBody,
+    OutboxBulkRetryResponse,
     OutboxItemDTO,
     OutboxListResponse,
     OutboxRetryBody,
+    OutboxRetryAuditListResponse,
     OutboxRetryResponse,
     OutboxSummaryResponse,
     OutboxWebhookSignalListResponse,
@@ -85,6 +88,20 @@ def list_outbox_webhook_signals(
         )
 
 
+@router.get("/retry-audits", response_model=OutboxRetryAuditListResponse)
+def list_outbox_retry_audits(
+    limit: int = Query(default=20, ge=1, le=100),
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        return OutboxAdminService.list_retry_audits(
+            uow,
+            company_id=user.company_id,
+            limit=limit,
+        )
+
+
 @router.get("/{outbox_id}", response_model=OutboxItemDTO)
 def get_outbox(
     outbox_id: UUID,
@@ -124,3 +141,30 @@ def retry_outbox(
             after=after,
         )
         return OutboxRetryResponse(item=item)
+
+
+@router.post("/retry-failed", response_model=OutboxBulkRetryResponse)
+def retry_failed_outbox(
+    body: OutboxBulkRetryBody,
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        response, audit_entries = OutboxAdminService.retry_failed_outbox_bulk(
+            uow,
+            company_id=user.company_id,
+            outbox_ids=body.outbox_ids,
+        )
+        for outbox_id, before, after in audit_entries:
+            AuditService.add(
+                uow,
+                company_id=user.company_id,
+                actor_user_id=user.id,
+                entity_type="outbox_message",
+                entity_id=outbox_id,
+                action="OUTBOX_RETRY",
+                reason=body.reason,
+                before=before,
+                after=after,
+            )
+        return response
