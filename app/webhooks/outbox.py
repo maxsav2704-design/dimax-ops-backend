@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.api.v1.deps import get_uow
 from app.core.config import settings
+from app.shared.infrastructure.observability import get_logger, log_event
 from app.shared.domain.errors import Forbidden
 from app.webhooks.delivery_service import OutboxDeliveryWebhookService
 
@@ -27,12 +28,23 @@ class OutboxDeliveryStatusWebhookBody(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+logger = get_logger(__name__)
+
+
 def _validate_outbox_webhook_token(request: Request) -> None:
     token = (settings.OUTBOX_WEBHOOK_TOKEN or "").strip()
     if not token:
         return
     provided = (request.headers.get("X-Webhook-Token") or "").strip()
     if provided != token:
+        log_event(
+            logger,
+            "webhook.outbox.forbidden",
+            level="warning",
+            reason="invalid_token",
+            path=str(request.url.path),
+            client_ip=request.client.host if request.client else None,
+        )
         raise Forbidden("Invalid outbox webhook token")
 
 
@@ -70,7 +82,7 @@ async def delivery_status_webhook(
     user_agent = request.headers.get("user-agent")
 
     with uow:
-        OutboxDeliveryWebhookService.process(
+        result = OutboxDeliveryWebhookService.process(
             uow,
             provider=body.provider.strip().lower(),
             channel=body.channel.strip().upper() if body.channel else None,
@@ -85,4 +97,19 @@ async def delivery_status_webhook(
             ip=ip,
             user_agent=user_agent,
         )
+    log_event(
+        logger,
+        "webhook.outbox.processed",
+        provider=body.provider.strip().lower(),
+        channel=body.channel.strip().upper() if body.channel else None,
+        event_type=body.event_type.strip().lower() or "delivery_status",
+        status=body.status,
+        external_event_id=external_event_id,
+        provider_message_id=body.provider_message_id,
+        outbox_id=result.get("outbox_id"),
+        updated=result.get("updated"),
+        duplicate=result.get("duplicate"),
+        reason=result.get("reason"),
+        client_ip=ip,
+    )
     return "ok"

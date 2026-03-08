@@ -53,6 +53,10 @@ Journal / outbox:
 - `outbox.batch.completed`
 - `outbox.message.sent`
 - `outbox.message.failed`
+- `webhook.outbox.processed`
+- `webhook.outbox.forbidden`
+- `webhook.twilio.processed`
+- `webhook.twilio.forbidden`
 
 ## Operational use
 

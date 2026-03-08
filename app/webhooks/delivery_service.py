@@ -94,6 +94,7 @@ class OutboxDeliveryWebhookService:
                 "updated": False,
                 "duplicate": True,
                 "outbox_id": str(message.id) if message else None,
+                "reason": "duplicate",
             }
 
         uow.session.add(
@@ -109,7 +110,12 @@ class OutboxDeliveryWebhookService:
         )
 
         if message is None:
-            return {"updated": False, "duplicate": False, "outbox_id": None}
+            return {
+                "updated": False,
+                "duplicate": False,
+                "outbox_id": None,
+                "reason": "message_not_found",
+            }
 
         if channel:
             message_channel = str(
@@ -120,6 +126,7 @@ class OutboxDeliveryWebhookService:
                     "updated": False,
                     "duplicate": False,
                     "outbox_id": str(message.id),
+                    "reason": "channel_mismatch",
                 }
 
         before = _serialize_outbox(message)
@@ -184,7 +191,12 @@ class OutboxDeliveryWebhookService:
             after=after,
         )
 
-        return {"updated": True, "duplicate": False, "outbox_id": str(message.id)}
+        return {
+            "updated": True,
+            "duplicate": False,
+            "outbox_id": str(message.id),
+            "reason": "updated",
+        }
 
     @staticmethod
     def _resolve_message(

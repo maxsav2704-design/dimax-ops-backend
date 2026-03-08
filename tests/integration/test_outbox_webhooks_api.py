@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -214,7 +215,9 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
     db_session,
     company_id,
     monkeypatch,
+    caplog,
 ):
+    caplog.set_level(logging.INFO)
     msg = _seed_outbox_context(
         db_session,
         company_id=company_id,
@@ -235,6 +238,8 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
     )
     assert resp.status_code == 200, resp.text
     assert resp.text == "ok"
+    assert any('"event": "webhook.outbox.processed"' in row.message for row in caplog.records)
+    assert any('"reason": "updated"' in row.message for row in caplog.records)
 
     db_session.refresh(msg)
     assert msg.delivery_status == DeliveryStatus.DELIVERED
@@ -266,6 +271,7 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
         },
     )
     assert duplicate.status_code == 200, duplicate.text
+    assert any('"reason": "duplicate"' in row.message for row in caplog.records)
     duplicate_count = (
         db_session.query(WebhookEventORM)
         .filter(
@@ -289,6 +295,7 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
         },
     )
     assert forbidden.status_code == 403, forbidden.text
+    assert any('"event": "webhook.outbox.forbidden"' in row.message for row in caplog.records)
 
     allowed = client_raw.post(
         "/api/v1/webhooks/outbox/status",
@@ -302,3 +309,30 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
         },
     )
     assert allowed.status_code == 200, allowed.text
+
+
+def test_twilio_status_webhook_emits_operational_log(
+    client_raw,
+    db_session,
+    company_id,
+    caplog,
+):
+    caplog.set_level(logging.INFO)
+    msg = _seed_outbox_context(
+        db_session,
+        company_id=company_id,
+        channel=OutboxChannel.WHATSAPP,
+        provider_message_id="SMTWILIO2",
+    )
+
+    resp = client_raw.post(
+        f"/api/v1/webhooks/twilio/status?outbox_id={msg.id}",
+        data={
+            "MessageSid": "SMTWILIO2",
+            "MessageStatus": "delivered",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.text == "ok"
+    assert any('"event": "webhook.twilio.processed"' in row.message for row in caplog.records)
+    assert any('"reason": "updated"' in row.message for row in caplog.records)
