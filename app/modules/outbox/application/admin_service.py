@@ -10,6 +10,9 @@ from app.modules.outbox.api.admin_schemas import (
     OutboxItemDTO,
     OutboxListResponse,
     OutboxSummaryResponse,
+    OutboxWebhookSignalItemDTO,
+    OutboxWebhookSignalListResponse,
+    OutboxWebhookSignalSummaryResponse,
 )
 from app.modules.outbox.domain.enums import (
     DeliveryStatus,
@@ -17,7 +20,20 @@ from app.modules.outbox.domain.enums import (
     OutboxStatus,
 )
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
+from app.webhooks.models import WebhookEventORM
 from app.shared.domain.errors import NotFound, ValidationError
+
+_FAILED_PROVIDER_STATUSES = {
+    "failed",
+    "undelivered",
+    "bounced",
+    "bounce",
+    "dropped",
+    "blocked",
+    "rejected",
+    "complained",
+    "error",
+}
 
 
 def _enum_value(value) -> str:
@@ -82,6 +98,21 @@ def _to_dto(row: OutboxMessageORM) -> OutboxItemDTO:
         sent_at=row.sent_at,
         delivery_status=_enum_value(row.delivery_status),
         delivered_at=row.delivered_at,
+    )
+
+
+def _to_webhook_dto(row: WebhookEventORM) -> OutboxWebhookSignalItemDTO:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    return OutboxWebhookSignalItemDTO(
+        id=row.id,
+        provider=row.provider,
+        event_type=row.event_type,
+        external_id=row.external_id,
+        result=str(payload.get("_delivery_result") or "unknown"),
+        status=str(payload.get("status")) if payload.get("status") is not None else None,
+        error=str(payload.get("error")) if payload.get("error") is not None else None,
+        outbox_id=str(payload.get("outbox_id")) if payload.get("outbox_id") is not None else None,
+        created_at=row.created_at,
     )
 
 
@@ -163,6 +194,62 @@ class OutboxAdminService:
             pending_overdue_15m=pending_overdue_15m,
             failed_total=failed_total,
         )
+
+    @staticmethod
+    def webhook_summary(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        hours: int = 24,
+    ) -> OutboxWebhookSignalSummaryResponse:
+        hours = max(1, min(int(hours), 168))
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        base_q = uow.session.query(WebhookEventORM).filter(
+            WebhookEventORM.company_id == company_id,
+            WebhookEventORM.created_at >= since,
+        )
+        rows = base_q.all()
+
+        def _count_result(target: str) -> int:
+            return sum(
+                1
+                for row in rows
+                if isinstance(row.payload, dict)
+                and str(row.payload.get("_delivery_result") or "") == target
+            )
+
+        provider_failed_total = sum(
+            1
+            for row in rows
+            if isinstance(row.payload, dict)
+            and str(row.payload.get("status") or "").strip().lower() in _FAILED_PROVIDER_STATUSES
+        )
+
+        return OutboxWebhookSignalSummaryResponse(
+            window_hours=hours,
+            total_received=len(rows),
+            updated_total=_count_result("updated"),
+            duplicate_total=_count_result("duplicate"),
+            unmatched_total=_count_result("message_not_found")
+            + _count_result("channel_mismatch"),
+            provider_failed_total=provider_failed_total,
+        )
+
+    @staticmethod
+    def list_webhook_signals(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        limit: int,
+    ) -> OutboxWebhookSignalListResponse:
+        rows = (
+            uow.session.query(WebhookEventORM)
+            .filter(WebhookEventORM.company_id == company_id)
+            .order_by(WebhookEventORM.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return OutboxWebhookSignalListResponse(items=[_to_webhook_dto(row) for row in rows])
 
     @staticmethod
     def get_outbox(

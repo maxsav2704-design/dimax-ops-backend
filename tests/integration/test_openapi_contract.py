@@ -658,6 +658,16 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     ) == "#/components/schemas/OutboxSummaryResponse"
     assert _response_ref(
         spec,
+        path="/api/v1/admin/outbox/webhook-signals/summary",
+        method="get",
+    ) == "#/components/schemas/OutboxWebhookSignalSummaryResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/outbox/webhook-signals",
+        method="get",
+    ) == "#/components/schemas/OutboxWebhookSignalListResponse"
+    assert _response_ref(
+        spec,
         path="/api/v1/admin/outbox/{outbox_id}",
         method="get",
     ) == "#/components/schemas/OutboxItemDTO"

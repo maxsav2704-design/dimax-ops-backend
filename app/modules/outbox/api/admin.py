@@ -13,6 +13,8 @@ from app.modules.outbox.api.admin_schemas import (
     OutboxRetryBody,
     OutboxRetryResponse,
     OutboxSummaryResponse,
+    OutboxWebhookSignalListResponse,
+    OutboxWebhookSignalSummaryResponse,
 )
 
 
@@ -52,6 +54,34 @@ def outbox_summary(
             uow,
             company_id=user.company_id,
             journal_id=journal_id,
+        )
+
+
+@router.get("/webhook-signals/summary", response_model=OutboxWebhookSignalSummaryResponse)
+def outbox_webhook_summary(
+    hours: int = Query(default=24, ge=1, le=168),
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        return OutboxAdminService.webhook_summary(
+            uow,
+            company_id=user.company_id,
+            hours=hours,
+        )
+
+
+@router.get("/webhook-signals", response_model=OutboxWebhookSignalListResponse)
+def list_outbox_webhook_signals(
+    limit: int = Query(default=20, ge=1, le=100),
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        return OutboxAdminService.list_webhook_signals(
+            uow,
+            company_id=user.company_id,
+            limit=limit,
         )
 
 

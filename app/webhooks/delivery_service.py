@@ -60,6 +60,33 @@ def _serialize_outbox(msg: OutboxMessageORM) -> dict[str, Any]:
 
 class OutboxDeliveryWebhookService:
     @staticmethod
+    def _record_webhook_event(
+        uow,
+        *,
+        company_id: uuid.UUID | None,
+        provider: str,
+        event_type: str,
+        external_event_id: str | None,
+        payload: dict[str, Any],
+        ip: str | None,
+        user_agent: str | None,
+        outcome: str,
+    ) -> None:
+        event_payload = dict(payload or {})
+        event_payload["_delivery_result"] = outcome
+        uow.session.add(
+            WebhookEventORM(
+                company_id=company_id,
+                provider=provider,
+                event_type=event_type,
+                external_id=external_event_id,
+                payload=event_payload,
+                ip=ip,
+                user_agent=user_agent,
+            )
+        )
+
+    @staticmethod
     def process(
         uow,
         *,
@@ -90,6 +117,17 @@ class OutboxDeliveryWebhookService:
             external_event_id=external_event_id,
             company_id=company_id,
         ):
+            OutboxDeliveryWebhookService._record_webhook_event(
+                uow,
+                company_id=company_id,
+                provider=provider,
+                event_type=event_type,
+                external_event_id=external_event_id,
+                payload=payload,
+                ip=ip,
+                user_agent=user_agent,
+                outcome="duplicate",
+            )
             return {
                 "updated": False,
                 "duplicate": True,
@@ -97,19 +135,18 @@ class OutboxDeliveryWebhookService:
                 "reason": "duplicate",
             }
 
-        uow.session.add(
-            WebhookEventORM(
+        if message is None:
+            OutboxDeliveryWebhookService._record_webhook_event(
+                uow,
                 company_id=company_id,
                 provider=provider,
                 event_type=event_type,
-                external_id=external_event_id,
+                external_event_id=external_event_id,
                 payload=payload,
                 ip=ip,
                 user_agent=user_agent,
+                outcome="message_not_found",
             )
-        )
-
-        if message is None:
             return {
                 "updated": False,
                 "duplicate": False,
@@ -122,6 +159,17 @@ class OutboxDeliveryWebhookService:
                 message.channel.value if hasattr(message.channel, "value") else message.channel
             )
             if message_channel.upper() != channel.upper():
+                OutboxDeliveryWebhookService._record_webhook_event(
+                    uow,
+                    company_id=message.company_id,
+                    provider=provider,
+                    event_type=event_type,
+                    external_event_id=external_event_id,
+                    payload=payload,
+                    ip=ip,
+                    user_agent=user_agent,
+                    outcome="channel_mismatch",
+                )
                 return {
                     "updated": False,
                     "duplicate": False,
@@ -189,6 +237,17 @@ class OutboxDeliveryWebhookService:
             reason=f"{provider}:{event_type}",
             before=before,
             after=after,
+        )
+        OutboxDeliveryWebhookService._record_webhook_event(
+            uow,
+            company_id=message.company_id,
+            provider=provider,
+            event_type=event_type,
+            external_event_id=external_event_id,
+            payload=payload,
+            ip=ip,
+            user_agent=user_agent,
+            outcome="updated",
         )
 
         return {

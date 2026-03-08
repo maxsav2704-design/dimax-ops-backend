@@ -177,7 +177,7 @@ def test_twilio_status_webhook_updates_outbox_and_creates_then_closes_delivery_r
         )
         .count()
     )
-    assert webhook_count_after == webhook_count_before
+    assert webhook_count_after == webhook_count_before + 1
 
     ok_resp = client_raw.post(
         f"/api/v1/webhooks/twilio/status?outbox_id={msg.id}",
@@ -281,7 +281,19 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
         )
         .count()
     )
-    assert duplicate_count == 1
+    assert duplicate_count == 2
+    duplicate_event = (
+        db_session.query(WebhookEventORM)
+        .filter(
+            WebhookEventORM.provider == "sendgrid",
+            WebhookEventORM.external_id == "evt-1",
+            WebhookEventORM.company_id == company_id,
+        )
+        .order_by(WebhookEventORM.created_at.desc())
+        .first()
+    )
+    assert duplicate_event is not None
+    assert duplicate_event.payload["_delivery_result"] == "duplicate"
 
     monkeypatch.setattr(settings, "OUTBOX_WEBHOOK_TOKEN", "secret-webhook-token")
     forbidden = client_raw.post(

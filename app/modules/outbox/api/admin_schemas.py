@@ -44,6 +44,31 @@ class OutboxSummaryResponse(BaseModel):
     failed_total: int
 
 
+class OutboxWebhookSignalSummaryResponse(BaseModel):
+    window_hours: int
+    total_received: int
+    updated_total: int
+    duplicate_total: int
+    unmatched_total: int
+    provider_failed_total: int
+
+
+class OutboxWebhookSignalItemDTO(BaseModel):
+    id: UUID
+    provider: str
+    event_type: str
+    external_id: str | None
+    result: str
+    status: str | None
+    error: str | None
+    outbox_id: str | None
+    created_at: datetime
+
+
+class OutboxWebhookSignalListResponse(BaseModel):
+    items: list[OutboxWebhookSignalItemDTO]
+
+
 class OutboxRetryBody(BaseModel):
     reason: str | None = None
 

@@ -135,6 +135,82 @@ def test_outbox_admin_filters_and_summary(
     assert summary["total"] >= 2
 
 
+def test_outbox_admin_webhook_signals_summary_and_list(
+    client_admin_real_uow,
+    client_raw,
+    db_session,
+    company_id,
+):
+    from tests.integration.test_outbox_webhooks_api import _seed_outbox_context
+
+    msg = _seed_outbox_context(
+        db_session,
+        company_id=company_id,
+        channel=OutboxChannel.EMAIL,
+        provider_message_id="SG-WEBHOOK-ADMIN-1",
+    )
+
+    delivered = client_raw.post(
+        "/api/v1/webhooks/outbox/status",
+        json={
+            "provider": "sendgrid",
+            "channel": "EMAIL",
+            "provider_message_id": "SG-WEBHOOK-ADMIN-1",
+            "event_id": "evt-admin-1",
+            "status": "delivered",
+        },
+    )
+    assert delivered.status_code == 200, delivered.text
+
+    duplicate = client_raw.post(
+        "/api/v1/webhooks/outbox/status",
+        json={
+            "provider": "sendgrid",
+            "channel": "EMAIL",
+            "provider_message_id": "SG-WEBHOOK-ADMIN-1",
+            "event_id": "evt-admin-1",
+            "status": "delivered",
+        },
+    )
+    assert duplicate.status_code == 200, duplicate.text
+
+    mismatch = client_raw.post(
+        "/api/v1/webhooks/outbox/status",
+        json={
+            "provider": "sendgrid",
+            "channel": "WHATSAPP",
+            "provider_message_id": "SG-WEBHOOK-ADMIN-1",
+            "event_id": "evt-admin-2",
+            "status": "failed",
+        },
+    )
+    assert mismatch.status_code == 200, mismatch.text
+
+    summary_resp = client_admin_real_uow.get(
+        "/api/v1/admin/outbox/webhook-signals/summary",
+        params={"hours": 24},
+    )
+    assert summary_resp.status_code == 200, summary_resp.text
+    summary = summary_resp.json()
+    assert summary["total_received"] >= 3
+    assert summary["updated_total"] >= 1
+    assert summary["duplicate_total"] >= 1
+    assert summary["unmatched_total"] >= 1
+    assert summary["provider_failed_total"] >= 1
+
+    list_resp = client_admin_real_uow.get(
+        "/api/v1/admin/outbox/webhook-signals",
+        params={"limit": 10},
+    )
+    assert list_resp.status_code == 200, list_resp.text
+    items = list_resp.json()["items"]
+    assert len(items) >= 3
+    results = {item["result"] for item in items}
+    assert "updated" in results
+    assert "duplicate" in results
+    assert "channel_mismatch" in results
+
+
 def test_outbox_admin_retry_failed_message_and_writes_audit(
     client_admin_real_uow,
     db_session,
@@ -286,6 +362,14 @@ def test_outbox_admin_endpoints_forbidden_for_installer(client_installer):
     summary_resp = client_installer.get("/api/v1/admin/outbox/summary")
     assert summary_resp.status_code == 403, summary_resp.text
     assert summary_resp.json()["error"]["code"] == "FORBIDDEN"
+
+    webhook_summary_resp = client_installer.get("/api/v1/admin/outbox/webhook-signals/summary")
+    assert webhook_summary_resp.status_code == 403, webhook_summary_resp.text
+    assert webhook_summary_resp.json()["error"]["code"] == "FORBIDDEN"
+
+    webhook_list_resp = client_installer.get("/api/v1/admin/outbox/webhook-signals")
+    assert webhook_list_resp.status_code == 403, webhook_list_resp.text
+    assert webhook_list_resp.json()["error"]["code"] == "FORBIDDEN"
 
     get_resp = client_installer.get(f"/api/v1/admin/outbox/{uuid.uuid4()}")
     assert get_resp.status_code == 403, get_resp.text
