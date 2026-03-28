@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.v1.acl import get_current_installer_id
 from app.api.v1.deps import CurrentUser, get_uow, require_installer
@@ -35,6 +35,7 @@ def list_my_projects(
 @router.get("/{project_id}", response_model=InstallerProjectDetailsResponse)
 def project_details(
     project_id: UUID,
+    request: Request,
     user: CurrentUser = Depends(require_installer),
     installer_id: UUID = Depends(get_current_installer_id),
     uow=Depends(get_uow),
@@ -45,4 +46,5 @@ def project_details(
             company_id=user.company_id,
             installer_id=installer_id,
             project_id=project_id,
+            locale=request.headers.get("accept-language", "en"),
         )

@@ -7,6 +7,7 @@ from app.shared.domain.errors import Forbidden, NotFound
 from app.shared.application.navigation import (
     build_call_url,
     build_project_address,
+    resolve_locale,
     build_waze_url,
     build_whatsapp_url,
 )
@@ -17,6 +18,20 @@ def _status_value(s) -> str:
 
 
 class ProjectInstallerService:
+    @staticmethod
+    def _project_whatsapp_message(project, locale: str = "en") -> str | None:
+        code = str(getattr(project, "code", "") or "").strip()
+        name = str(getattr(project, "name", "") or "").strip()
+        if not name and not code:
+            return None
+        project_ref = f"{name} ({code})" if name and code else name or code
+        normalized_locale = resolve_locale(locale)
+        if normalized_locale == "ru":
+            return f"Добрый день, по проекту {project_ref}"
+        if normalized_locale == "he":
+            return f"שלום, בקשר לפרויקט {project_ref}"
+        return f"Hello, regarding project {project_ref}"
+
     @staticmethod
     def list_my_projects(
         uow,
@@ -68,6 +83,7 @@ class ProjectInstallerService:
         company_id: uuid.UUID,
         installer_id: uuid.UUID,
         project_id: uuid.UUID,
+        locale: str = "en",
     ) -> dict:
         project = uow.projects.get(company_id=company_id, project_id=project_id)
         if not project:
@@ -107,9 +123,6 @@ class ProjectInstallerService:
             entrance=getattr(project, "address_entrance", None),
         )
         whatsapp_phone = getattr(project, "developer_whatsapp", None) or getattr(project, "contact_phone", None)
-        whatsapp_message = " · ".join(
-            part for part in [getattr(project, "code", None), getattr(project, "name", None)] if part
-        )
 
         return {
             "id": project.id,
@@ -123,7 +136,7 @@ class ProjectInstallerService:
             ),
             "whatsapp_url": build_whatsapp_url(
                 phone=whatsapp_phone,
-                message=whatsapp_message or None,
+                message=ProjectInstallerService._project_whatsapp_message(project, locale=locale),
             ),
             "call_url": build_call_url(phone=getattr(project, "contact_phone", None)),
             "contact_name": getattr(project, "contact_name", None),

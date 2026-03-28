@@ -4,7 +4,7 @@ import base64
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 from app.api.v1.deps import CurrentUser, get_uow, require_admin
 from app.modules.projects.api.schemas import (
@@ -374,6 +374,7 @@ async def import_doors_from_upload(
 def project_details(
     project_id: UUID,
     order_number: str | None = Query(default=None, max_length=80),
+    request: Request = None,
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
 ):
@@ -383,6 +384,7 @@ def project_details(
             company_id=user.company_id,
             project_id=project_id,
             order_number=order_number,
+            locale=request.headers.get("accept-language", "en") if request else "en",
         )
 
 

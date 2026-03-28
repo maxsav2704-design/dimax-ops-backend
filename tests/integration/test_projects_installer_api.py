@@ -220,6 +220,9 @@ def test_installer_project_details_returns_scoped_data(
     project.address_building = "11"
     project.address_city = "Ashdod"
     project.address_entrance = "A"
+    project.address_lat = Decimal("31.801")
+    project.address_lng = Decimal("34.643")
+    project.address_waze_url = "https://www.waze.com/ul?q=Manual+Installer+Link"
     project.developer_company = "Builder Ltd"
     project.contact_name = "Yael Cohen"
     project.contact_phone = "+972501234567"
@@ -314,7 +317,10 @@ def test_installer_project_details_returns_scoped_data(
     db_session.add_all([addon_plan, addon_fact_my, addon_fact_other])
     db_session.commit()
 
-    resp = client.get(f"/api/v1/installer/projects/{project.id}")
+    resp = client.get(
+        f"/api/v1/installer/projects/{project.id}",
+        headers={"Accept-Language": "he"},
+    )
     assert resp.status_code == 200, resp.text
 
     body = resp.json()
@@ -343,9 +349,10 @@ def test_installer_project_details_returns_scoped_data(
     assert body["id"] == str(project.id)
     assert body["name"] == "Installer Details Project"
     assert body["waze_url"] is not None
-    assert "navigate=yes" in body["waze_url"]
+    assert body["waze_url"] == "https://waze.com/ul?ll=31.801,34.643&navigate=yes"
     assert body["whatsapp_url"] is not None
     assert "wa.me/972509876543" in body["whatsapp_url"]
+    assert "%D7%A9%D7%9C%D7%95%D7%9D%2C+%D7%91%D7%A7%D7%A9%D7%A8+%D7%9C%D7%A4%D7%A8%D7%95%D7%99%D7%A7%D7%98+Installer+Details+Project" in body["whatsapp_url"]
     assert body["call_url"] == "tel:+972501234567"
     assert body["contact_name"] == "Yael Cohen"
     assert body["contact_phone"] == "+972501234567"

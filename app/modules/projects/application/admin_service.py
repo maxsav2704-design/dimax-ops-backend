@@ -29,6 +29,7 @@ from app.shared.application.navigation import (
     build_project_address,
     build_waze_url,
     build_whatsapp_url,
+    resolve_locale,
 )
 from app.shared.domain.errors import NotFound, ValidationError
 from app.shared.infrastructure.observability import get_logger, log_event
@@ -71,11 +72,22 @@ def _project_address(project) -> str:
     )
 
 
-def _project_action_links(project) -> tuple[str | None, str | None, str | None]:
-    address = _project_address(project)
+def _project_whatsapp_message(project, locale: str = "en") -> str | None:
     code = str(getattr(project, "code", "") or "").strip()
     name = str(getattr(project, "name", "") or "").strip()
-    whatsapp_message = " · ".join(part for part in [code or None, name or None] if part)
+    if not name and not code:
+        return None
+    project_ref = f"{name} ({code})" if name and code else name or code
+    normalized_locale = resolve_locale(locale)
+    if normalized_locale == "ru":
+        return f"Добрый день, по проекту {project_ref}"
+    if normalized_locale == "he":
+        return f"שלום, בקשר לפרויקט {project_ref}"
+    return f"Hello, regarding project {project_ref}"
+
+
+def _project_action_links(project, *, locale: str = "en") -> tuple[str | None, str | None, str | None]:
+    address = _project_address(project)
     return (
         build_waze_url(
             address=address,
@@ -86,7 +98,7 @@ def _project_action_links(project) -> tuple[str | None, str | None, str | None]:
         build_whatsapp_url(
             phone=getattr(project, "developer_whatsapp", None)
             or getattr(project, "contact_phone", None),
-            message=whatsapp_message or None,
+            message=_project_whatsapp_message(project, locale=locale),
         ),
         build_call_url(phone=getattr(project, "contact_phone", None)),
     )
@@ -1335,6 +1347,7 @@ class ProjectAdminService:
         company_id: uuid.UUID,
         project_id: uuid.UUID,
         order_number: str | None = None,
+        locale: str = "en",
     ) -> dict:
         project = uow.projects.get(company_id=company_id, project_id=project_id)
         if not project:
@@ -1358,7 +1371,7 @@ class ProjectAdminService:
             allowed_door_ids = {d.id for d in doors}
             issues = [i for i in issues if i.door_id in allowed_door_ids]
 
-        waze_deep_link, whatsapp_deep_link, call_deep_link = _project_action_links(project)
+        waze_deep_link, whatsapp_deep_link, call_deep_link = _project_action_links(project, locale=locale)
 
         return {
             "id": project.id,

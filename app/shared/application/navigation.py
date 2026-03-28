@@ -56,10 +56,10 @@ def build_waze_url(
 ) -> str | None:
     if not settings.WAZE_NAVIGATION_ENABLED:
         return None
-    if manual_url and str(manual_url).strip():
-        return str(manual_url).strip()
     if lat is not None and lng is not None:
         return f"{settings.WAZE_BASE_URL}?ll={lat},{lng}&navigate=yes"
+    if manual_url and str(manual_url).strip():
+        return str(manual_url).strip()
     if not address:
         return None
     value = address.strip()
@@ -90,3 +90,14 @@ def is_valid_http_url(value: str | None) -> bool:
         return True
     parsed = urlparse(value.strip())
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def resolve_locale(value: str | None) -> str:
+    if not value:
+        return "en"
+    normalized = value.strip().lower()
+    if normalized.startswith("ru"):
+        return "ru"
+    if normalized.startswith("he") or normalized.startswith("iw"):
+        return "he"
+    return "en"

@@ -45,13 +45,16 @@ def test_projects_crud_and_details_flow(client_admin_real_uow):
             "address_entrance": "A",
             "address_lat": "31.801",
             "address_lng": "34.643",
-            "address_waze_url": "https://www.waze.com/ul?ll=31.801,34.643&navigate=yes",
+            "address_waze_url": "https://www.waze.com/ul?q=Manual+Override",
         },
     )
     assert create_resp.status_code == 200, create_resp.text
     project_id = create_resp.json()["id"]
 
-    details_resp = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
+    details_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/projects/{project_id}",
+        headers={"Accept-Language": "ru"},
+    )
     assert details_resp.status_code == 200, details_resp.text
     details = details_resp.json()
     assert details["id"] == project_id
@@ -68,8 +71,9 @@ def test_projects_crud_and_details_flow(client_admin_real_uow):
     assert details["address"] == "Main street, 1, Ashdod, A"
     assert details["address_street"] == "Main street"
     assert details["address_city"] == "Ashdod"
-    assert details["waze_deep_link"] == "https://www.waze.com/ul?ll=31.801,34.643&navigate=yes"
+    assert details["waze_deep_link"] == "https://waze.com/ul?ll=31.801,34.643&navigate=yes"
     assert details["whatsapp_deep_link"] is not None
+    assert "Добрый+день%2C+по+проекту+Project+CRUD+A+%28PRJ-CRUD-A%29" in details["whatsapp_deep_link"]
     assert details["call_deep_link"] == "tel:+972501234567"
     assert isinstance(details["doors"], list)
     assert isinstance(details["issues_open"], list)
@@ -95,6 +99,7 @@ def test_projects_crud_and_details_flow(client_admin_real_uow):
     assert updated["contact_name"] == "Manager"
     assert updated["contact_phone"] == "+972507000000"
     assert updated["address_waze_url"] == "https://www.waze.com/ul?q=Project+CRUD+B"
+    assert updated["waze_deep_link"] == "https://waze.com/ul?ll=31.801,34.643&navigate=yes"
     assert updated["call_deep_link"] == "tel:+972507000000"
 
     list_resp = client_admin_real_uow.get("/api/v1/admin/projects")
