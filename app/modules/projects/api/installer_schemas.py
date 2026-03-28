@@ -89,6 +89,12 @@ class InstallerProjectDetailsResponse(BaseModel):
     name: str
     address: str | None
     waze_url: str | None
+    whatsapp_url: str | None = None
+    call_url: str | None = None
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    developer_company: str | None = None
+    developer_notes: str | None = None
     status: str
     doors: list[InstallerDoorDTO]
     issues_open: list[InstallerIssueDTO]

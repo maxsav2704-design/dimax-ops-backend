@@ -4,7 +4,12 @@ import uuid
 from datetime import datetime, timezone
 
 from app.shared.domain.errors import Forbidden, NotFound
-from app.shared.application.navigation import build_waze_url
+from app.shared.application.navigation import (
+    build_call_url,
+    build_project_address,
+    build_waze_url,
+    build_whatsapp_url,
+)
 
 
 def _status_value(s) -> str:
@@ -28,9 +33,29 @@ class ProjectInstallerService:
                 {
                     "id": p.id,
                     "name": p.name,
-                    "address": p.address,
+                    "address": (
+                        build_project_address(
+                            address=getattr(p, "address", None),
+                            street=getattr(p, "address_street", None),
+                            building=getattr(p, "address_building", None),
+                            city=getattr(p, "address_city", None),
+                            entrance=getattr(p, "address_entrance", None),
+                        )
+                        or ""
+                    ),
                     "status": _status_value(p.status),
-                    "waze_url": build_waze_url(address=getattr(p, "address", None)),
+                    "waze_url": build_waze_url(
+                        address=build_project_address(
+                            address=getattr(p, "address", None),
+                            street=getattr(p, "address_street", None),
+                            building=getattr(p, "address_building", None),
+                            city=getattr(p, "address_city", None),
+                            entrance=getattr(p, "address_entrance", None),
+                        ),
+                        lat=getattr(p, "address_lat", None),
+                        lng=getattr(p, "address_lng", None),
+                        manual_url=getattr(p, "address_waze_url", None),
+                    ),
                 }
                 for p in projects
             ]
@@ -74,11 +99,37 @@ class ProjectInstallerService:
         door_types = uow.door_types.list_active(company_id=company_id)
         reasons = uow.reasons.list_active(company_id=company_id)
 
+        project_address = build_project_address(
+            address=getattr(project, "address", None),
+            street=getattr(project, "address_street", None),
+            building=getattr(project, "address_building", None),
+            city=getattr(project, "address_city", None),
+            entrance=getattr(project, "address_entrance", None),
+        )
+        whatsapp_phone = getattr(project, "developer_whatsapp", None) or getattr(project, "contact_phone", None)
+        whatsapp_message = " · ".join(
+            part for part in [getattr(project, "code", None), getattr(project, "name", None)] if part
+        )
+
         return {
             "id": project.id,
             "name": project.name,
-            "address": getattr(project, "address", None),
-            "waze_url": build_waze_url(address=getattr(project, "address", None)),
+            "address": project_address,
+            "waze_url": build_waze_url(
+                address=project_address,
+                lat=getattr(project, "address_lat", None),
+                lng=getattr(project, "address_lng", None),
+                manual_url=getattr(project, "address_waze_url", None),
+            ),
+            "whatsapp_url": build_whatsapp_url(
+                phone=whatsapp_phone,
+                message=whatsapp_message or None,
+            ),
+            "call_url": build_call_url(phone=getattr(project, "contact_phone", None)),
+            "contact_name": getattr(project, "contact_name", None),
+            "contact_phone": getattr(project, "contact_phone", None),
+            "developer_company": getattr(project, "developer_company", None),
+            "developer_notes": getattr(project, "developer_notes", None),
             "status": _status_value(project.status),
             "doors": [
                 {

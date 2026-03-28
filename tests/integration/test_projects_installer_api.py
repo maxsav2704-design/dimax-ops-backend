@@ -65,6 +65,7 @@ def _make_project(*, company_id: uuid.UUID, name: str, address: str) -> ProjectO
         company_id=company_id,
         name=name,
         address=address,
+        code=f"PRJ-{uuid.uuid4().hex[:6].upper()}",
         status=ProjectStatus.OK,
     )
 
@@ -215,6 +216,15 @@ def test_installer_project_details_returns_scoped_data(
         name="Installer Details Project",
         address="Details address",
     )
+    project.address_street = "Harbor"
+    project.address_building = "11"
+    project.address_city = "Ashdod"
+    project.address_entrance = "A"
+    project.developer_company = "Builder Ltd"
+    project.contact_name = "Yael Cohen"
+    project.contact_phone = "+972501234567"
+    project.developer_whatsapp = "+972509876543"
+    project.developer_notes = "Gate code 7788"
     db_session.add(project)
     db_session.flush()
 
@@ -315,6 +325,12 @@ def test_installer_project_details_returns_scoped_data(
             "name",
             "address",
             "waze_url",
+            "whatsapp_url",
+            "call_url",
+            "contact_name",
+            "contact_phone",
+            "developer_company",
+            "developer_notes",
             "status",
             "doors",
             "issues_open",
@@ -328,6 +344,13 @@ def test_installer_project_details_returns_scoped_data(
     assert body["name"] == "Installer Details Project"
     assert body["waze_url"] is not None
     assert "navigate=yes" in body["waze_url"]
+    assert body["whatsapp_url"] is not None
+    assert "wa.me/972509876543" in body["whatsapp_url"]
+    assert body["call_url"] == "tel:+972501234567"
+    assert body["contact_name"] == "Yael Cohen"
+    assert body["contact_phone"] == "+972501234567"
+    assert body["developer_company"] == "Builder Ltd"
+    assert body["developer_notes"] == "Gate code 7788"
 
     doors = body["doors"]
     assert [d["unit_label"] for d in doors] == ["A-01", "A-02"]

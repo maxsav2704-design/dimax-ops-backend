@@ -24,6 +24,12 @@ from app.modules.projects.application.file_import_service import (
 )
 from app.modules.projects.application.use_cases import ProjectUseCases
 from app.modules.projects.infrastructure.models import ProjectImportRunORM
+from app.shared.application.navigation import (
+    build_call_url,
+    build_project_address,
+    build_waze_url,
+    build_whatsapp_url,
+)
 from app.shared.domain.errors import NotFound, ValidationError
 from app.shared.infrastructure.observability import get_logger, log_event
 
@@ -50,6 +56,40 @@ def _order_number_matches(value: str | None, query: str | None) -> bool:
     if target is None:
         return False
     return q.casefold() in target.casefold()
+
+
+def _project_address(project) -> str:
+    return (
+        build_project_address(
+            address=getattr(project, "address", None),
+            street=getattr(project, "address_street", None),
+            building=getattr(project, "address_building", None),
+            city=getattr(project, "address_city", None),
+            entrance=getattr(project, "address_entrance", None),
+        )
+        or ""
+    )
+
+
+def _project_action_links(project) -> tuple[str | None, str | None, str | None]:
+    address = _project_address(project)
+    code = str(getattr(project, "code", "") or "").strip()
+    name = str(getattr(project, "name", "") or "").strip()
+    whatsapp_message = " · ".join(part for part in [code or None, name or None] if part)
+    return (
+        build_waze_url(
+            address=address,
+            lat=getattr(project, "address_lat", None),
+            lng=getattr(project, "address_lng", None),
+            manual_url=getattr(project, "address_waze_url", None),
+        ),
+        build_whatsapp_url(
+            phone=getattr(project, "developer_whatsapp", None)
+            or getattr(project, "contact_phone", None),
+            message=whatsapp_message or None,
+        ),
+        build_call_url(phone=getattr(project, "contact_phone", None)),
+    )
 
 
 def _floor_sort_key(value: str | None) -> tuple[int, int, str]:
@@ -489,7 +529,8 @@ class ProjectAdminService:
                 {
                     "id": p.id,
                     "name": p.name,
-                    "address": p.address,
+                    "code": getattr(p, "code", None),
+                    "address": _project_address(p),
                     "status": _status_value(p.status),
                 }
                 for p in items
@@ -1003,23 +1044,49 @@ class ProjectAdminService:
         *,
         company_id: uuid.UUID,
         actor_user_id: uuid.UUID,
+        code: str | None,
         name: str,
         address: str,
+        planned_start_date,
+        planned_end_date,
         developer_company: str | None,
         contact_name: str | None,
         contact_phone: str | None,
         contact_email: str | None,
+        developer_phone_alt: str | None,
+        developer_whatsapp: str | None,
+        developer_notes: str | None,
+        address_street: str | None,
+        address_building: str | None,
+        address_city: str | None,
+        address_entrance: str | None,
+        address_lat,
+        address_lng,
+        address_waze_url: str | None,
     ) -> ProjectCreateResponse:
         try:
             p = ProjectUseCases.create_project(
                 uow,
                 company_id=company_id,
+                code=code,
                 name=name,
                 address=address,
+                planned_start_date=planned_start_date,
+                planned_end_date=planned_end_date,
                 developer_company=developer_company,
                 contact_name=contact_name,
                 contact_phone=contact_phone,
                 contact_email=contact_email,
+                developer_phone_alt=developer_phone_alt,
+                developer_whatsapp=developer_whatsapp,
+                developer_notes=developer_notes,
+                address_street=address_street,
+                address_building=address_building,
+                address_city=address_city,
+                address_entrance=address_entrance,
+                address_lat=address_lat,
+                address_lng=address_lng,
+                address_waze_url=address_waze_url,
             )
         except CompanyPlanLimitExceeded as e:
             AuditService.add_independent(
@@ -1208,15 +1275,33 @@ class ProjectAdminService:
             allowed_door_ids = {d.id for d in doors}
             issues = [i for i in issues if i.door_id in allowed_door_ids]
 
+        waze_deep_link, whatsapp_deep_link, call_deep_link = _project_action_links(project)
+
         return {
             "id": project.id,
             "name": project.name,
-            "address": project.address,
+            "code": getattr(project, "code", None),
+            "address": _project_address(project),
+            "planned_start_date": getattr(project, "planned_start_date", None),
+            "planned_end_date": getattr(project, "planned_end_date", None),
             "status": _status_value(project.status),
             "developer_company": project.developer_company,
             "contact_name": project.contact_name,
             "contact_phone": project.contact_phone,
             "contact_email": project.contact_email,
+            "developer_phone_alt": getattr(project, "developer_phone_alt", None),
+            "developer_whatsapp": getattr(project, "developer_whatsapp", None),
+            "developer_notes": getattr(project, "developer_notes", None),
+            "address_street": getattr(project, "address_street", None),
+            "address_building": getattr(project, "address_building", None),
+            "address_city": getattr(project, "address_city", None),
+            "address_entrance": getattr(project, "address_entrance", None),
+            "address_lat": getattr(project, "address_lat", None),
+            "address_lng": getattr(project, "address_lng", None),
+            "address_waze_url": getattr(project, "address_waze_url", None),
+            "waze_deep_link": waze_deep_link,
+            "whatsapp_deep_link": whatsapp_deep_link,
+            "call_deep_link": call_deep_link,
             "doors": [
                 {
                     "id": d.id,

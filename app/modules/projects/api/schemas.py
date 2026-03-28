@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -9,25 +9,52 @@ from pydantic import BaseModel, Field
 
 class ProjectCreateBody(BaseModel):
     name: str = Field(min_length=2, max_length=200)
-    address: str = Field(min_length=2, max_length=400)
+    code: str | None = Field(default=None, min_length=2, max_length=40)
+    address: str = Field(default="", max_length=400)
+    planned_start_date: date | None = None
+    planned_end_date: date | None = None
     developer_company: str | None = Field(default=None, max_length=200)
     contact_name: str | None = Field(default=None, max_length=200)
     contact_phone: str | None = Field(default=None, max_length=40)
     contact_email: str | None = Field(default=None, max_length=255)
+    developer_phone_alt: str | None = Field(default=None, max_length=40)
+    developer_whatsapp: str | None = Field(default=None, max_length=40)
+    developer_notes: str | None = Field(default=None, max_length=1000)
+    address_street: str | None = Field(default=None, max_length=200)
+    address_building: str | None = Field(default=None, max_length=80)
+    address_city: str | None = Field(default=None, max_length=120)
+    address_entrance: str | None = Field(default=None, max_length=120)
+    address_lat: Decimal | None = Field(default=None)
+    address_lng: Decimal | None = Field(default=None)
+    address_waze_url: str | None = Field(default=None, max_length=500)
 
 
 class ProjectUpdateBody(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     address: str | None = Field(default=None, max_length=400)
+    code: str | None = Field(default=None, max_length=40)
+    planned_start_date: date | None = None
+    planned_end_date: date | None = None
     developer_company: str | None = Field(default=None, max_length=200)
     contact_name: str | None = Field(default=None, max_length=200)
     contact_phone: str | None = Field(default=None, max_length=40)
     contact_email: str | None = Field(default=None, max_length=255)
+    developer_phone_alt: str | None = Field(default=None, max_length=40)
+    developer_whatsapp: str | None = Field(default=None, max_length=40)
+    developer_notes: str | None = Field(default=None, max_length=1000)
+    address_street: str | None = Field(default=None, max_length=200)
+    address_building: str | None = Field(default=None, max_length=80)
+    address_city: str | None = Field(default=None, max_length=120)
+    address_entrance: str | None = Field(default=None, max_length=120)
+    address_lat: Decimal | None = Field(default=None)
+    address_lng: Decimal | None = Field(default=None)
+    address_waze_url: str | None = Field(default=None, max_length=500)
 
 
 class ProjectListItem(BaseModel):
     id: UUID
     name: str
+    code: str | None = None
     address: str
     status: str
 
@@ -331,12 +358,28 @@ class IssueDTO(BaseModel):
 class ProjectDetailsResponse(BaseModel):
     id: UUID
     name: str
+    code: str | None = None
     address: str
+    planned_start_date: date | None = None
+    planned_end_date: date | None = None
     status: str
     developer_company: str | None
     contact_name: str | None
     contact_phone: str | None
     contact_email: str | None
+    developer_phone_alt: str | None = None
+    developer_whatsapp: str | None = None
+    developer_notes: str | None = None
+    address_street: str | None = None
+    address_building: str | None = None
+    address_city: str | None = None
+    address_entrance: str | None = None
+    address_lat: Decimal | None = None
+    address_lng: Decimal | None = None
+    address_waze_url: str | None = None
+    waze_deep_link: str | None = None
+    whatsapp_deep_link: str | None = None
+    call_deep_link: str | None = None
     doors: list[DoorDTO]
     issues_open: list[IssueDTO]
 

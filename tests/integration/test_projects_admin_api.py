@@ -24,23 +24,64 @@ def _create_project(client_admin_real_uow, name: str, address: str) -> str:
 
 
 def test_projects_crud_and_details_flow(client_admin_real_uow):
-    project_id = _create_project(
-        client_admin_real_uow,
-        name="Project CRUD A",
-        address="Main street 1",
+    create_resp = client_admin_real_uow.post(
+        "/api/v1/admin/projects",
+        json={
+            "code": "PRJ-CRUD-A",
+            "name": "Project CRUD A",
+            "address": "Main street 1",
+            "planned_start_date": "2026-04-01",
+            "planned_end_date": "2026-04-30",
+            "developer_company": "Builder Ltd",
+            "contact_name": "Yael Cohen",
+            "contact_phone": "050-123-4567",
+            "contact_email": "yael@example.com",
+            "developer_phone_alt": "050-123-9999",
+            "developer_whatsapp": "050-555-1234",
+            "developer_notes": "Gate code 7788",
+            "address_street": "Main street",
+            "address_building": "1",
+            "address_city": "Ashdod",
+            "address_entrance": "A",
+            "address_lat": "31.801",
+            "address_lng": "34.643",
+            "address_waze_url": "https://www.waze.com/ul?ll=31.801,34.643&navigate=yes",
+        },
     )
+    assert create_resp.status_code == 200, create_resp.text
+    project_id = create_resp.json()["id"]
 
     details_resp = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
     assert details_resp.status_code == 200, details_resp.text
     details = details_resp.json()
     assert details["id"] == project_id
     assert details["name"] == "Project CRUD A"
+    assert details["code"] == "PRJ-CRUD-A"
+    assert details["planned_start_date"] == "2026-04-01"
+    assert details["planned_end_date"] == "2026-04-30"
+    assert details["developer_company"] == "Builder Ltd"
+    assert details["contact_name"] == "Yael Cohen"
+    assert details["contact_phone"] == "+972501234567"
+    assert details["developer_phone_alt"] == "+972501239999"
+    assert details["developer_whatsapp"] == "+972505551234"
+    assert details["developer_notes"] == "Gate code 7788"
+    assert details["address"] == "Main street, 1, Ashdod, A"
+    assert details["address_street"] == "Main street"
+    assert details["address_city"] == "Ashdod"
+    assert details["waze_deep_link"] == "https://www.waze.com/ul?ll=31.801,34.643&navigate=yes"
+    assert details["whatsapp_deep_link"] is not None
+    assert details["call_deep_link"] == "tel:+972501234567"
     assert isinstance(details["doors"], list)
     assert isinstance(details["issues_open"], list)
 
     update_resp = client_admin_real_uow.patch(
         f"/api/v1/admin/projects/{project_id}",
-        json={"name": "Project CRUD B", "contact_name": "Manager"},
+        json={
+            "name": "Project CRUD B",
+            "contact_name": "Manager",
+            "contact_phone": "0507000000",
+            "address_waze_url": "https://www.waze.com/ul?q=Project+CRUD+B",
+        },
     )
     assert update_resp.status_code == 200, update_resp.text
     assert update_resp.json()["ok"] is True
@@ -52,11 +93,16 @@ def test_projects_crud_and_details_flow(client_admin_real_uow):
     updated = updated_details_resp.json()
     assert updated["name"] == "Project CRUD B"
     assert updated["contact_name"] == "Manager"
+    assert updated["contact_phone"] == "+972507000000"
+    assert updated["address_waze_url"] == "https://www.waze.com/ul?q=Project+CRUD+B"
+    assert updated["call_deep_link"] == "tel:+972507000000"
 
     list_resp = client_admin_real_uow.get("/api/v1/admin/projects")
     assert list_resp.status_code == 200, list_resp.text
     listed_ids = {x["id"] for x in list_resp.json()["items"]}
     assert project_id in listed_ids
+    listed_row = next(x for x in list_resp.json()["items"] if x["id"] == project_id)
+    assert listed_row["code"] == "PRJ-CRUD-A"
 
     delete_resp = client_admin_real_uow.delete(f"/api/v1/admin/projects/{project_id}")
     assert delete_resp.status_code == 200, delete_resp.text
@@ -321,6 +367,28 @@ def test_projects_validation_returns_422(client_admin_real_uow):
         json={"installer_id": str(uuid.uuid4())},
     )
     assert assign_invalid_resp.status_code == 422, assign_invalid_resp.text
+
+    invalid_phone_resp = client_admin_real_uow.post(
+        "/api/v1/admin/projects",
+        json={
+            "name": "Bad Phone Project",
+            "address": "Validation address",
+            "contact_phone": "abc",
+        },
+    )
+    assert invalid_phone_resp.status_code == 422, invalid_phone_resp.text
+    assert invalid_phone_resp.json()["error"]["code"] == "INVALID_PHONE"
+
+    invalid_waze_resp = client_admin_real_uow.post(
+        "/api/v1/admin/projects",
+        json={
+            "name": "Bad Waze Project",
+            "address": "Validation address",
+            "address_waze_url": "ftp://bad-link",
+        },
+    )
+    assert invalid_waze_resp.status_code == 422, invalid_waze_resp.text
+    assert invalid_waze_resp.json()["error"]["code"] == "INVALID_WAZE_URL"
 
 
 def test_projects_forbidden_for_installer_role(client_installer):
