@@ -7,6 +7,7 @@ from app.shared.domain.errors import Forbidden, NotFound
 from app.shared.application.navigation import (
     build_call_url,
     build_project_address,
+    format_coordinate,
     resolve_locale,
     build_waze_url,
     build_whatsapp_url,
@@ -122,6 +123,8 @@ class ProjectInstallerService:
             city=getattr(project, "address_city", None),
             entrance=getattr(project, "address_entrance", None),
         )
+        address_lat = format_coordinate(getattr(project, "address_lat", None))
+        address_lng = format_coordinate(getattr(project, "address_lng", None))
         whatsapp_phone = getattr(project, "developer_whatsapp", None) or getattr(project, "contact_phone", None)
 
         return {
@@ -133,20 +136,20 @@ class ProjectInstallerService:
                 "building": getattr(project, "address_building", None),
                 "city": getattr(project, "address_city", None),
                 "entrance": getattr(project, "address_entrance", None),
-                "lat": getattr(project, "address_lat", None),
-                "lng": getattr(project, "address_lng", None),
+                "lat": address_lat,
+                "lng": address_lng,
                 "waze_url": getattr(project, "address_waze_url", None),
                 "waze_deep_link": build_waze_url(
                     address=project_address,
-                    lat=getattr(project, "address_lat", None),
-                    lng=getattr(project, "address_lng", None),
+                    lat=address_lat,
+                    lng=address_lng,
                     manual_url=getattr(project, "address_waze_url", None),
                 ),
             },
             "waze_url": build_waze_url(
                 address=project_address,
-                lat=getattr(project, "address_lat", None),
-                lng=getattr(project, "address_lng", None),
+                lat=address_lat,
+                lng=address_lng,
                 manual_url=getattr(project, "address_waze_url", None),
             ),
             "whatsapp_url": build_whatsapp_url(

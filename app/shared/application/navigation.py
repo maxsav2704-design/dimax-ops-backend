@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from urllib.parse import quote_plus, urlparse
 
 from app.core.config import settings
@@ -47,6 +48,21 @@ def build_project_address(
     return value or None
 
 
+def format_coordinate(value: float | str | Decimal | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        normalized = format(Decimal(raw).normalize(), "f")
+    except (InvalidOperation, ValueError):
+        return raw
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    return normalized or "0"
+
+
 def build_waze_url(
     *,
     address: str | None = None,
@@ -56,8 +72,10 @@ def build_waze_url(
 ) -> str | None:
     if not settings.WAZE_NAVIGATION_ENABLED:
         return None
-    if lat is not None and lng is not None:
-        return f"{settings.WAZE_BASE_URL}?ll={lat},{lng}&navigate=yes"
+    formatted_lat = format_coordinate(lat)
+    formatted_lng = format_coordinate(lng)
+    if formatted_lat is not None and formatted_lng is not None:
+        return f"{settings.WAZE_BASE_URL}?ll={formatted_lat},{formatted_lng}&navigate=yes"
     if manual_url and str(manual_url).strip():
         return str(manual_url).strip()
     if not address:

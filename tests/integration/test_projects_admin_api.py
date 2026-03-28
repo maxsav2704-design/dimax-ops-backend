@@ -94,7 +94,10 @@ def test_projects_crud_and_details_flow(client_admin_real_uow):
         "call_deep_link": "tel:+972501234567",
     }
     assert details["whatsapp_deep_link"] is not None
-    assert "Добрый+день%2C+по+проекту+Project+CRUD+A+%28PRJ-CRUD-A%29" in details["whatsapp_deep_link"]
+    assert (
+        "%D0%94%D0%BE%D0%B1%D1%80%D1%8B%D0%B9+%D0%B4%D0%B5%D0%BD%D1%8C%2C+"
+        "%D0%BF%D0%BE+%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%83+Project+CRUD+A+%28PRJ-CRUD-A%29"
+    ) in details["whatsapp_deep_link"]
     assert details["call_deep_link"] == "tel:+972501234567"
     assert isinstance(details["doors"], list)
     assert isinstance(details["issues_open"], list)

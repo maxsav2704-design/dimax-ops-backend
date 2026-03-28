@@ -27,6 +27,7 @@ from app.modules.projects.infrastructure.models import ProjectImportRunORM
 from app.shared.application.navigation import (
     build_call_url,
     build_project_address,
+    format_coordinate,
     build_waze_url,
     build_whatsapp_url,
     resolve_locale,
@@ -1372,6 +1373,8 @@ class ProjectAdminService:
             issues = [i for i in issues if i.door_id in allowed_door_ids]
 
         waze_deep_link, whatsapp_deep_link, call_deep_link = _project_action_links(project, locale=locale)
+        address_lat = format_coordinate(getattr(project, "address_lat", None))
+        address_lng = format_coordinate(getattr(project, "address_lng", None))
 
         return {
             "id": project.id,
@@ -1383,8 +1386,8 @@ class ProjectAdminService:
                 "building": getattr(project, "address_building", None),
                 "city": getattr(project, "address_city", None),
                 "entrance": getattr(project, "address_entrance", None),
-                "lat": getattr(project, "address_lat", None),
-                "lng": getattr(project, "address_lng", None),
+                "lat": address_lat,
+                "lng": address_lng,
                 "waze_url": getattr(project, "address_waze_url", None),
                 "waze_deep_link": waze_deep_link,
             },
@@ -1413,8 +1416,8 @@ class ProjectAdminService:
             "address_building": getattr(project, "address_building", None),
             "address_city": getattr(project, "address_city", None),
             "address_entrance": getattr(project, "address_entrance", None),
-            "address_lat": getattr(project, "address_lat", None),
-            "address_lng": getattr(project, "address_lng", None),
+            "address_lat": address_lat,
+            "address_lng": address_lng,
             "address_waze_url": getattr(project, "address_waze_url", None),
             "waze_deep_link": waze_deep_link,
             "whatsapp_deep_link": whatsapp_deep_link,
