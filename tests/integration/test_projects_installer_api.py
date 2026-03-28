@@ -226,6 +226,7 @@ def test_installer_project_details_returns_scoped_data(
     project.developer_company = "Builder Ltd"
     project.contact_name = "Yael Cohen"
     project.contact_phone = "+972501234567"
+    project.developer_phone_alt = "+972502224466"
     project.developer_whatsapp = "+972509876543"
     project.developer_notes = "Gate code 7788"
     db_session.add(project)
@@ -335,6 +336,8 @@ def test_installer_project_details_returns_scoped_data(
             "call_url",
             "contact_name",
             "contact_phone",
+            "developer_phone_alt",
+            "developer_whatsapp",
             "developer_company",
             "developer_notes",
             "status",
@@ -356,8 +359,11 @@ def test_installer_project_details_returns_scoped_data(
     assert body["call_url"] == "tel:+972501234567"
     assert body["contact_name"] == "Yael Cohen"
     assert body["contact_phone"] == "+972501234567"
+    assert body["developer_phone_alt"] == "+972502224466"
+    assert body["developer_whatsapp"] == "+972509876543"
     assert body["developer_company"] == "Builder Ltd"
     assert body["developer_notes"] == "Gate code 7788"
+    assert "contact_email" not in body
 
     doors = body["doors"]
     assert [d["unit_label"] for d in doors] == ["A-01", "A-02"]

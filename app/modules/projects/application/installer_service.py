@@ -141,6 +141,8 @@ class ProjectInstallerService:
             "call_url": build_call_url(phone=getattr(project, "contact_phone", None)),
             "contact_name": getattr(project, "contact_name", None),
             "contact_phone": getattr(project, "contact_phone", None),
+            "developer_phone_alt": getattr(project, "developer_phone_alt", None),
+            "developer_whatsapp": getattr(project, "developer_whatsapp", None),
             "developer_company": getattr(project, "developer_company", None),
             "developer_notes": getattr(project, "developer_notes", None),
             "status": _status_value(project.status),

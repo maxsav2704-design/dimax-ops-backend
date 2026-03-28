@@ -93,6 +93,8 @@ class InstallerProjectDetailsResponse(BaseModel):
     call_url: str | None = None
     contact_name: str | None = None
     contact_phone: str | None = None
+    developer_phone_alt: str | None = None
+    developer_whatsapp: str | None = None
     developer_company: str | None = None
     developer_notes: str | None = None
     status: str
