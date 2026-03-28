@@ -370,14 +370,39 @@ class IssueDTO(BaseModel):
     details: str | None
 
 
+class ProjectAddressDetailsDTO(BaseModel):
+    street: str | None = None
+    building: str | None = None
+    city: str | None = None
+    entrance: str | None = None
+    lat: Decimal | None = None
+    lng: Decimal | None = None
+    waze_url: str | None = None
+    waze_deep_link: str | None = None
+
+
+class ProjectDeveloperDetailsDTO(BaseModel):
+    name: str | None = None
+    contact_name: str | None = None
+    phone: str | None = None
+    phone_alt: str | None = None
+    whatsapp: str | None = None
+    email: str | None = None
+    notes: str | None = None
+    whatsapp_deep_link: str | None = None
+    call_deep_link: str | None = None
+
+
 class ProjectDetailsResponse(BaseModel):
     id: UUID
     name: str
     code: str | None = None
     address: str
+    address_details: ProjectAddressDetailsDTO | None = None
     planned_start_date: date | None = None
     planned_end_date: date | None = None
     status: str
+    developer: ProjectDeveloperDetailsDTO | None = None
     developer_company: str | None
     contact_name: str | None
     contact_phone: str | None

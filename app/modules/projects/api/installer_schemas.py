@@ -84,13 +84,37 @@ class InstallerIssueDTO(BaseModel):
     details: str | None
 
 
+class InstallerProjectAddressDetailsDTO(BaseModel):
+    street: str | None = None
+    building: str | None = None
+    city: str | None = None
+    entrance: str | None = None
+    lat: Decimal | None = None
+    lng: Decimal | None = None
+    waze_url: str | None = None
+    waze_deep_link: str | None = None
+
+
+class InstallerProjectDeveloperDetailsDTO(BaseModel):
+    name: str | None = None
+    contact_name: str | None = None
+    phone: str | None = None
+    phone_alt: str | None = None
+    whatsapp: str | None = None
+    notes: str | None = None
+    whatsapp_deep_link: str | None = None
+    call_deep_link: str | None = None
+
+
 class InstallerProjectDetailsResponse(BaseModel):
     id: UUID
     name: str
     address: str | None
+    address_details: InstallerProjectAddressDetailsDTO | None = None
     waze_url: str | None
     whatsapp_url: str | None = None
     call_url: str | None = None
+    developer: InstallerProjectDeveloperDetailsDTO | None = None
     contact_name: str | None = None
     contact_phone: str | None = None
     developer_phone_alt: str | None = None

@@ -331,9 +331,11 @@ def test_installer_project_details_returns_scoped_data(
             "id",
             "name",
             "address",
+            "address_details",
             "waze_url",
             "whatsapp_url",
             "call_url",
+            "developer",
             "contact_name",
             "contact_phone",
             "developer_phone_alt",
@@ -351,6 +353,16 @@ def test_installer_project_details_returns_scoped_data(
     )
     assert body["id"] == str(project.id)
     assert body["name"] == "Installer Details Project"
+    assert body["address_details"] == {
+        "street": "Harbor",
+        "building": "11",
+        "city": "Ashdod",
+        "entrance": "A",
+        "lat": "31.801",
+        "lng": "34.643",
+        "waze_url": "https://www.waze.com/ul?q=Manual+Installer+Link",
+        "waze_deep_link": "https://waze.com/ul?ll=31.801,34.643&navigate=yes",
+    }
     assert body["waze_url"] is not None
     assert body["waze_url"] == "https://waze.com/ul?ll=31.801,34.643&navigate=yes"
     assert body["whatsapp_url"] is not None
@@ -361,6 +373,16 @@ def test_installer_project_details_returns_scoped_data(
     assert body["contact_phone"] == "+972501234567"
     assert body["developer_phone_alt"] == "+972502224466"
     assert body["developer_whatsapp"] == "+972509876543"
+    assert body["developer"] == {
+        "name": "Builder Ltd",
+        "contact_name": "Yael Cohen",
+        "phone": "+972501234567",
+        "phone_alt": "+972502224466",
+        "whatsapp": "+972509876543",
+        "notes": "Gate code 7788",
+        "whatsapp_deep_link": body["whatsapp_url"],
+        "call_deep_link": "tel:+972501234567",
+    }
     assert body["developer_company"] == "Builder Ltd"
     assert body["developer_notes"] == "Gate code 7788"
     assert "contact_email" not in body

@@ -69,9 +69,30 @@ def test_projects_crud_and_details_flow(client_admin_real_uow):
     assert details["developer_whatsapp"] == "+972505551234"
     assert details["developer_notes"] == "Gate code 7788"
     assert details["address"] == "Main street, 1, Ashdod, A"
+    assert details["address_details"] == {
+        "street": "Main street",
+        "building": "1",
+        "city": "Ashdod",
+        "entrance": "A",
+        "lat": "31.801",
+        "lng": "34.643",
+        "waze_url": "https://www.waze.com/ul?q=Manual+Override",
+        "waze_deep_link": "https://waze.com/ul?ll=31.801,34.643&navigate=yes",
+    }
     assert details["address_street"] == "Main street"
     assert details["address_city"] == "Ashdod"
     assert details["waze_deep_link"] == "https://waze.com/ul?ll=31.801,34.643&navigate=yes"
+    assert details["developer"] == {
+        "name": "Builder Ltd",
+        "contact_name": "Yael Cohen",
+        "phone": "+972501234567",
+        "phone_alt": "+972501239999",
+        "whatsapp": "+972505551234",
+        "email": "yael@example.com",
+        "notes": "Gate code 7788",
+        "whatsapp_deep_link": details["whatsapp_deep_link"],
+        "call_deep_link": "tel:+972501234567",
+    }
     assert details["whatsapp_deep_link"] is not None
     assert "Добрый+день%2C+по+проекту+Project+CRUD+A+%28PRJ-CRUD-A%29" in details["whatsapp_deep_link"]
     assert details["call_deep_link"] == "tel:+972501234567"
