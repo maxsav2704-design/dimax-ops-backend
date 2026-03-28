@@ -67,6 +67,21 @@ class ProjectCreateResponse(BaseModel):
     id: UUID
 
 
+class ProjectAddressSuggestionDTO(BaseModel):
+    key: str
+    label: str
+    street: str
+    building: str
+    city: str
+    entrance: str
+    lat: str
+    lng: str
+
+
+class ProjectAddressSuggestionsResponse(BaseModel):
+    items: list[ProjectAddressSuggestionDTO]
+
+
 class DoorImportRow(BaseModel):
     door_type_id: UUID
     unit_label: str = Field(min_length=1, max_length=120)

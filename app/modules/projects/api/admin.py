@@ -16,6 +16,7 @@ from app.modules.projects.api.schemas import (
     ImportDoorsResponse,
     ImportDoorsBody,
     OkResponse,
+    ProjectAddressSuggestionsResponse,
     ProjectCreateResponse,
     ProjectCreateBody,
     ProjectDetailsResponse,
@@ -54,6 +55,15 @@ def list_projects(
             limit=limit,
             offset=offset,
         )
+
+
+@router.get("/address-suggestions", response_model=ProjectAddressSuggestionsResponse)
+def list_project_address_suggestions(
+    q: str = Query(min_length=3),
+    limit: int = Query(default=5, ge=1, le=10),
+    user: CurrentUser = Depends(require_admin),
+):
+    return ProjectAdminService.address_suggestions(company_id=user.company_id, q=q, limit=limit)
 
 
 @router.post("", response_model=ProjectCreateResponse)

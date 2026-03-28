@@ -474,6 +474,89 @@ def _first_error_from_payload(payload: dict | None) -> str | None:
 
 class ProjectAdminService:
     @staticmethod
+    def address_suggestions(*, company_id: uuid.UUID, q: str, limit: int) -> dict:
+        del company_id
+        value = str(q).strip()
+        if len(value) < 3:
+            return {"items": []}
+
+        city_catalog = [
+            {"lat": "31.8014", "lng": "34.6435", "aliases": ["ashdod", "אשדוד", "ашдод"]},
+            {"lat": "31.2518", "lng": "34.7915", "aliases": ["ashkelon", "אשקלון", "ашкелон"]},
+            {"lat": "31.7683", "lng": "35.2137", "aliases": ["jerusalem", "ירושלים", "иерусалим"]},
+            {"lat": "32.0853", "lng": "34.7818", "aliases": ["tel aviv", "tel-aviv", "תל אביב", "тель авив"]},
+            {"lat": "32.7940", "lng": "34.9896", "aliases": ["haifa", "חיפה", "хайфа"]},
+            {"lat": "31.9980", "lng": "34.7320", "aliases": ["rishon lezion", "ראשון לציון", "ришон лецион"]},
+            {"lat": "32.3215", "lng": "34.8532", "aliases": ["netanya", "נתניה", "нетания"]},
+            {"lat": "31.2520", "lng": "34.7913", "aliases": ["beer sheva", "be'er sheva", "באר שבע", "беэр шева"]},
+        ]
+
+        def lookup_city_coords(city: str) -> tuple[str, str]:
+            normalized = city.strip().lower()
+            for item in city_catalog:
+                if any(alias in normalized for alias in item["aliases"]):
+                    return item["lat"], item["lng"]
+            return "", ""
+
+        suggestions: list[dict] = []
+        seen: set[str] = set()
+
+        def push(street: str, building: str, city: str, entrance: str) -> None:
+            street = street.strip()
+            building = building.strip()
+            city = city.strip()
+            entrance = entrance.strip()
+            if not street and not city:
+                return
+            label = ", ".join(part for part in [street, building, city, entrance] if part)
+            if not label:
+                return
+            key = label.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            lat, lng = lookup_city_coords(city)
+            suggestions.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "street": street,
+                    "building": building,
+                    "city": city,
+                    "entrance": entrance,
+                    "lat": lat,
+                    "lng": lng,
+                }
+            )
+
+        parts = [part.strip() for part in value.split(",")]
+        if len(parts) >= 3:
+            push(parts[0], parts[1], parts[2], parts[3] if len(parts) > 3 else "")
+
+        import re
+
+        match = re.match(
+            r"^\s*([^,\d]+?)\s+(\d+[A-Za-zА-Яа-я]?)\s*[,\-]?\s*([^,\d]+?)(?:\s*[,\-]?\s*([A-Za-zА-Яа-я0-9]+))?\s*$",
+            value,
+            re.IGNORECASE,
+        )
+        if match:
+            street, building, city, entrance = match.groups()
+            push(street or "", building or "", city or "", entrance or "")
+
+        normalized = value.lower()
+        for city_item in city_catalog:
+            for alias in city_item["aliases"]:
+                if alias in normalized:
+                    city_label = alias.title() if alias.isascii() else alias
+                    push(value, "", city_label, "")
+                    break
+            if len(suggestions) >= limit:
+                break
+
+        return {"items": suggestions[:limit]}
+
+    @staticmethod
     def list_import_mapping_profiles(*, company_id: uuid.UUID) -> dict:
         del company_id
         items = [

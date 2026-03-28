@@ -115,6 +115,23 @@ def test_projects_crud_and_details_flow(client_admin_real_uow):
     assert deleted_details_resp.json()["error"]["code"] == "NOT_FOUND"
 
 
+def test_projects_address_suggestions(client_admin_real_uow):
+    resp = client_admin_real_uow.get(
+        "/api/v1/admin/projects/address-suggestions",
+        params={"q": "Herzl, 14, Ashdod, A"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["items"]
+    item = body["items"][0]
+    assert item["street"] == "Herzl"
+    assert item["building"] == "14"
+    assert item["city"] == "Ashdod"
+    assert item["entrance"] == "A"
+    assert item["lat"]
+    assert item["lng"]
+
+
 def test_projects_list_supports_q_status_and_pagination(
     client_admin_real_uow, db_session, company_id
 ):
