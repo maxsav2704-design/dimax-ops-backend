@@ -8,7 +8,8 @@ from pydantic import BaseModel
 class ApiErrorDTO(BaseModel):
     code: str
     message: str
-    details: Any | None = None
+    field: str | None = None
+    meta: Any | None = None
 
 
 class ApiErrorResponseDTO(BaseModel):

@@ -28,14 +28,28 @@ class RefreshTokenRepository:
             .one_or_none()
         )
 
+    def get_by_jti(
+        self, *, company_id: uuid.UUID, jti: str
+    ) -> RefreshTokenORM | None:
+        return (
+            self.session.query(RefreshTokenORM)
+            .filter(
+                RefreshTokenORM.company_id == company_id,
+                RefreshTokenORM.jti == jti,
+            )
+            .one_or_none()
+        )
+
     def revoke(
         self,
         token: RefreshTokenORM,
         *,
         revoked_at: datetime,
+        revoke_reason: str | None = None,
         replaced_by_jti: str | None = None,
     ) -> None:
         token.revoked_at = revoked_at
+        token.revoke_reason = revoke_reason
         token.replaced_by_jti = replaced_by_jti
         self.session.add(token)
 
@@ -45,6 +59,7 @@ class RefreshTokenRepository:
         company_id: uuid.UUID,
         user_id: uuid.UUID,
         revoked_at: datetime,
+        revoke_reason: str | None = None,
     ) -> int:
         q = self.session.query(RefreshTokenORM).filter(
             RefreshTokenORM.company_id == company_id,
@@ -55,6 +70,7 @@ class RefreshTokenRepository:
         q.update(
             {
                 RefreshTokenORM.revoked_at: revoked_at,
+                RefreshTokenORM.revoke_reason: revoke_reason,
                 RefreshTokenORM.replaced_by_jti: None,
             },
             synchronize_session=False,

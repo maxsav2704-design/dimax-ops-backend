@@ -25,6 +25,10 @@ def test_login_success_returns_token_pair(client, company_id, make_user):
     assert isinstance(body["access_token"], str) and body["access_token"]
     assert isinstance(body["refresh_token"], str) and body["refresh_token"]
     assert body["token_type"] == "bearer"
+    assert body["user"]["id"] == str(user.id)
+    assert body["user"]["role"] == "ADMIN"
+    assert body["user"]["language"] == "en"
+    assert body["user"]["display_name"] == user.full_name
 
 
 def test_auth_me_returns_current_user_profile(client, company_id, make_user):
@@ -49,11 +53,13 @@ def test_auth_me_returns_current_user_profile(client, company_id, make_user):
     assert body["company_id"] == str(company_id)
     assert body["email"] == user.email
     assert body["full_name"] == user.full_name
+    assert body["display_name"] == user.full_name
+    assert body["language"] == "en"
     assert body["role"] == "INSTALLER"
     assert body["is_active"] is True
 
 
-def test_login_invalid_password_returns_403(client, company_id, make_user):
+def test_login_invalid_password_returns_401(client, company_id, make_user):
     user = make_user(role=UserRole.ADMIN, password="CorrectPass123")
 
     resp = client.post(
@@ -64,8 +70,8 @@ def test_login_invalid_password_returns_403(client, company_id, make_user):
             "password": "wrong-password",
         },
     )
-    assert resp.status_code == 403, resp.text
-    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["error"]["code"] == "INVALID_CREDENTIALS"
 
 
 def test_login_inactive_user_returns_404(client, company_id, make_user):
@@ -105,13 +111,14 @@ def test_refresh_rotates_token_and_revokes_old(client, db_session, company_id, m
     assert refresh_resp.status_code == 200, refresh_resp.text
     rotated = refresh_resp.json()
     assert rotated["refresh_token"] != original["refresh_token"]
+    assert rotated["user"]["id"] == str(user.id)
 
     old_refresh_again_resp = client.post(
         "/api/v1/auth/refresh",
         json={"refresh_token": original["refresh_token"]},
     )
-    assert old_refresh_again_resp.status_code == 403, old_refresh_again_resp.text
-    assert old_refresh_again_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert old_refresh_again_resp.status_code == 401, old_refresh_again_resp.text
+    assert old_refresh_again_resp.json()["error"]["code"] == "REFRESH_TOKEN_REUSE"
 
     rows = (
         db_session.query(RefreshTokenORM)
@@ -124,6 +131,8 @@ def test_refresh_rotates_token_and_revokes_old(client, db_session, company_id, m
     assert len(rows) == 2
     assert sum(1 for r in rows if r.revoked_at is not None) == 1
     assert sum(1 for r in rows if r.revoked_at is None) == 1
+    revoked = next(r for r in rows if r.revoked_at is not None)
+    assert revoked.revoke_reason == "ROTATION"
 
 
 def test_logout_refresh_revokes_token(client, company_id, make_user):
@@ -153,8 +162,8 @@ def test_logout_refresh_revokes_token(client, company_id, make_user):
         "/api/v1/auth/refresh",
         json={"refresh_token": refresh_token},
     )
-    assert refresh_again_resp.status_code == 403, refresh_again_resp.text
-    assert refresh_again_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert refresh_again_resp.status_code == 401, refresh_again_resp.text
+    assert refresh_again_resp.json()["error"]["code"] == "REFRESH_TOKEN_REUSE"
 
 
 def test_logout_all_revokes_all_active_sessions(client, company_id, make_user):
@@ -200,8 +209,42 @@ def test_logout_all_revokes_all_active_sessions(client, company_id, make_user):
         "/api/v1/auth/refresh",
         json={"refresh_token": refresh_b},
     )
-    assert refresh_a_resp.status_code == 403, refresh_a_resp.text
-    assert refresh_b_resp.status_code == 403, refresh_b_resp.text
+    assert refresh_a_resp.status_code == 401, refresh_a_resp.text
+    assert refresh_b_resp.status_code == 401, refresh_b_resp.text
+    assert refresh_a_resp.json()["error"]["code"] == "REFRESH_TOKEN_REUSE"
+    assert refresh_b_resp.json()["error"]["code"] == "REFRESH_TOKEN_REUSE"
+
+
+def test_logout_revokes_active_refresh_sessions(client, db_session, company_id, make_user):
+    password = "LogoutAccessPass123"
+    user = make_user(role=UserRole.ADMIN, password=password)
+
+    login_resp = client.post(
+        "/api/v1/auth/login",
+        json={
+            "company_id": str(company_id),
+            "email": user.email,
+            "password": password,
+        },
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    access_token = login_resp.json()["access_token"]
+    refresh_token = login_resp.json()["refresh_token"]
+
+    logout_resp = client.post(
+        "/api/v1/auth/logout",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert logout_resp.status_code == 200, logout_resp.text
+    assert logout_resp.json()["ok"] is True
+    assert logout_resp.json()["revoked_count"] >= 1
+
+    refresh_again_resp = client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert refresh_again_resp.status_code == 401, refresh_again_resp.text
+    assert refresh_again_resp.json()["error"]["code"] == "REFRESH_TOKEN_REUSE"
 
 
 def test_login_rate_limit_returns_403(client_raw, monkeypatch):

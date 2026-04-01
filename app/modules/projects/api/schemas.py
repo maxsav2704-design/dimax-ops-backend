@@ -57,6 +57,8 @@ class ProjectListItem(BaseModel):
     code: str | None = None
     address: str
     status: str
+    lifecycle_status: str = "ACTIVE"
+    health_status: str = "NORMAL"
 
 
 class ProjectListResponse(BaseModel):
@@ -402,6 +404,8 @@ class ProjectDetailsResponse(BaseModel):
     planned_start_date: date | None = None
     planned_end_date: date | None = None
     status: str
+    lifecycle_status: str = "ACTIVE"
+    health_status: str = "NORMAL"
     developer: ProjectDeveloperDetailsDTO | None = None
     developer_company: str | None
     contact_name: str | None

@@ -13,6 +13,7 @@ from app.modules.sync.infrastructure.models import (
     InstallerSyncStateORM,
     SyncChangeLogORM,
     SyncEventORM,
+    SyncQueueItemORM,
 )
 
 
@@ -334,6 +335,30 @@ class InstallerSyncStateRepository:
         row.device_id = None
         self.session.flush()
         return row
+
+
+class InstallerSyncQueueRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def list_for_user(
+        self,
+        *,
+        company_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[SyncQueueItemORM]:
+        return (
+            self.session.query(SyncQueueItemORM)
+            .filter(
+                SyncQueueItemORM.company_id == company_id,
+                SyncQueueItemORM.user_id == user_id,
+            )
+            .order_by(
+                desc(SyncQueueItemORM.created_at),
+                desc(SyncQueueItemORM.id),
+            )
+            .all()
+        )
 
 
 class SyncChangeLogGCRepository:

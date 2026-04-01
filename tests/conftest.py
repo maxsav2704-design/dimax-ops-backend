@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import os
 import sys
 import uuid
 from collections.abc import Generator, Iterator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -157,6 +159,14 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
             {"cid": cid},
         )
         db_session.execute(
+            text("DELETE FROM completed_work WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
+            text("DELETE FROM door_status_history WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
             text("DELETE FROM project_addon_facts WHERE company_id = :cid"),
             {"cid": cid},
         )
@@ -213,7 +223,7 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
             {"cid": cid},
         )
         db_session.execute(
-            text("DELETE FROM auth_refresh_tokens WHERE company_id = :cid"),
+            text("DELETE FROM refresh_sessions WHERE company_id = :cid"),
             {"cid": cid},
         )
         db_session.execute(
@@ -239,6 +249,7 @@ def admin_user(db_session: Session, company_id: uuid.UUID) -> CurrentUser:
             role=UserRole.ADMIN,
             password_hash=hash_password("secret123"),
             is_active=True,
+            status="ACTIVE",
         )
     )
     db_session.commit()
@@ -257,6 +268,7 @@ def installer_user(db_session: Session, company_id: uuid.UUID) -> CurrentUser:
             role=UserRole.INSTALLER,
             password_hash=hash_password("secret123"),
             is_active=True,
+            status="ACTIVE",
         )
     )
     db_session.commit()
@@ -394,6 +406,7 @@ def make_user(db_session: Session, company_id: uuid.UUID):
             role=role,
             password_hash=hash_password(password),
             is_active=is_active,
+            status="ACTIVE" if is_active else "INACTIVE",
         )
         db_session.add(row)
         db_session.commit()
@@ -424,3 +437,90 @@ def make_reason(db_session: Session, company_id: uuid.UUID):
         return row
 
     return _factory
+
+
+# ---------------------------------------------------------------------------
+# Fake in-memory StorageService — isolates all tests from MinIO/network.
+# Stores uploaded objects in a dict keyed by object_key.
+# Provides a file-like wrapper for get_object_stream consumers that need
+# .read(n), .close(), and .release_conn().
+# ---------------------------------------------------------------------------
+
+_FAKE_STORE: dict[str, bytes] = {}
+
+# Minimal valid PDF header so assertions like b"%PDF" in content pass.
+_MINIMAL_PDF = b"%PDF-1.4 1 0 obj<</Type/Catalog>>endobj\n%%EOF\n"
+
+
+class _FakeObjectStream:
+    """Mimics MinIO response object: .read(n), .close(), .release_conn()."""
+
+    def __init__(self, data: bytes) -> None:
+        self._buf = io.BytesIO(data)
+
+    def read(self, size: int = -1) -> bytes:
+        return self._buf.read(size)
+
+    def close(self) -> None:
+        pass
+
+    def release_conn(self) -> None:
+        pass
+
+
+def _fake_put_pdf(*, object_key: str, content: bytes) -> None:
+    _FAKE_STORE[object_key] = content
+
+
+def _fake_get_object_stream(*, bucket: str, object_key: str) -> _FakeObjectStream:
+    data = _FAKE_STORE.get(object_key, _MINIMAL_PDF)
+    return _FakeObjectStream(data)
+
+
+def _fake_get_pdf(*, object_key: str) -> bytes:
+    return _FAKE_STORE.get(object_key, _MINIMAL_PDF)
+
+
+def _fake_presign_get(*, object_key: str, expiry_seconds: int | None = None) -> str:
+    return f"http://fake-storage/presigned/{object_key}"
+
+
+@pytest.fixture(autouse=True)
+def _mock_storage_service(request):
+    """
+    Replace all StorageService network calls with in-memory fakes.
+    Runs for every test — keeps the suite deterministic without MinIO.
+    Tests requiring real MinIO should be marked @pytest.mark.minio
+    and run only with the full stack (workspace.cmd up).
+
+    Skipped for tests that explicitly test StorageService internals
+    (e.g. bucket bootstrap / caching behaviour), which supply their own
+    fake MinIO via monkeypatch and must exercise the real implementation.
+    """
+    if "test_storage_service" in request.fspath.basename:
+        yield
+        return
+
+    _FAKE_STORE.clear()
+    from app.integrations.storage.storage_service import StorageService
+    StorageService._reset_bucket_cache_for_tests()
+
+    with (
+        patch(
+            "app.integrations.storage.storage_service.StorageService.put_pdf",
+            staticmethod(_fake_put_pdf),
+        ),
+        patch(
+            "app.integrations.storage.storage_service.StorageService.get_object_stream",
+            staticmethod(_fake_get_object_stream),
+        ),
+        patch(
+            "app.integrations.storage.storage_service.StorageService.get_pdf",
+            staticmethod(_fake_get_pdf),
+        ),
+        patch(
+            "app.integrations.storage.storage_service.StorageService.presign_get",
+            staticmethod(_fake_presign_get),
+        ),
+    ):
+        yield

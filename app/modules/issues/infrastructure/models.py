@@ -34,6 +34,12 @@ class IssueORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
 
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     details: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

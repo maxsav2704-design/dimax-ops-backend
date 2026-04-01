@@ -35,6 +35,7 @@ from app.modules.addons.infrastructure.repositories import (
 )
 from app.modules.sync.infrastructure.repositories import (
     InstallerSyncStateRepository,
+    InstallerSyncQueueRepository,
     SyncChangeLogGCRepository,
     SyncChangeLogRepository,
     SyncEventRepository,
@@ -75,6 +76,7 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
         self.sync_events = SyncEventRepository(self.session)
         self.sync_change_log = SyncChangeLogRepository(self.session)
         self.sync_state = InstallerSyncStateRepository(self.session)
+        self.sync_queue = InstallerSyncQueueRepository(self.session)
         self.sync_change_gc = SyncChangeLogGCRepository(self.session)
         self.door_types = DoorTypeRepository(self.session)
         self.reasons = ReasonRepository(self.session)

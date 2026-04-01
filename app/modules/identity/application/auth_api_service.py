@@ -4,6 +4,8 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import text
+
 from app.core.security.jwt import (
     create_access_token,
     create_refresh_token,
@@ -12,7 +14,12 @@ from app.core.security.jwt import (
 from app.core.security.password import verify_password
 from app.modules.identity.api.schemas import TokenPair
 from app.modules.identity.infrastructure.refresh_tokens_models import RefreshTokenORM
-from app.shared.domain.errors import Forbidden, NotFound
+from app.shared.domain.errors import (
+    Forbidden,
+    InvalidCredentials,
+    NotFound,
+    RefreshTokenReuse,
+)
 from app.shared.infrastructure.observability import get_logger, log_event
 
 
@@ -33,6 +40,34 @@ def _uuid(val: str) -> UUID:
 
 class AuthApiService:
     @staticmethod
+    def _profile_payload(uow, *, company_id: UUID, user_id: UUID, full_name: str) -> dict:
+        row = (
+            uow.session.execute(
+                text(
+                    """
+                    SELECT display_name, language
+                    FROM installer_profiles
+                    WHERE company_id = :company_id AND user_id = :user_id
+                    LIMIT 1
+                    """
+                ),
+                {"company_id": company_id, "user_id": user_id},
+            )
+            .mappings()
+            .first()
+        )
+
+        display_name = (
+            str((row or {}).get("display_name") or "").strip() if row else ""
+        ) or full_name
+        language = (
+            str((row or {}).get("language") or "").strip().lower() if row else ""
+        ) or "en"
+        if language not in {"ru", "en", "he"}:
+            language = "en"
+        return {"display_name": display_name, "language": language}
+
+    @staticmethod
     def get_me(
         uow,
         *,
@@ -42,11 +77,19 @@ class AuthApiService:
         user = uow.users.get_by_id(company_id=company_id, user_id=user_id)
         if not user:
             raise NotFound("User not found")
+        profile = AuthApiService._profile_payload(
+            uow,
+            company_id=user.company_id,
+            user_id=user.id,
+            full_name=user.full_name,
+        )
         return {
             "id": user.id,
             "company_id": user.company_id,
             "email": user.email,
             "full_name": user.full_name,
+            "display_name": profile["display_name"],
+            "language": profile["language"],
             "role": user.role,
             "is_active": user.is_active,
         }
@@ -91,7 +134,14 @@ class AuthApiService:
                 email=normalized_email,
                 reason="invalid_credentials",
             )
-            raise Forbidden("Invalid credentials")
+            raise InvalidCredentials("Invalid credentials")
+
+        profile = AuthApiService._profile_payload(
+            uow,
+            company_id=user.company_id,
+            user_id=user.id,
+            full_name=user.full_name,
+        )
 
         access, _ = create_access_token(
             user_id=user.id,
@@ -110,6 +160,7 @@ class AuthApiService:
                 user_id=user.id,
                 jti=refresh_payload["jti"],
                 token_hash=_hash_token(refresh),
+                device_id=None,
                 expires_at=datetime.fromtimestamp(
                     refresh_payload["exp"],
                     tz=timezone.utc,
@@ -126,7 +177,16 @@ class AuthApiService:
             role=user.role,
         )
 
-        return TokenPair(access_token=access, refresh_token=refresh)
+        return TokenPair(
+            access_token=access,
+            refresh_token=refresh,
+            user={
+                "id": user.id,
+                "role": user.role,
+                "language": profile["language"],
+                "display_name": profile["display_name"],
+            },
+        )
 
     @staticmethod
     def refresh_tokens(
@@ -140,7 +200,7 @@ class AuthApiService:
         user_id = payload["sub"]
         old_jti = payload["jti"]
 
-        db_token = uow.refresh_tokens.get_active_by_jti(
+        db_token = uow.refresh_tokens.get_by_jti(
             company_id=_uuid(company_id),
             jti=old_jti,
         )
@@ -155,7 +215,25 @@ class AuthApiService:
             )
             raise Forbidden("Refresh token revoked or not found")
 
-        if db_token.token_hash != _hash_token(refresh_token):
+        token_hash = _hash_token(refresh_token)
+        if db_token.revoked_at is not None:
+            log_event(
+                logger,
+                "auth.refresh.failed",
+                level="warning",
+                company_id=company_id,
+                user_id=user_id,
+                reason="refresh_reuse",
+            )
+            uow.refresh_tokens.revoke_all_active_by_user(
+                company_id=_uuid(company_id),
+                user_id=_uuid(user_id),
+                revoked_at=utcnow(),
+                revoke_reason="REPLAY_DETECTED",
+            )
+            raise RefreshTokenReuse("Refresh token reuse detected")
+
+        if db_token.token_hash != token_hash:
             log_event(
                 logger,
                 "auth.refresh.failed",
@@ -164,7 +242,13 @@ class AuthApiService:
                 user_id=user_id,
                 reason="refresh_mismatch",
             )
-            raise Forbidden("Refresh token mismatch")
+            uow.refresh_tokens.revoke_all_active_by_user(
+                company_id=_uuid(company_id),
+                user_id=_uuid(user_id),
+                revoked_at=utcnow(),
+                revoke_reason="REPLAY_DETECTED",
+            )
+            raise RefreshTokenReuse("Refresh token reuse detected")
 
         access, _ = create_access_token(
             user_id=_uuid(user_id),
@@ -180,6 +264,7 @@ class AuthApiService:
         uow.refresh_tokens.revoke(
             db_token,
             revoked_at=utcnow(),
+            revoke_reason="ROTATION",
             replaced_by_jti=new_payload["jti"],
         )
         uow.refresh_tokens.add(
@@ -188,6 +273,7 @@ class AuthApiService:
                 user_id=_uuid(user_id),
                 jti=new_payload["jti"],
                 token_hash=_hash_token(new_refresh),
+                device_id=db_token.device_id,
                 expires_at=datetime.fromtimestamp(
                     new_payload["exp"],
                     tz=timezone.utc,
@@ -202,7 +288,41 @@ class AuthApiService:
             user_id=user_id,
         )
 
-        return TokenPair(access_token=access, refresh_token=new_refresh)
+        user = uow.users.get_by_id(
+            company_id=_uuid(company_id),
+            user_id=_uuid(user_id),
+        )
+        profile = AuthApiService._profile_payload(
+            uow,
+            company_id=_uuid(company_id),
+            user_id=_uuid(user_id),
+            full_name=user.full_name if user else "",
+        )
+        return TokenPair(
+            access_token=access,
+            refresh_token=new_refresh,
+            user={
+                "id": _uuid(user_id),
+                "role": payload["role"],
+                "language": profile["language"],
+                "display_name": profile["display_name"],
+            },
+        )
+
+    @staticmethod
+    def logout(
+        uow,
+        *,
+        company_id: UUID,
+        user_id: UUID,
+    ) -> dict:
+        revoked_count = uow.refresh_tokens.revoke_all_active_by_user(
+            company_id=company_id,
+            user_id=user_id,
+            revoked_at=utcnow(),
+            revoke_reason="LOGOUT",
+        )
+        return {"ok": True, "user_id": user_id, "revoked_count": revoked_count}
 
     @staticmethod
     def logout_refresh(
@@ -238,7 +358,11 @@ class AuthApiService:
             )
             raise Forbidden("Refresh token mismatch")
 
-        uow.refresh_tokens.revoke(db_token, revoked_at=utcnow())
+        uow.refresh_tokens.revoke(
+            db_token,
+            revoked_at=utcnow(),
+            revoke_reason="LOGOUT",
+        )
         log_event(
             logger,
             "auth.logout_refresh.succeeded",
@@ -258,6 +382,7 @@ class AuthApiService:
             company_id=company_id,
             user_id=user_id,
             revoked_at=utcnow(),
+            revoke_reason="LOGOUT",
         )
         log_event(
             logger,

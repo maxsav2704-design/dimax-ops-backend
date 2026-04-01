@@ -42,7 +42,7 @@ def _cleanup_company(db_session, company_id: str) -> None:
         {"cid": company_id},
     )
     db_session.execute(
-        text("DELETE FROM auth_refresh_tokens WHERE company_id = :cid"),
+        text("DELETE FROM refresh_sessions WHERE company_id = :cid"),
         {"cid": company_id},
     )
     db_session.execute(

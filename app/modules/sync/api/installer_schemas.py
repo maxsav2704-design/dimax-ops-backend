@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.api.v1.pagination import PaginationDTO
+
 
 class SyncEventIn(BaseModel):
     client_event_id: str = Field(min_length=8, max_length=80)
@@ -64,3 +66,21 @@ class InstallerSyncResponse(BaseModel):
     acks: list[SyncAckItem]
 
     changes: list[SyncChangeDTO]
+
+
+class InstallerSyncQueueItemDTO(BaseModel):
+    id: UUID
+    entity_type: str
+    entity_id: UUID
+    operation_type: str
+    payload: dict[str, Any]
+    base_version: int
+    status: str
+    conflict_code: str | None = None
+    created_at: datetime
+    synced_at: datetime | None = None
+
+
+class InstallerSyncQueueListResponse(BaseModel):
+    items: list[InstallerSyncQueueItemDTO]
+    pagination: PaginationDTO

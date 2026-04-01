@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
 from app.core.security.jwt import decode_and_validate_access
-from app.shared.domain.errors import Forbidden
+from app.shared.domain.errors import Forbidden, ForbiddenScope
 from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
 
 bearer = HTTPBearer(auto_error=True)
@@ -51,8 +51,8 @@ def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
 def require_installer(
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
-    if user.role not in ("INSTALLER", "ADMIN"):
-        raise Forbidden("Installer only")
+    if user.role != "INSTALLER":
+        raise ForbiddenScope("Installer role required")
     return user
 
 

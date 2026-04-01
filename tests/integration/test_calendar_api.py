@@ -230,6 +230,7 @@ def test_installer_calendar_lists_only_assigned_events(
             "ends_at",
             "location",
             "waze_url",
+            "waze_deep_link",
             "description",
             "project_id",
             "installer_ids",
@@ -237,6 +238,7 @@ def test_installer_calendar_lists_only_assigned_events(
     )
     assert items[0]["id"] == my_event_id
     assert "waze_url" in items[0]
+    assert "waze_deep_link" in items[0]
 
 
 def test_calendar_event_uses_project_address_for_waze_navigation(
@@ -274,6 +276,7 @@ def test_calendar_event_uses_project_address_for_waze_navigation(
     assert len(items) == 1
     assert items[0]["location"] == project.address
     assert items[0]["waze_url"] is not None
+    assert items[0]["waze_deep_link"] is not None
     assert "navigate=yes" in items[0]["waze_url"]
 
 

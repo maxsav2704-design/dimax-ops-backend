@@ -628,6 +628,8 @@ class ProjectAdminService:
                     "code": getattr(p, "code", None),
                     "address": _project_address(p),
                     "status": _status_value(p.status),
+                    "lifecycle_status": p.lifecycle_status,
+                    "health_status": p.health_status,
                 }
                 for p in items
             ]
@@ -1394,6 +1396,8 @@ class ProjectAdminService:
             "planned_start_date": getattr(project, "planned_start_date", None),
             "planned_end_date": getattr(project, "planned_end_date", None),
             "status": _status_value(project.status),
+            "lifecycle_status": project.lifecycle_status,
+            "health_status": project.health_status,
             "developer": {
                 "name": project.developer_company,
                 "contact_name": project.contact_name,

@@ -55,6 +55,7 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
 
     # "квартира/номер" — универсальная метка (apt 12, stair A-3, storage 7 и т.д.)
     unit_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    door_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
     order_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
     house_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     floor_label: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -97,6 +98,13 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
 
     # "замок" на уровне домена: как только INSTALLED → true (и дальше только admin override)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_critical: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    version: Mapped[int] = mapped_column(default=0, nullable=False)
+    surcharge_pct: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2),
+        default=Decimal("100.00"),
+        nullable=False,
+    )
 
     # Связи
     project: Mapped["ProjectORM"] = relationship(back_populates="doors")

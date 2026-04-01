@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from app.shared.domain.errors import Forbidden, NotFound
 from app.shared.application.navigation import (
@@ -11,6 +10,9 @@ from app.shared.application.navigation import (
     resolve_locale,
     build_waze_url,
     build_whatsapp_url,
+)
+from app.modules.projects.application.installer_serializers import (
+    InstallerProjectSerializer,
 )
 
 
@@ -127,76 +129,52 @@ class ProjectInstallerService:
         address_lng = format_coordinate(getattr(project, "address_lng", None))
         whatsapp_phone = getattr(project, "developer_whatsapp", None) or getattr(project, "contact_phone", None)
 
-        return {
-            "id": project.id,
-            "name": project.name,
-            "address": project_address,
-            "address_details": {
-                "street": getattr(project, "address_street", None),
-                "building": getattr(project, "address_building", None),
-                "city": getattr(project, "address_city", None),
-                "entrance": getattr(project, "address_entrance", None),
-                "lat": address_lat,
-                "lng": address_lng,
-                "waze_url": getattr(project, "address_waze_url", None),
-                "waze_deep_link": build_waze_url(
-                    address=project_address,
-                    lat=address_lat,
-                    lng=address_lng,
-                    manual_url=getattr(project, "address_waze_url", None),
-                ),
-            },
-            "waze_url": build_waze_url(
+        address_details = {
+            "street": getattr(project, "address_street", None),
+            "building": getattr(project, "address_building", None),
+            "city": getattr(project, "address_city", None),
+            "entrance": getattr(project, "address_entrance", None),
+            "lat": address_lat,
+            "lng": address_lng,
+            "waze_url": getattr(project, "address_waze_url", None),
+            "waze_deep_link": build_waze_url(
                 address=project_address,
                 lat=address_lat,
                 lng=address_lng,
                 manual_url=getattr(project, "address_waze_url", None),
             ),
-            "whatsapp_url": build_whatsapp_url(
-                phone=whatsapp_phone,
-                message=ProjectInstallerService._project_whatsapp_message(project, locale=locale),
-            ),
-            "call_url": build_call_url(phone=getattr(project, "contact_phone", None)),
-            "developer": {
+        }
+        waze_url = build_waze_url(
+            address=project_address,
+            lat=address_lat,
+            lng=address_lng,
+            manual_url=getattr(project, "address_waze_url", None),
+        )
+        whatsapp_url = build_whatsapp_url(
+            phone=whatsapp_phone,
+            message=ProjectInstallerService._project_whatsapp_message(project, locale=locale),
+        )
+        call_url = build_call_url(phone=getattr(project, "contact_phone", None))
+
+        return InstallerProjectSerializer.serialize(
+            project=project,
+            address=project_address,
+            address_details=address_details,
+            waze_url=waze_url,
+            whatsapp_url=whatsapp_url,
+            call_url=call_url,
+            developer={
                 "name": getattr(project, "developer_company", None),
                 "contact_name": getattr(project, "contact_name", None),
                 "phone": getattr(project, "contact_phone", None),
                 "phone_alt": getattr(project, "developer_phone_alt", None),
                 "whatsapp": getattr(project, "developer_whatsapp", None),
                 "notes": getattr(project, "developer_notes", None),
-                "whatsapp_deep_link": build_whatsapp_url(
-                    phone=whatsapp_phone,
-                    message=ProjectInstallerService._project_whatsapp_message(project, locale=locale),
-                ),
-                "call_deep_link": build_call_url(phone=getattr(project, "contact_phone", None)),
+                "whatsapp_deep_link": whatsapp_url,
+                "call_deep_link": call_url,
             },
-            "contact_name": getattr(project, "contact_name", None),
-            "contact_phone": getattr(project, "contact_phone", None),
-            "developer_phone_alt": getattr(project, "developer_phone_alt", None),
-            "developer_whatsapp": getattr(project, "developer_whatsapp", None),
-            "developer_company": getattr(project, "developer_company", None),
-            "developer_notes": getattr(project, "developer_notes", None),
-            "status": _status_value(project.status),
-            "doors": [
-                {
-                    "id": d.id,
-                    "unit_label": d.unit_label,
-                    "door_type_id": d.door_type_id,
-                    "our_price": d.our_price,
-                    "order_number": getattr(d, "order_number", None),
-                    "house_number": getattr(d, "house_number", None),
-                    "floor_label": getattr(d, "floor_label", None),
-                    "apartment_number": getattr(d, "apartment_number", None),
-                    "location_code": getattr(d, "location_code", None),
-                    "door_marking": getattr(d, "door_marking", None),
-                    "status": _status_value(d.status),
-                    "reason_id": d.reason_id,
-                    "comment": d.comment,
-                    "is_locked": d.is_locked,
-                }
-                for d in my_doors
-            ],
-            "issues_open": [
+            doors=my_doors,
+            issues_open=[
                 {
                     "id": i.id,
                     "door_id": i.door_id,
@@ -206,36 +184,15 @@ class ProjectInstallerService:
                 }
                 for i in issues
             ],
-            "door_types_catalog": [
+            door_types_catalog=[
                 {"id": x.id, "code": x.code, "name": x.name} for x in door_types
             ],
-            "reasons_catalog": [
+            reasons_catalog=[
                 {"id": x.id, "code": x.code, "name": x.name} for x in reasons
             ],
-            "addons": {
-                "types": [
-                    {"id": t.id, "name": t.name, "unit": t.unit} for t in addon_types
-                ],
-                "plan": [
-                    {
-                        "addon_type_id": x.addon_type_id,
-                        "qty_planned": x.qty_planned,
-                        "client_price": x.client_price,
-                        "installer_price": x.installer_price,
-                    }
-                    for x in addon_plan
-                ],
-                "facts": [
-                    {
-                        "id": f.id,
-                        "addon_type_id": f.addon_type_id,
-                        "qty_done": f.qty_done,
-                        "done_at": f.done_at,
-                        "comment": f.comment,
-                        "source": _status_value(f.source),
-                    }
-                    for f in addon_facts
-                ],
-            },
-            "server_time": datetime.now(timezone.utc),
-        }
+            addon_types=[
+                {"id": t.id, "name": t.name, "unit": t.unit} for t in addon_types
+            ],
+            addon_plan=addon_plan,
+            addon_facts=addon_facts,
+        )

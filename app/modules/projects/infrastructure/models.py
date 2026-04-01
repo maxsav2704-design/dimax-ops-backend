@@ -3,7 +3,15 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from sqlalchemy import Date, Enum, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Date,
+    Enum,
+    ForeignKey,
+    Numeric,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -51,6 +59,18 @@ class ProjectORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin, SoftDel
         nullable=False,
         default=ProjectStatus.OK,
         index=True,
+    )
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="ACTIVE",
+        server_default=text("'ACTIVE'"),
+    )
+    health_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="NORMAL",
+        server_default=text("'NORMAL'"),
     )
 
     # Связи

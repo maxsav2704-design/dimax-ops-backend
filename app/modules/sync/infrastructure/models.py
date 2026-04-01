@@ -100,3 +100,25 @@ class InstallerSyncStateORM(
         DateTime(timezone=True), nullable=True
     )
     last_alert_lag: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+
+
+class SyncQueueItemORM(Base, UUIDPrimaryKeyMixin, TenantMixin):
+    __tablename__ = "sync_queue_items"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    device_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    base_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    conflict_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

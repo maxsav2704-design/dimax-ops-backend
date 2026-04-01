@@ -185,7 +185,9 @@ def test_rbac_matrix_installer_endpoints(client_raw, rbac_tokens):
 
     cases = [
         ("GET", "/api/v1/installer/projects", None),
+        ("GET", "/api/v1/installer/workspace", None),
         ("GET", f"/api/v1/installer/calendar/events?starts_at={starts}&ends_at={ends}", None),
+        ("GET", "/api/v1/installer/sync-queue", None),
         (
             "POST",
             "/api/v1/installer/sync",
@@ -218,3 +220,4 @@ def test_rbac_matrix_installer_endpoints(client_raw, rbac_tokens):
             headers=_auth(rbac_tokens["admin"]),
         )
         assert admin.status_code == 403, f"{path} admin: {admin.text}"
+        assert admin.json()["error"]["code"] == "FORBIDDEN_SCOPE"

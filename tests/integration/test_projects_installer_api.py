@@ -176,6 +176,7 @@ def test_installer_projects_list_shows_only_assigned_projects(
     assert resp.status_code == 200, resp.text
 
     items = resp.json()["items"]
+    pagination = resp.json()["pagination"]
     item_ids = [row["id"] for row in items]
 
     assert str(project_a.id) in item_ids
@@ -186,6 +187,10 @@ def test_installer_projects_list_shows_only_assigned_projects(
     _assert_exact_keys(row_a, {"id", "name", "address", "status", "waze_url"})
     assert row_a["waze_url"] is not None
     assert "navigate=yes" in row_a["waze_url"]
+    assert pagination["page"] == 1
+    assert pagination["per_page"] == 25
+    assert pagination["total"] == 2
+    assert pagination["total_pages"] == 1
 
 
 def test_installer_project_details_returns_scoped_data(
@@ -395,7 +400,6 @@ def test_installer_project_details_returns_scoped_data(
             "id",
             "unit_label",
             "door_type_id",
-            "our_price",
             "order_number",
             "house_number",
             "floor_label",
@@ -428,7 +432,7 @@ def test_installer_project_details_returns_scoped_data(
     assert len(addons["plan"]) == 1
     _assert_exact_keys(
         addons["plan"][0],
-        {"addon_type_id", "qty_planned", "client_price", "installer_price"},
+        {"addon_type_id", "qty_planned"},
     )
     assert addons["plan"][0]["addon_type_id"] == str(addon_type.id)
     assert len(addons["facts"]) == 1
@@ -437,6 +441,74 @@ def test_installer_project_details_returns_scoped_data(
         {"id", "addon_type_id", "qty_done", "done_at", "comment", "source"},
     )
     assert addons["facts"][0]["id"] == str(addon_fact_my.id)
+
+
+def test_installer_project_response_has_no_financial_fields(
+    client_installer_projects,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id = client_installer_projects
+
+    door_type = make_door_type(name="Leakage Guard Door")
+    project = _make_project(
+        company_id=company_id,
+        name="Leakage Guard Project",
+        address="Leakage address",
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="L-01",
+        installer_id=installer_id,
+    )
+    db_session.add(door)
+
+    addon_type = AddonTypeORM(
+        company_id=company_id,
+        name="Seal leakage guard",
+        unit="pcs",
+        default_client_price=Decimal("30.00"),
+        default_installer_price=Decimal("12.00"),
+        is_active=True,
+        deleted_at=None,
+    )
+    db_session.add(addon_type)
+    db_session.flush()
+
+    addon_plan = ProjectAddonPlanORM(
+        company_id=company_id,
+        project_id=project.id,
+        addon_type_id=addon_type.id,
+        qty_planned=Decimal("2.00"),
+        client_price=Decimal("50.00"),
+        installer_price=Decimal("20.00"),
+    )
+    db_session.add(addon_plan)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/installer/projects/{project.id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    for row in body.get("doors", []):
+        assert "our_price" not in row
+        assert "client_price" not in row
+        assert "installer_price" not in row
+        assert "surcharge_pct" not in row
+        assert "margin" not in row
+        assert "rate_snapshot" not in row
+
+    for row in body.get("addons", {}).get("plan", []):
+        assert "client_price" not in row
+        assert "installer_price" not in row
+        assert "surcharge_pct" not in row
+        assert "margin" not in row
 
 
 def test_installer_project_details_forbidden_if_not_assigned(

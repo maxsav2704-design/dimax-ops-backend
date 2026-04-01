@@ -32,6 +32,9 @@ from app.modules.door_types.api.admin import router as admin_door_types
 from app.modules.reasons.api.admin import router as admin_reasons
 from app.modules.settings.api.admin import router as admin_settings
 from app.modules.issues.api.admin import router as admin_issues
+from app.modules.issues.api.installer import router as installer_issues
+from app.modules.earnings.api.installer import router as installer_earnings
+from app.modules.workspace.api.installer import router as installer_workspace
 from app.modules.companies.api.platform import router as platform_companies
 from app.webhooks.twilio import router as twilio_webhooks
 from app.webhooks.outbox import router as outbox_webhooks
@@ -104,4 +107,7 @@ router.include_router(admin_door_types, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_reasons, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_settings, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_issues, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(installer_issues, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(installer_earnings, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(installer_workspace, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(platform_companies, responses=SECURED_ROUTE_RESPONSES)

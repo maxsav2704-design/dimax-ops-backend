@@ -61,8 +61,16 @@ def refresh_tokens(
 
 
 @router.post("/logout", response_model=LogoutResponse)
-def logout(current: CurrentUser = Depends(get_current_user)) -> LogoutResponse:
-    return {"ok": True, "user_id": str(current.id)}
+def logout(
+    current: CurrentUser = Depends(get_current_user),
+    uow=Depends(get_uow),
+) -> LogoutResponse:
+    with uow:
+        return AuthApiService.logout(
+            uow,
+            company_id=current.company_id,
+            user_id=current.id,
+        )
 
 
 @router.post("/logout-refresh", response_model=LogoutRefreshResponse)

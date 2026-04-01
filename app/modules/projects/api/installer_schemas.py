@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.api.v1.pagination import PaginationDTO
+
 
 class AddonTypeMiniDTO(BaseModel):
     id: UUID
@@ -16,8 +18,6 @@ class AddonTypeMiniDTO(BaseModel):
 class AddonPlanDTO(BaseModel):
     addon_type_id: UUID
     qty_planned: Decimal
-    client_price: Decimal
-    installer_price: Decimal
 
 
 class AddonFactDTO(BaseModel):
@@ -57,13 +57,13 @@ class InstallerProjectListItem(BaseModel):
 
 class InstallerProjectListResponse(BaseModel):
     items: list[InstallerProjectListItem]
+    pagination: PaginationDTO
 
 
 class InstallerDoorDTO(BaseModel):
     id: UUID
     unit_label: str
     door_type_id: UUID
-    our_price: Decimal
     order_number: str | None
     house_number: str | None
     floor_label: str | None
