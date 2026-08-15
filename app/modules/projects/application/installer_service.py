@@ -47,36 +47,38 @@ class ProjectInstallerService:
         )
         projects = uow.projects.list_by_ids(company_id=company_id, ids=project_ids)
         return {
-            "items": [
-                {
-                    "id": p.id,
-                    "name": p.name,
-                    "address": (
-                        build_project_address(
-                            address=getattr(p, "address", None),
-                            street=getattr(p, "address_street", None),
-                            building=getattr(p, "address_building", None),
-                            city=getattr(p, "address_city", None),
-                            entrance=getattr(p, "address_entrance", None),
-                        )
-                        or ""
-                    ),
-                    "status": _status_value(p.status),
-                    "waze_url": build_waze_url(
-                        address=build_project_address(
-                            address=getattr(p, "address", None),
-                            street=getattr(p, "address_street", None),
-                            building=getattr(p, "address_building", None),
-                            city=getattr(p, "address_city", None),
-                            entrance=getattr(p, "address_entrance", None),
-                        ),
-                        lat=getattr(p, "address_lat", None),
-                        lng=getattr(p, "address_lng", None),
-                        manual_url=getattr(p, "address_waze_url", None),
-                    ),
-                }
-                for p in projects
-            ]
+            "items": [ProjectInstallerService._project_list_item(p) for p in projects]
+        }
+
+    @staticmethod
+    def _project_list_item(project) -> dict:
+        project_address = (
+            build_project_address(
+                address=getattr(project, "address", None),
+                street=getattr(project, "address_street", None),
+                building=getattr(project, "address_building", None),
+                city=getattr(project, "address_city", None),
+                entrance=getattr(project, "address_entrance", None),
+            )
+            or ""
+        )
+        return {
+            "id": project.id,
+            "name": project.name,
+            "address": project_address,
+            "status": _status_value(project.status),
+            "waze_url": build_waze_url(
+                address=project_address,
+                lat=getattr(project, "address_lat", None),
+                lng=getattr(project, "address_lng", None),
+                manual_url=getattr(project, "address_waze_url", None),
+            ),
+            "whatsapp_url": build_whatsapp_url(
+                phone=getattr(project, "developer_whatsapp", None)
+                or getattr(project, "contact_phone", None),
+                message=ProjectInstallerService._project_whatsapp_message(project),
+            ),
+            "call_url": build_call_url(phone=getattr(project, "contact_phone", None)),
         }
 
     @staticmethod

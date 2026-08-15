@@ -125,6 +125,8 @@ def test_installer_projects_list_shows_only_assigned_projects(
         name="Installer Project A",
         address="Address A",
     )
+    project_a.contact_phone = "+972501234500"
+    project_a.developer_whatsapp = "+972509999111"
     project_b = _make_project(
         company_id=company_id,
         name="Installer Project B",
@@ -184,9 +186,15 @@ def test_installer_projects_list_shows_only_assigned_projects(
     assert str(project_foreign.id) not in item_ids
     assert item_ids.count(str(project_a.id)) == 1
     row_a = next(x for x in items if x["id"] == str(project_a.id))
-    _assert_exact_keys(row_a, {"id", "name", "address", "status", "waze_url"})
+    _assert_exact_keys(
+        row_a,
+        {"id", "name", "address", "status", "waze_url", "whatsapp_url", "call_url"},
+    )
     assert row_a["waze_url"] is not None
     assert "navigate=yes" in row_a["waze_url"]
+    assert row_a["whatsapp_url"] is not None
+    assert "wa.me/972509999111" in row_a["whatsapp_url"]
+    assert row_a["call_url"] == "tel:+972501234500"
     assert pagination["page"] == 1
     assert pagination["per_page"] == 25
     assert pagination["total"] == 2
@@ -410,6 +418,7 @@ def test_installer_project_details_returns_scoped_data(
             "reason_id",
             "comment",
             "is_locked",
+            "version",
         },
     )
 
@@ -575,3 +584,58 @@ def test_installer_project_details_validation_returns_422_for_bad_uuid(
 
     resp = client.get("/api/v1/installer/projects/not-a-uuid")
     assert resp.status_code == 422, resp.text
+
+
+def test_installer_workspace_returns_frontend_contract(
+    client_installer_projects,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id = client_installer_projects
+
+    door_type = make_door_type(name="Workspace Contract Door")
+    project = _make_project(
+        company_id=company_id,
+        name="Workspace Contract Project",
+        address="Workspace address",
+    )
+    db_session.add(project)
+    db_session.flush()
+    db_session.add(
+        _make_door(
+            company_id=company_id,
+            project_id=project.id,
+            door_type_id=door_type.id,
+            unit_label="W-01",
+            installer_id=installer_id,
+        )
+    )
+    db_session.commit()
+
+    resp = client.get("/api/v1/installer/workspace")
+    assert resp.status_code == 200, resp.text
+
+    body = resp.json()
+    _assert_exact_keys(
+        body,
+        {
+            "projects",
+            "events",
+            "task_events",
+            "issues",
+            "earnings_summary",
+            "sync_queue",
+            "today_tasks",
+            "priority_tasks",
+            "problem_projects",
+            "earnings_today",
+        },
+    )
+    assert any(row["id"] == str(project.id) for row in body["projects"])
+    assert isinstance(body["events"], list)
+    assert isinstance(body["task_events"], list)
+    assert isinstance(body["issues"], list)
+    assert body["earnings_summary"]["currency"] == "ILS"
+    assert body["sync_queue"]["items"] == []
+    assert body["sync_queue"]["pagination"]["per_page"] == 100

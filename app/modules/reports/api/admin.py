@@ -7,7 +7,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 
-from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.api.v1.deps import (
+    CurrentUser,
+    ensure_admin_can_view_rates,
+    get_uow,
+    require_admin,
+)
 from app.modules.reports.api.schemas import (
     AuditCatalogChangesResponse,
     DashboardResponse,
@@ -89,6 +94,7 @@ def dashboard(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.dashboard(
             uow,
             company_id=user.company_id,
@@ -105,6 +111,7 @@ def kpi(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.kpi(
             uow,
             company_id=user.company_id,
@@ -188,6 +195,7 @@ def installers_kpi(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.installers_kpi(
             uow,
             company_id=user.company_id,
@@ -213,6 +221,7 @@ def installer_profitability_matrix(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.installer_profitability_matrix(
             uow,
             company_id=user.company_id,
@@ -236,6 +245,7 @@ def installer_project_profitability(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.installer_project_profitability(
             uow,
             company_id=user.company_id,
@@ -271,6 +281,7 @@ def installers_kpi_export(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         content = ReportsAdminApiService.installers_kpi_export_csv(
             uow,
             company_id=user.company_id,
@@ -297,6 +308,7 @@ def installer_kpi_details(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.installer_kpi_details(
             uow,
             company_id=user.company_id,
@@ -316,6 +328,7 @@ def order_numbers_kpi(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.order_numbers_kpi(
             uow,
             company_id=user.company_id,
@@ -353,6 +366,7 @@ def order_numbers_kpi_export(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         content = ReportsAdminApiService.order_numbers_kpi_export_csv(
             uow,
             company_id=user.company_id,
@@ -381,6 +395,7 @@ def project_profit(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.project_profit(
             uow,
             company_id=user.company_id,
@@ -397,6 +412,7 @@ def project_plan_fact(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.project_plan_fact(
             uow,
             company_id=user.company_id,
@@ -415,6 +431,7 @@ def project_risk_drilldown(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.project_risk_drilldown(
             uow,
             company_id=user.company_id,
@@ -433,6 +450,7 @@ def projects_margin(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.projects_margin(
             uow,
             company_id=user.company_id,
@@ -450,6 +468,7 @@ def issues_addons_impact(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.issues_addons_impact(
             uow,
             company_id=user.company_id,
@@ -464,6 +483,7 @@ def risk_concentration(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.risk_concentration(
             uow,
             company_id=user.company_id,
@@ -492,6 +512,7 @@ def executive_export(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         content, filename = ReportsAdminApiService.executive_export_csv(
             uow,
             company_id=user.company_id,
@@ -581,6 +602,7 @@ def audit_installer_rate_changes(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return ReportsAdminApiService.audit_installer_rate_changes(
             uow,
             company_id=user.company_id,
@@ -701,6 +723,7 @@ def audit_installer_rate_changes_export(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         content = ReportsAdminApiService.audit_installer_rate_changes_export_csv(
             uow,
             company_id=user.company_id,

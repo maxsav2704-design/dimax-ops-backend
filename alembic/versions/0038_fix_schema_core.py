@@ -23,26 +23,40 @@ branch_labels = None
 depends_on = None
 
 
+def _table_columns(inspector: sa.Inspector, table_name: str) -> set[str]:
+    return {column["name"] for column in inspector.get_columns(table_name)}
+
+
+def _index_names(inspector: sa.Inspector, table_name: str) -> set[str]:
+    return {index["name"] for index in inspector.get_indexes(table_name)}
+
+
 def upgrade() -> None:
-    # ── projects ────────────────────────────────────────────────────────────
-    op.add_column(
-        "projects",
-        sa.Column(
-            "lifecycle_status",
-            sa.String(20),
-            nullable=False,
-            server_default="ACTIVE",
-        ),
-    )
-    op.add_column(
-        "projects",
-        sa.Column(
-            "health_status",
-            sa.String(20),
-            nullable=False,
-            server_default="NORMAL",
-        ),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    project_columns = _table_columns(inspector, "projects")
+    project_indexes = _index_names(inspector, "projects")
+    if "lifecycle_status" not in project_columns:
+        op.add_column(
+            "projects",
+            sa.Column(
+                "lifecycle_status",
+                sa.String(20),
+                nullable=False,
+                server_default="ACTIVE",
+            ),
+        )
+    if "health_status" not in project_columns:
+        op.add_column(
+            "projects",
+            sa.Column(
+                "health_status",
+                sa.String(20),
+                nullable=False,
+                server_default="NORMAL",
+            ),
+        )
     op.execute(
         """
         DO $$
@@ -64,51 +78,54 @@ def upgrade() -> None:
         END $$;
         """
     )
-    op.create_index("ix_projects_lifecycle_status", "projects", ["lifecycle_status"])
-    op.create_index("ix_projects_health_status", "projects", ["health_status"])
+    if "ix_projects_lifecycle_status" not in project_indexes:
+        op.create_index("ix_projects_lifecycle_status", "projects", ["lifecycle_status"])
+    if "ix_projects_health_status" not in project_indexes:
+        op.create_index("ix_projects_health_status", "projects", ["health_status"])
 
-    # ── doors ───────────────────────────────────────────────────────────────
-    op.add_column(
-        "doors",
-        sa.Column("door_code", sa.String(120), nullable=True),
-    )
-    op.add_column(
-        "doors",
-        sa.Column(
-            "is_critical",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.text("false"),
-        ),
-    )
-    op.add_column(
-        "doors",
-        sa.Column(
-            "version",
-            sa.Integer(),
-            nullable=False,
-            server_default=sa.text("0"),
-        ),
-    )
-    op.add_column(
-        "doors",
-        sa.Column(
-            "surcharge_pct",
-            sa.Numeric(6, 2),
-            nullable=False,
-            server_default=sa.text("100.00"),
-        ),
-    )
-    op.add_column(
-        "doors",
-        sa.Column(
-            "apply_surcharge_to_installer",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.text("false"),
-        ),
-    )
-    # Unique constraint on (project_id, door_code) — guard against duplicates
+    door_columns = _table_columns(inspector, "doors")
+    if "door_code" not in door_columns:
+        op.add_column("doors", sa.Column("door_code", sa.String(120), nullable=True))
+    if "is_critical" not in door_columns:
+        op.add_column(
+            "doors",
+            sa.Column(
+                "is_critical",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
+        )
+    if "version" not in door_columns:
+        op.add_column(
+            "doors",
+            sa.Column(
+                "version",
+                sa.Integer(),
+                nullable=False,
+                server_default=sa.text("0"),
+            ),
+        )
+    if "surcharge_pct" not in door_columns:
+        op.add_column(
+            "doors",
+            sa.Column(
+                "surcharge_pct",
+                sa.Numeric(6, 2),
+                nullable=False,
+                server_default=sa.text("100.00"),
+            ),
+        )
+    if "apply_surcharge_to_installer" not in door_columns:
+        op.add_column(
+            "doors",
+            sa.Column(
+                "apply_surcharge_to_installer",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
+        )
     op.execute(
         """
         DO $$
@@ -131,61 +148,135 @@ def upgrade() -> None:
         """
     )
 
-    # ── door_types ──────────────────────────────────────────────────────────
-    op.add_column(
-        "door_types",
-        sa.Column(
-            "is_critical_default",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.text("false"),
-        ),
-    )
+    door_type_columns = _table_columns(inspector, "door_types")
+    if "is_critical_default" not in door_type_columns:
+        op.add_column(
+            "door_types",
+            sa.Column(
+                "is_critical_default",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
+        )
 
-    # ── issues ──────────────────────────────────────────────────────────────
-    # owner_user_id, due_at, priority, workflow_state were added in 0027.
-    # Only created_by_user_id is missing.
-    op.add_column(
-        "issues",
-        sa.Column(
-            "created_by_user_id",
-            UUID(as_uuid=True),
-            nullable=True,
-        ),
+    issue_columns = _table_columns(inspector, "issues")
+    issue_indexes = _index_names(inspector, "issues")
+    if "created_by_user_id" not in issue_columns:
+        op.add_column(
+            "issues",
+            sa.Column(
+                "created_by_user_id",
+                UUID(as_uuid=True),
+                nullable=True,
+            ),
+        )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'fk_issues_created_by_user_id_users'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'issues_created_by_user_id_fkey'
+          ) THEN
+            ALTER TABLE issues
+              ADD CONSTRAINT fk_issues_created_by_user_id_users
+              FOREIGN KEY (created_by_user_id)
+              REFERENCES users(id)
+              ON DELETE SET NULL;
+          END IF;
+        END $$;
+        """
     )
-    op.create_foreign_key(
-        "fk_issues_created_by_user_id_users",
-        "issues",
-        "users",
-        ["created_by_user_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
-    op.create_index("ix_issues_created_by_user_id", "issues", ["created_by_user_id"])
+    if "ix_issues_created_by_user_id" not in issue_indexes:
+        op.create_index("ix_issues_created_by_user_id", "issues", ["created_by_user_id"])
 
 
 def downgrade() -> None:
-    # issues
-    op.drop_index("ix_issues_created_by_user_id", table_name="issues")
-    op.drop_constraint("fk_issues_created_by_user_id_users", "issues", type_="foreignkey")
-    op.drop_column("issues", "created_by_user_id")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
 
-    # door_types
-    op.drop_column("door_types", "is_critical_default")
+    issue_columns = _table_columns(inspector, "issues")
+    issue_indexes = _index_names(inspector, "issues")
+    if "ix_issues_created_by_user_id" in issue_indexes:
+        op.drop_index("ix_issues_created_by_user_id", table_name="issues")
+    if "created_by_user_id" in issue_columns:
+        op.execute(
+            """
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = 'fk_issues_created_by_user_id_users'
+              ) THEN
+                ALTER TABLE issues DROP CONSTRAINT fk_issues_created_by_user_id_users;
+              END IF;
+              IF EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = 'issues_created_by_user_id_fkey'
+              ) THEN
+                ALTER TABLE issues DROP CONSTRAINT issues_created_by_user_id_fkey;
+              END IF;
+            END $$;
+            """
+        )
+        op.drop_column("issues", "created_by_user_id")
 
-    # doors
-    op.drop_constraint("ck_doors_surcharge_pct", "doors", type_="check")
-    op.drop_constraint("uq_doors_project_door_code", "doors", type_="unique")
-    op.drop_column("doors", "apply_surcharge_to_installer")
-    op.drop_column("doors", "surcharge_pct")
-    op.drop_column("doors", "version")
-    op.drop_column("doors", "is_critical")
-    op.drop_column("doors", "door_code")
+    door_type_columns = _table_columns(inspector, "door_types")
+    if "is_critical_default" in door_type_columns:
+        op.drop_column("door_types", "is_critical_default")
 
-    # projects
-    op.drop_index("ix_projects_health_status", table_name="projects")
-    op.drop_index("ix_projects_lifecycle_status", table_name="projects")
-    op.drop_constraint("ck_projects_health_status", "projects", type_="check")
-    op.drop_constraint("ck_projects_lifecycle_status", "projects", type_="check")
-    op.drop_column("projects", "health_status")
-    op.drop_column("projects", "lifecycle_status")
+    door_columns = _table_columns(inspector, "doors")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'ck_doors_surcharge_pct'
+          ) THEN
+            ALTER TABLE doors DROP CONSTRAINT ck_doors_surcharge_pct;
+          END IF;
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'uq_doors_project_door_code'
+          ) THEN
+            ALTER TABLE doors DROP CONSTRAINT uq_doors_project_door_code;
+          END IF;
+        END $$;
+        """
+    )
+    for column_name in [
+        "apply_surcharge_to_installer",
+        "surcharge_pct",
+        "version",
+        "is_critical",
+        "door_code",
+    ]:
+        if column_name in door_columns:
+            op.drop_column("doors", column_name)
+
+    project_columns = _table_columns(inspector, "projects")
+    project_indexes = _index_names(inspector, "projects")
+    if "ix_projects_health_status" in project_indexes:
+        op.drop_index("ix_projects_health_status", table_name="projects")
+    if "ix_projects_lifecycle_status" in project_indexes:
+        op.drop_index("ix_projects_lifecycle_status", table_name="projects")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'ck_projects_health_status'
+          ) THEN
+            ALTER TABLE projects DROP CONSTRAINT ck_projects_health_status;
+          END IF;
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'ck_projects_lifecycle_status'
+          ) THEN
+            ALTER TABLE projects DROP CONSTRAINT ck_projects_lifecycle_status;
+          END IF;
+        END $$;
+        """
+    )
+    if "health_status" in project_columns:
+        op.drop_column("projects", "health_status")
+    if "lifecycle_status" in project_columns:
+        op.drop_column("projects", "lifecycle_status")

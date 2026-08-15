@@ -17,8 +17,8 @@ from app.modules.companies.application.limits_service import CompanyLimitsServic
 from app.modules.companies.domain.errors import CompanyAlreadyExists, CompanyNotFound
 from app.modules.companies.infrastructure.models import CompanyPlanORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
-from app.modules.identity.domain.enums import UserRole
-from app.modules.identity.infrastructure.models import CompanyORM, UserORM
+from app.modules.identity.domain.enums import AdminScope, UserRole
+from app.modules.identity.infrastructure.models import AdminProfileORM, CompanyORM, UserORM
 from app.modules.reasons.infrastructure.models import ReasonORM
 from app.shared.domain.errors import ValidationError
 
@@ -83,10 +83,15 @@ class CompaniesPlatformService:
         )
         uow.users.add(admin)
         uow.session.flush()
+        CompaniesPlatformService._ensure_admin_profile(
+            uow,
+            company_id=company.id,
+            user_id=admin.id,
+        )
 
         CompaniesPlatformService._seed_default_catalogs(uow, company_id=company.id)
 
-        plan = CompaniesPlatformService._build_default_plan(company.id)
+        plan = CompaniesPlatformService.build_default_plan(company.id)
         uow.company_plans.save(plan)
         uow.session.flush()
 
@@ -119,7 +124,7 @@ class CompaniesPlatformService:
 
         plan = uow.company_plans.get_by_company_id(company_id)
         if plan is None:
-            plan = CompaniesPlatformService._build_default_plan(company_id)
+            plan = CompaniesPlatformService.build_default_plan(company_id)
             uow.company_plans.save(plan)
             uow.session.flush()
         return plan
@@ -184,6 +189,12 @@ class CompaniesPlatformService:
         )
         uow.users.add(user)
         uow.session.flush()
+        if data.role == UserRole.ADMIN:
+            CompaniesPlatformService._ensure_admin_profile(
+                uow,
+                company_id=company_id,
+                user_id=user.id,
+            )
         CompanyLimitAlertsService.evaluate_and_alert(
             uow,
             company_id=company_id,
@@ -225,7 +236,36 @@ class CompaniesPlatformService:
             )
 
     @staticmethod
-    def _build_default_plan(company_id: uuid.UUID) -> CompanyPlanORM:
+    def _ensure_admin_profile(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        existing = (
+            uow.session.query(AdminProfileORM)
+            .filter(
+                AdminProfileORM.company_id == company_id,
+                AdminProfileORM.user_id == user_id,
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            return
+
+        uow.session.add(
+            AdminProfileORM(
+                company_id=company_id,
+                user_id=user_id,
+                admin_scope=AdminScope.OWNER.value,
+                can_view_rates=True,
+                can_manage_imports=True,
+                can_manage_users=True,
+            )
+        )
+
+    @staticmethod
+    def build_default_plan(company_id: uuid.UUID) -> CompanyPlanORM:
         return CompanyPlanORM(
             company_id=company_id,
             plan_code="trial",

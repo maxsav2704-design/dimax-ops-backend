@@ -26,4 +26,5 @@ def get_workspace(
             uow,
             company_id=user.company_id,
             installer_id=installer_id,
+            actor_user_id=user.id,
         )

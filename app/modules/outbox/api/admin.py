@@ -4,7 +4,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.api.v1.deps import (
+    CurrentUser,
+    ensure_admin_can_run_operations,
+    get_uow,
+    require_admin,
+)
 from app.modules.audit.application.service import AuditService
 from app.modules.outbox.application.admin_service import OutboxAdminService
 from app.modules.outbox.api.admin_schemas import (
@@ -124,6 +129,7 @@ def retry_outbox(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_run_operations(uow, user)
         item, before, after = OutboxAdminService.retry_outbox(
             uow,
             company_id=user.company_id,
@@ -150,6 +156,7 @@ def retry_failed_outbox(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_run_operations(uow, user)
         response, audit_entries = OutboxAdminService.retry_failed_outbox_bulk(
             uow,
             company_id=user.company_id,

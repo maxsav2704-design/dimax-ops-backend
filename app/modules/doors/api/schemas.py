@@ -20,6 +20,13 @@ class InstallerDoorStatusUpdateResponse(BaseModel):
     version: int
 
 
+class DoorActionResponse(BaseModel):
+    ok: bool = True
+    id: UUID
+    status: str
+    version: int
+
+
 class AdminOverrideBody(BaseModel):
     new_status: str = Field(pattern="^(INSTALLED|NOT_INSTALLED)$")
     reason_id: UUID | None = None

@@ -46,6 +46,10 @@ class Unauthorized(DomainError):
     code = "UNAUTHORIZED"
 
 
+class TooManyRequests(DomainError):
+    code = "TOO_MANY_REQUESTS"
+
+
 class InvalidCredentials(Unauthorized):
     code = "INVALID_CREDENTIALS"
 

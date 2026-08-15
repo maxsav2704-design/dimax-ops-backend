@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Enum, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,8 +30,14 @@ from app.shared.infrastructure.db.base import (
 
 class AddonTypeORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "addon_types"
+    __table_args__ = (
+        CheckConstraint(
+            "default_client_price >= 0 AND default_installer_price >= 0",
+            name="ck_addon_types_prices",
+        ),
+    )
 
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     unit: Mapped[str] = mapped_column(String(20), nullable=False, default="pcs")
     default_client_price: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=Decimal("0")
@@ -38,6 +55,18 @@ class AddonTypeORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
 
 class ProjectAddonPlanORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "project_addon_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "qty_planned >= 0 AND client_price >= 0 AND installer_price >= 0",
+            name="ck_project_addon_plans_values",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "project_id",
+            "addon_type_id",
+            name="uq_project_addon_plans_project_type",
+        ),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False, index=True
@@ -55,10 +84,64 @@ class ProjectAddonPlanORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin
     installer_price: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=Decimal("0")
     )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ProjectUrgencySurchargeORM(
+    Base, UUIDPrimaryKeyMixin, TimestampMixin
+):
+    __tablename__ = "project_urgency_surcharges"
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ('PROJECT', 'ORDER_NUMBER')",
+            name="ck_project_urgency_surcharges_scope",
+        ),
+        CheckConstraint(
+            "scope <> 'ORDER_NUMBER' OR order_number IS NOT NULL",
+            name="ck_project_urgency_surcharges_order_scope",
+        ),
+        CheckConstraint(
+            "client_amount >= 0 AND installer_amount >= 0",
+            name="ck_project_urgency_surcharges_amounts",
+        ),
+    )
+
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    order_number: Mapped[str | None] = mapped_column(
+        String(80), nullable=True, index=True
+    )
+    reason: Mapped[str] = mapped_column(String(200), nullable=False)
+    client_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    installer_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    effective_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ProjectAddonFactORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "project_addon_facts"
+    __table_args__ = (
+        CheckConstraint(
+            "qty_done > 0",
+            name="ck_project_addon_facts_qty",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "client_event_id",
+            name="uq_project_addon_facts_client_event",
+        ),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False, index=True

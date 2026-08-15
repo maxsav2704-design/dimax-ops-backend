@@ -9,9 +9,11 @@ from app.api.v1.pagination import paginate_items, pagination_params
 from app.api.v1.deps import CurrentUser, get_uow, require_installer
 from app.modules.issues.api.installer_schemas import (
     InstallerIssueCreateBody,
-    InstallerIssueDTO,
+    InstallerIssueReportDTO,
+    InstallerIssueUpdateBody,
     InstallerIssuesListResponse,
 )
+from app.modules.issues.api.schemas import IssueMediaResponse
 from app.modules.issues.application.installer_api_service import (
     InstallerIssuesApiService,
 )
@@ -42,7 +44,7 @@ def list_my_issues(
         )
 
 
-@router.post("", response_model=InstallerIssueDTO, status_code=201)
+@router.post("", response_model=InstallerIssueReportDTO, status_code=201)
 def create_issue(
     body: InstallerIssueCreateBody,
     user: CurrentUser = Depends(require_installer),
@@ -59,3 +61,40 @@ def create_issue(
             title=body.title,
             details=body.details,
         )
+
+
+@router.patch("/{issue_id}", response_model=InstallerIssueReportDTO)
+def update_issue(
+    issue_id: UUID,
+    body: InstallerIssueUpdateBody,
+    user: CurrentUser = Depends(require_installer),
+    installer_id: UUID = Depends(get_current_installer_id),
+    uow=Depends(get_uow),
+):
+    with uow:
+        return InstallerIssuesApiService.update_issue_comment(
+            uow,
+            company_id=user.company_id,
+            installer_id=installer_id,
+            user_id=user.id,
+            issue_id=issue_id,
+            comment=body.comment,
+        )
+
+
+@router.get("/{issue_id}/media", response_model=IssueMediaResponse)
+def list_issue_media(
+    issue_id: UUID,
+    user: CurrentUser = Depends(require_installer),
+    installer_id: UUID = Depends(get_current_installer_id),
+    uow=Depends(get_uow),
+):
+    with uow:
+        InstallerIssuesApiService.ensure_issue_visible(
+            uow,
+            company_id=user.company_id,
+            installer_id=installer_id,
+            user_id=user.id,
+            issue_id=issue_id,
+        )
+        return IssueMediaResponse(items=[])

@@ -8,6 +8,7 @@ import json
 import re
 import uuid
 import zipfile
+from html import escape
 from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree as ET
 
@@ -459,6 +460,106 @@ def _parse_xlsx_rows(content: bytes) -> list[dict[str, str]]:
         return rows
 
 
+def _xlsx_cell_ref(row_number: int, col_number: int) -> str:
+    letters = ""
+    current = col_number
+    while current:
+        current, remainder = divmod(current - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return f"{letters}{row_number}"
+
+
+def _build_inline_xlsx(*, sheet_name: str, rows: list[list[str]]) -> bytes:
+    sheet_rows: list[str] = []
+    for row_number, row in enumerate(rows, start=1):
+        cells: list[str] = []
+        for col_number, value in enumerate(row, start=1):
+            ref = _xlsx_cell_ref(row_number, col_number)
+            text = escape(str(value), quote=False)
+            cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>')
+        sheet_rows.append(f'<row r="{row_number}">{"".join(cells)}</row>')
+
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        "<sheetData>"
+        + "".join(sheet_rows)
+        + "</sheetData>"
+        "</worksheet>"
+    )
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        "<sheets>"
+        f'<sheet name="{escape(sheet_name, quote=True)}" sheetId="1" r:id="rId1"/>'
+        "</sheets>"
+        "</workbook>"
+    )
+    workbook_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        "</Relationships>"
+    )
+    root_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>'
+        "</Relationships>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", root_rels_xml)
+        zf.writestr("xl/workbook.xml", workbook_xml)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    return buffer.getvalue()
+
+
+def _template_headers_for_profile(profile_code: str) -> list[str]:
+    if profile_code == "factory_he_v1":
+        return [
+            "\u05de\u05e1\u05e4\u05e8 \u05d4\u05d6\u05de\u05e0\u05d4",
+            "\u05d1\u05e0\u05d9\u05d9\u05df",
+            "\u05e7\u05d5\u05de\u05d4",
+            "\u05d3\u05d9\u05e8\u05d4",
+            "\u05de\u05d9\u05e7\u05d5\u05dd",
+            "\u05d3\u05d2\u05dd \u05db\u05e0\u05e3",
+            "door_type",
+            "qty",
+            "price",
+        ]
+    return [
+        "order_number",
+        "house",
+        "floor",
+        "apartment",
+        "location",
+        "marking",
+        "door_type",
+        "qty",
+        "price",
+    ]
+
+
 def _split_tabular_line(
     line: str,
     *,
@@ -820,12 +921,18 @@ def _collect_data_summary(
         for x in (row.get("door_marking") for row in prepared_rows)
         if str(x or "").strip()
     }
+    zero_price_doors = sum(
+        1
+        for row in prepared_rows
+        if Decimal(str(row.get("our_price") or "0")) == Decimal("0")
+    )
 
     return {
         "source_rows": len(parsed_rows),
         "prepared_rows": len(prepared_rows),
         "rows_with_errors": len(errors),
         "duplicate_rows_skipped": skipped_duplicates_in_payload,
+        "zero_price_doors": zero_price_doors,
         "unique_order_numbers": len(order_numbers),
         "unique_houses": len(house_numbers),
         "unique_floors": len(floor_labels),
@@ -848,6 +955,7 @@ def _collect_preview_groups(
         apartment_number = _clean_text(row.get("apartment_number"))
         door_marking = _clean_text(row.get("door_marking"))
         location_code = _clean_text(row.get("location_code"))
+        door_type_id = row.get("door_type_id")
         key = (
             order_number or "",
             house_number or "",
@@ -865,11 +973,14 @@ def _collect_preview_groups(
                 "door_marking": door_marking,
                 "door_count": 0,
                 "location_codes": set(),
+                "door_type_ids": set(),
             }
             grouped[key] = bucket
         bucket["door_count"] += 1
         if location_code:
             bucket["location_codes"].add(location_code)
+        if door_type_id:
+            bucket["door_type_ids"].add(str(door_type_id))
 
     rows = sorted(
         grouped.values(),
@@ -892,6 +1003,7 @@ def _collect_preview_groups(
                 "door_marking": item.get("door_marking"),
                 "door_count": int(item.get("door_count") or 0),
                 "location_codes": sorted(item.get("location_codes") or []),
+                "door_type_ids": sorted(item.get("door_type_ids") or []),
             }
         )
     return preview
@@ -980,6 +1092,7 @@ def _import_fingerprint(
     strict_required_fields: bool,
     create_missing_door_types: bool,
     analyze_only: bool,
+    allow_partial_import: bool,
 ) -> str:
     metadata = {
         "filename": filename,
@@ -990,6 +1103,7 @@ def _import_fingerprint(
         "strict_required_fields": strict_required_fields,
         "create_missing_door_types": create_missing_door_types,
         "analyze_only": analyze_only,
+        "allow_partial_import": allow_partial_import,
     }
     digest = hashlib.sha256()
     digest.update(content)
@@ -1068,6 +1182,12 @@ def _save_import_run(
 
 class ProjectFileImportService:
     @staticmethod
+    def build_import_template_xlsx(*, mapping_profile: str) -> bytes:
+        profile_code = _normalize_mapping_profile(mapping_profile)
+        headers = _template_headers_for_profile(profile_code)
+        return _build_inline_xlsx(sheet_name="DIMAX doors", rows=[headers])
+
+    @staticmethod
     def import_project_doors_from_file(
         uow,
         *,
@@ -1082,6 +1202,7 @@ class ProjectFileImportService:
         strict_required_fields: bool | None,
         create_missing_door_types: bool,
         analyze_only: bool,
+        allow_partial_import: bool = False,
     ) -> dict:
         project = uow.projects.get(company_id=company_id, project_id=project_id)
         if project is None:
@@ -1111,6 +1232,7 @@ class ProjectFileImportService:
             mapping_profile=profile_code,
             strict_required_fields=strict_required,
             create_missing_door_types=create_missing_door_types,
+            allow_partial_import=allow_partial_import,
         )
         fingerprint = _import_fingerprint(
             content=content,
@@ -1122,8 +1244,10 @@ class ProjectFileImportService:
             strict_required_fields=strict_required,
             create_missing_door_types=create_missing_door_types,
             analyze_only=analyze_only,
+            allow_partial_import=allow_partial_import,
         )
 
+        analysis_tx = None
         try:
             existing_run = uow.project_import_runs.get_by_fingerprint(
                 company_id=company_id,
@@ -1144,6 +1268,9 @@ class ProjectFileImportService:
                     mapping_profile=profile_code,
                 )
                 return cached
+
+            if analyze_only:
+                analysis_tx = uow.session.begin_nested()
 
             parsed_rows = _parse_rows_by_filename(
                 filename=filename,
@@ -1324,16 +1451,18 @@ class ProjectFileImportService:
             diagnostics["preview_groups"] = _collect_preview_groups(prepared_rows)
 
             if analyze_only:
-                # Use nested transaction so all domain checks run but no rows are persisted.
-                with uow.session.begin_nested() as preview_tx:
-                    would_import, skipped_existing = ProjectUseCases.import_doors(
-                        uow,
-                        company_id=company_id,
-                        project_id=project_id,
-                        rows=prepared_rows,
-                        skip_existing=True,
-                    )
-                    preview_tx.rollback()
+                # Use nested transaction so all domain checks run but no rows or
+                # newly discovered door types are persisted during preflight.
+                would_import, skipped_existing = ProjectUseCases.import_doors(
+                    uow,
+                    company_id=company_id,
+                    project_id=project_id,
+                    rows=prepared_rows,
+                    skip_existing=True,
+                )
+                if analysis_tx is not None and analysis_tx.is_active:
+                    analysis_tx.rollback()
+                analysis_tx = None
                 would_skip = skipped_existing + skipped_duplicates_in_payload
                 result = {
                     "parsed_rows": len(parsed_rows),
@@ -1399,6 +1528,18 @@ class ProjectFileImportService:
                     errors_count=len(errors),
                 )
                 return result
+
+            if errors and not allow_partial_import:
+                preview = "; ".join(
+                    f"row {x.get('row')}: {x.get('message')}" for x in errors[:3]
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "partial import requires allow_partial_import=true"
+                        + (f" ({preview})" if preview else "")
+                    ),
+                )
 
             imported, skipped_existing = ProjectUseCases.import_doors(
                 uow,
@@ -1473,6 +1614,8 @@ class ProjectFileImportService:
             )
             return result
         except Exception as exc:
+            if analysis_tx is not None and analysis_tx.is_active:
+                analysis_tx.rollback()
             error_message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
             log_event(
                 logger,

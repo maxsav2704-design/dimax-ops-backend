@@ -2,11 +2,28 @@ from __future__ import annotations
 
 import uuid
 
+from app.core.config import settings
 from app.modules.audit.infrastructure.models import AuditLogORM
+from app.modules.identity.domain.enums import UserRole
+from app.modules.identity.infrastructure.models import AdminProfileORM
 from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
+
+
+def _login(client_raw, *, company_id: str, email: str, password: str) -> str:
+    resp = client_raw.post(
+        "/api/v1/auth/login",
+        json={
+            "company_id": company_id,
+            "email": email,
+            "password": password,
+            "device_id": f"outbox-acl-{email}",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]
 
 
 def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectORM:
@@ -140,6 +157,7 @@ def test_outbox_admin_webhook_signals_summary_and_list(
     client_raw,
     db_session,
     company_id,
+    monkeypatch,
 ):
     from tests.integration.test_outbox_webhooks_api import _seed_outbox_context
 
@@ -149,9 +167,13 @@ def test_outbox_admin_webhook_signals_summary_and_list(
         channel=OutboxChannel.EMAIL,
         provider_message_id="SG-WEBHOOK-ADMIN-1",
     )
+    webhook_token = "test-admin-webhook-token-32-chars"
+    webhook_headers = {"X-Webhook-Token": webhook_token}
+    monkeypatch.setattr(settings, "OUTBOX_WEBHOOK_TOKEN", webhook_token)
 
     delivered = client_raw.post(
         "/api/v1/webhooks/outbox/status",
+        headers=webhook_headers,
         json={
             "provider": "sendgrid",
             "channel": "EMAIL",
@@ -164,6 +186,7 @@ def test_outbox_admin_webhook_signals_summary_and_list(
 
     duplicate = client_raw.post(
         "/api/v1/webhooks/outbox/status",
+        headers=webhook_headers,
         json={
             "provider": "sendgrid",
             "channel": "EMAIL",
@@ -176,6 +199,7 @@ def test_outbox_admin_webhook_signals_summary_and_list(
 
     mismatch = client_raw.post(
         "/api/v1/webhooks/outbox/status",
+        headers=webhook_headers,
         json={
             "provider": "sendgrid",
             "channel": "WHATSAPP",
@@ -454,38 +478,88 @@ def test_outbox_admin_get_not_found(client_admin_real_uow):
 def test_outbox_admin_endpoints_forbidden_for_installer(client_installer):
     list_resp = client_installer.get("/api/v1/admin/outbox")
     assert list_resp.status_code == 403, list_resp.text
-    assert list_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert list_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     summary_resp = client_installer.get("/api/v1/admin/outbox/summary")
     assert summary_resp.status_code == 403, summary_resp.text
-    assert summary_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert summary_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     webhook_summary_resp = client_installer.get("/api/v1/admin/outbox/webhook-signals/summary")
     assert webhook_summary_resp.status_code == 403, webhook_summary_resp.text
-    assert webhook_summary_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert webhook_summary_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     webhook_list_resp = client_installer.get("/api/v1/admin/outbox/webhook-signals")
     assert webhook_list_resp.status_code == 403, webhook_list_resp.text
-    assert webhook_list_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert webhook_list_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     retry_audits_resp = client_installer.get("/api/v1/admin/outbox/retry-audits")
     assert retry_audits_resp.status_code == 403, retry_audits_resp.text
-    assert retry_audits_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert retry_audits_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     get_resp = client_installer.get(f"/api/v1/admin/outbox/{uuid.uuid4()}")
     assert get_resp.status_code == 403, get_resp.text
-    assert get_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert get_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     retry_resp = client_installer.post(
         f"/api/v1/admin/outbox/{uuid.uuid4()}/retry",
         json={"reason": "forbidden"},
     )
     assert retry_resp.status_code == 403, retry_resp.text
-    assert retry_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert retry_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     bulk_retry_resp = client_installer.post(
         "/api/v1/admin/outbox/retry-failed",
         json={"outbox_ids": [str(uuid.uuid4())], "reason": "forbidden"},
     )
     assert bulk_retry_resp.status_code == 403, bulk_retry_resp.text
-    assert bulk_retry_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert bulk_retry_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
+
+
+def test_outbox_retry_requires_operations_scope(
+    client_raw,
+    db_session,
+    company_id,
+    make_user,
+):
+    for scope in ("FINANCE", "VIEWER"):
+        password = f"Outbox{scope}123"
+        user = make_user(
+            role=UserRole.ADMIN,
+            password=password,
+            with_admin_profile=False,
+        )
+        db_session.add(
+            AdminProfileORM(
+                company_id=company_id,
+                user_id=user.id,
+                admin_scope=scope,
+                can_view_rates=scope == "FINANCE",
+                can_manage_imports=False,
+                can_manage_users=False,
+            )
+        )
+        db_session.commit()
+
+        token = _login(
+            client_raw,
+            company_id=str(company_id),
+            email=user.email,
+            password=password,
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+
+        retry_resp = client_raw.post(
+            f"/api/v1/admin/outbox/{uuid.uuid4()}/retry",
+            headers=headers,
+            json={"reason": "forbidden scope"},
+        )
+        assert retry_resp.status_code == 403, retry_resp.text
+        assert retry_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
+
+        bulk_retry_resp = client_raw.post(
+            "/api/v1/admin/outbox/retry-failed",
+            headers=headers,
+            json={"outbox_ids": [str(uuid.uuid4())], "reason": "forbidden scope"},
+        )
+        assert bulk_retry_resp.status_code == 403, bulk_retry_resp.text
+        assert bulk_retry_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"

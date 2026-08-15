@@ -3,15 +3,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text
+from sqlalchemy import DateTime, Enum, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.db.base import (
     Base,
-    UUIDPrimaryKeyMixin,
     TimestampMixin,
-    TenantMixin,
+    UUIDPrimaryKeyMixin,
 )
 from app.modules.outbox.domain.enums import (
     DeliveryStatus,
@@ -20,9 +19,14 @@ from app.modules.outbox.domain.enums import (
 )
 
 
-class OutboxMessageORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
+class OutboxMessageORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "outbox_messages"
+    __table_args__ = (
+        Index("ix_outbox_company_id", "company_id"),
+        Index("ix_outbox_status_channel", "status", "channel"),
+    )
 
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     channel: Mapped[OutboxChannel] = mapped_column(
         Enum(OutboxChannel, name="outbox_channel"),
         nullable=False,
@@ -63,7 +67,6 @@ class OutboxMessageORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
         Enum(DeliveryStatus, name="outbox_delivery_status"),
         nullable=False,
         default=DeliveryStatus.PENDING,
-        index=True,
     )
     delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

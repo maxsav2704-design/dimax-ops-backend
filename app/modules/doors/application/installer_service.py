@@ -4,10 +4,13 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from app.modules.doors.application.completion import (
+    create_completed_work_for_door,
+    resolve_installer_rate_snapshot,
+)
+from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned, InvalidTransition
-from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM
-from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.projects.application.status_service import ProjectStatusService
 from app.shared.domain.errors import NotFound
 
@@ -28,6 +31,7 @@ class InstallerDoorService:
         installer_id: uuid.UUID,
         door_id: uuid.UUID,
         to_status: DoorStatus,
+        source: str = "MOBILE_API",
     ) -> dict:
         door = uow.doors.get(company_id=company_id, door_id=door_id)
         if not door:
@@ -40,6 +44,17 @@ class InstallerDoorService:
             )
 
         from_status = getattr(door, "status", None)
+        if getattr(door, "is_locked", False):
+            raise InvalidTransition(
+                "Door is locked. Admin override required.",
+                field="status",
+                meta={
+                    "door_id": str(door_id),
+                    "from_status": from_status.value if hasattr(from_status, "value") else str(from_status),
+                    "to_status": to_status.value,
+                },
+            )
+
         allowed = ALLOWED_TRANSITIONS_INSTALLER.get(from_status, set())
         if to_status not in allowed:
             raise InvalidTransition(
@@ -52,29 +67,36 @@ class InstallerDoorService:
                 },
             )
 
+        installed_at = None
+        installer_rate_snapshot = None
+        if to_status == DoorStatus.INSTALLED:
+            installed_at = datetime.now(timezone.utc)
+            current_snapshot = getattr(door, "installer_rate_snapshot", None)
+            if current_snapshot is not None and Decimal(str(current_snapshot)) > 0:
+                installer_rate_snapshot = Decimal(str(current_snapshot))
+            else:
+                installer_rate_snapshot = resolve_installer_rate_snapshot(
+                    uow,
+                    company_id=company_id,
+                    installer_id=installer_id,
+                    door_type_id=door.door_type_id,
+                    at=installed_at,
+                )
+
         door.status = to_status
         door.version = int(getattr(door, "version", 0) or 0) + 1
         if to_status == DoorStatus.INSTALLED:
-            door.installed_at = datetime.now(timezone.utc)
+            door.installed_at = installed_at
             door.is_locked = True
+            door.installer_rate_snapshot = installer_rate_snapshot
         else:
             door.installed_at = None
             door.is_locked = False
 
         uow.doors.save(door)
-        uow.session.add(
-            DoorStatusHistoryORM(
-                company_id=company_id,
-                door_id=door.id,
-                changed_by_user_id=actor_user_id,
-                from_status=from_status.value if hasattr(from_status, "value") else str(from_status),
-                to_status=to_status.value,
-                source="MOBILE",
-            )
-        )
 
         if to_status == DoorStatus.INSTALLED:
-            InstallerDoorService._create_completed_work(
+            create_completed_work_for_door(
                 uow,
                 company_id=company_id,
                 installer_id=installer_id,
@@ -86,36 +108,17 @@ class InstallerDoorService:
             company_id=company_id,
             project_id=door.project_id,
         )
+        record_door_transition(
+            uow,
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            door=door,
+            from_status=from_status,
+            source=source,
+        )
 
         return {
             "id": door.id,
             "status": to_status.value,
             "version": door.version,
         }
-
-    @staticmethod
-    def _create_completed_work(
-        uow,
-        *,
-        company_id: uuid.UUID,
-        installer_id: uuid.UUID,
-        door,
-    ) -> None:
-        rate_snapshot = Decimal(str(getattr(door, "installer_rate_snapshot", None) or "0"))
-        amount_snapshot = rate_snapshot
-        completed_at = getattr(door, "installed_at", None) or datetime.now(timezone.utc)
-        uow.session.add(
-            CompletedWorkORM(
-                company_id=company_id,
-                project_id=door.project_id,
-                door_id=door.id,
-                installer_id=installer_id,
-                completed_at=completed_at,
-                quantity=Decimal("1.00"),
-                rate_snapshot=rate_snapshot,
-                amount_snapshot=amount_snapshot,
-                entry_type="ORIGINAL",
-                correction_ref_id=None,
-                reason=None,
-            )
-        )

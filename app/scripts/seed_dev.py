@@ -5,13 +5,15 @@ import json
 import os
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.security.password import hash_password
-from app.modules.identity.domain.enums import UserRole
-from app.modules.identity.infrastructure.models import CompanyORM, UserORM
+from app.modules.identity.domain.enums import AdminScope, UserRole
+from app.modules.identity.infrastructure.models import AdminProfileORM, CompanyORM, UserORM
 from app.modules.installers.infrastructure.models import InstallerORM
+from app.modules.reasons.infrastructure.default_seed import seed_default_reasons
 from app.modules.sync.infrastructure.models import InstallerSyncStateORM
+from app.shared.infrastructure.db.base import utcnow
 from app.shared.infrastructure.db.session import SessionLocal
 
 
@@ -62,6 +64,137 @@ def _primary_installer_seed() -> dict:
     raise RuntimeError("No installer user configured in SEED_USERS.")
 
 
+def _installer_candidates(session, *, company_id: uuid.UUID, installer_user: UserORM) -> list[InstallerORM]:
+    candidates = session.execute(
+        select(InstallerORM).where(
+            InstallerORM.company_id == company_id,
+            InstallerORM.email == installer_user.email,
+        )
+    ).scalars().all()
+    if candidates:
+        return candidates
+    return session.execute(
+        select(InstallerORM).where(
+            InstallerORM.company_id == company_id,
+            InstallerORM.full_name == installer_user.full_name,
+        )
+    ).scalars().all()
+
+
+def _merge_installer_refs(
+    session,
+    *,
+    company_id: uuid.UUID,
+    source: InstallerORM,
+    target: InstallerORM,
+) -> None:
+    if source.id == target.id:
+        return
+
+    params = {
+        "company_id": company_id,
+        "source_id": source.id,
+        "target_id": target.id,
+    }
+    for table_name in (
+        "doors",
+        "calendar_event_assignees",
+        "completed_work",
+        "installer_rates",
+        "project_addon_facts",
+        "sync_change_log",
+    ):
+        session.execute(
+            text(
+                f"""
+                UPDATE {table_name}
+                SET installer_id = :target_id
+                WHERE company_id = :company_id
+                  AND installer_id = :source_id
+                """
+            ),
+            params,
+        )
+
+    source_sync = session.execute(
+        select(InstallerSyncStateORM).where(
+            InstallerSyncStateORM.company_id == company_id,
+            InstallerSyncStateORM.installer_id == source.id,
+        )
+    ).scalars().first()
+    target_sync = session.execute(
+        select(InstallerSyncStateORM).where(
+            InstallerSyncStateORM.company_id == company_id,
+            InstallerSyncStateORM.installer_id == target.id,
+        )
+    ).scalars().first()
+
+    if source_sync is not None:
+        if target_sync is None:
+            source_sync.installer_id = target.id
+            session.add(source_sync)
+        else:
+            if source_sync.last_seen_at and (
+                target_sync.last_seen_at is None or source_sync.last_seen_at > target_sync.last_seen_at
+            ):
+                target_sync.last_seen_at = source_sync.last_seen_at
+            if source_sync.last_cursor_ack > target_sync.last_cursor_ack:
+                target_sync.last_cursor_ack = source_sync.last_cursor_ack
+            if not target_sync.app_version and source_sync.app_version:
+                target_sync.app_version = source_sync.app_version
+            if not target_sync.device_id and source_sync.device_id:
+                target_sync.device_id = source_sync.device_id
+            session.delete(source_sync)
+
+    source.user_id = None
+    source.is_active = False
+    if source.deleted_at is None:
+        source.deleted_at = utcnow()
+    session.add(source)
+
+
+def _reconcile_installer_for_user(
+    session,
+    *,
+    company_id: uuid.UUID,
+    installer_user: UserORM,
+) -> InstallerORM | None:
+    candidates = _installer_candidates(
+        session,
+        company_id=company_id,
+        installer_user=installer_user,
+    )
+    if not candidates:
+        return None
+
+    linked = next((row for row in candidates if row.user_id == installer_user.id), None)
+    if linked is None:
+        primary = sorted(
+            candidates,
+            key=lambda row: (
+                row.deleted_at is not None,
+                not row.is_active,
+                row.created_at,
+            ),
+        )[0]
+        primary.user_id = installer_user.id
+        primary.is_active = True
+        primary.deleted_at = None
+        linked = primary
+
+    for candidate in candidates:
+        if candidate.id == linked.id:
+            continue
+        _merge_installer_refs(
+            session,
+            company_id=company_id,
+            source=candidate,
+            target=linked,
+        )
+
+    return linked
+
+
 def seed_dev() -> dict:
     app_env = _env("APP_ENV", "dev")
     if app_env.lower() != "dev":
@@ -81,6 +214,7 @@ def seed_dev() -> dict:
 
         company_id = company.id
         company_name = company.name
+        reason_seed = seed_default_reasons(session, company_id=company_id)
 
         created_users: list[tuple[str, str]] = []
         reused_users: list[tuple[str, str]] = []
@@ -126,6 +260,33 @@ def seed_dev() -> dict:
 
         session.flush()
 
+        admin_users = session.execute(
+            select(UserORM).where(
+                UserORM.company_id == company_id,
+                UserORM.role == UserRole.ADMIN,
+            )
+        ).scalars().all()
+
+        for admin_user in admin_users:
+            admin_profile = session.execute(
+                select(AdminProfileORM).where(
+                    AdminProfileORM.company_id == company_id,
+                    AdminProfileORM.user_id == admin_user.id,
+                )
+            ).scalars().first()
+
+            if admin_profile is None:
+                session.add(
+                    AdminProfileORM(
+                        company_id=company_id,
+                        user_id=admin_user.id,
+                        admin_scope=AdminScope.OWNER.value,
+                        can_view_rates=True,
+                        can_manage_imports=True,
+                        can_manage_users=True,
+                    )
+                )
+
         installer_users = session.execute(
             select(UserORM).where(
                 UserORM.company_id == company_id,
@@ -139,12 +300,11 @@ def seed_dev() -> dict:
         reused_sync = 0
 
         for installer_user in installer_users:
-            installer = session.execute(
-                select(InstallerORM).where(
-                    InstallerORM.company_id == company_id,
-                    InstallerORM.user_id == installer_user.id,
-                )
-            ).scalars().first()
+            installer = _reconcile_installer_for_user(
+                session,
+                company_id=company_id,
+                installer_user=installer_user,
+            )
 
             if installer is None:
                 installer = InstallerORM(
@@ -200,6 +360,7 @@ def seed_dev() -> dict:
         "reused_installers": reused_installers,
         "created_sync_state": created_sync,
         "reused_sync_state": reused_sync,
+        "reason_seed": reason_seed,
         "users": [
             {
                 "role": item["role"],
@@ -230,6 +391,7 @@ def _print_human(summary: dict) -> None:
     print(
         f"CREATED sync_state: {summary['created_sync_state']}, REUSED sync_state: {summary['reused_sync_state']}"
     )
+    print(f"REASONS: {summary['reason_seed']}")
     print("")
     print("LOGIN CREDS:")
     for item in summary["users"]:

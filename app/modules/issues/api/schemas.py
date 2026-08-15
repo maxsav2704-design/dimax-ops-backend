@@ -30,6 +30,29 @@ class AdminIssuesListResponse(BaseModel):
     items: list[AdminIssueDTO]
 
 
+class IssueCommentDTO(BaseModel):
+    id: uuid.UUID
+    body: str | None
+    author_name: str | None = None
+    author_user_id: uuid.UUID | None = None
+    created_at: datetime | None = None
+
+
+class IssueCommentsResponse(BaseModel):
+    items: list[IssueCommentDTO]
+
+
+class IssueMediaAssetDTO(BaseModel):
+    id: uuid.UUID
+    file_name: str | None = None
+    content_type: str | None = None
+    created_at: datetime | None = None
+
+
+class IssueMediaResponse(BaseModel):
+    items: list[IssueMediaAssetDTO]
+
+
 class AdminIssueStatusUpdateBody(BaseModel):
     status: IssueStatus
     details: str | None = Field(default=None, max_length=2000)

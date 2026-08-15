@@ -11,6 +11,7 @@ class LoginBody(BaseModel):
     company_id: UUID
     email: EmailStr
     password: str = Field(min_length=6, max_length=200)
+    device_id: str = Field(min_length=1, max_length=255)
 
 
 class AuthUserDTO(BaseModel):
@@ -18,6 +19,10 @@ class AuthUserDTO(BaseModel):
     role: UserRole
     language: str
     display_name: str
+    admin_scope: str | None = None
+    can_view_rates: bool | None = None
+    can_manage_imports: bool | None = None
+    can_manage_users: bool | None = None
 
 
 class TokenPair(BaseModel):
@@ -29,6 +34,7 @@ class TokenPair(BaseModel):
 
 class RefreshBody(BaseModel):
     refresh_token: str
+    device_id: str | None = Field(default=None, max_length=255)
 
 
 class LogoutRefreshBody(BaseModel):
@@ -60,3 +66,7 @@ class AuthMeResponse(BaseModel):
     language: str
     role: UserRole
     is_active: bool
+    admin_scope: str | None = None
+    can_view_rates: bool | None = None
+    can_manage_imports: bool | None = None
+    can_manage_users: bool | None = None

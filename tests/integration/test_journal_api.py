@@ -180,14 +180,14 @@ def test_journal_admin_public_sign_flow(
 def test_journal_admin_endpoints_forbidden_for_installer_role(client_installer):
     list_resp = client_installer.get("/api/v1/admin/journals")
     assert list_resp.status_code == 403, list_resp.text
-    assert list_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert list_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     create_resp = client_installer.post(
         "/api/v1/admin/journals",
         json={"project_id": str(uuid.uuid4())},
     )
     assert create_resp.status_code == 403, create_resp.text
-    assert create_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert create_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
 def test_journal_validation_returns_422(client_admin_real_uow):

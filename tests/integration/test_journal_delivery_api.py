@@ -384,18 +384,18 @@ def test_journal_delivery_endpoints_forbidden_for_installer_role(client_installe
         },
     )
     assert send_resp.status_code == 403, send_resp.text
-    assert send_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert send_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     share_resp = client_installer.post(
         f"/api/v1/admin/journals/{journal_id}/pdf/share",
         json={"ttl_sec": 300, "uses": 2},
     )
     assert share_resp.status_code == 403, share_resp.text
-    assert share_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert share_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     pdf_resp = client_installer.get(f"/api/v1/admin/journals/{journal_id}/pdf")
     assert pdf_resp.status_code == 403, pdf_resp.text
-    assert pdf_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert pdf_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
 def test_journal_delivery_validation_and_not_found(client_admin_real_uow):

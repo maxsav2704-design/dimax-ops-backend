@@ -18,6 +18,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    if "status" in columns:
+        return
+
     op.add_column(
         "users",
         sa.Column(

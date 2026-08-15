@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.v1.deps import CurrentUser, get_current_user, get_uow
 from app.api.v1.rate_limit import rate_limit_auth_login, rate_limit_auth_refresh
@@ -15,6 +15,7 @@ from app.modules.identity.api.schemas import (
     RefreshBody,
     TokenPair,
 )
+from app.shared.domain.errors import RefreshTokenReuse
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -35,6 +36,7 @@ def auth_me(
 @router.post("/login", response_model=TokenPair)
 def login(
     body: LoginBody,
+    request: Request,
     _rl=Depends(rate_limit_auth_login),
     uow=Depends(get_uow),
 ):
@@ -44,20 +46,31 @@ def login(
             company_id=body.company_id,
             email=str(body.email),
             password=body.password,
+            device_id=body.device_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
 
 
 @router.post("/refresh", response_model=TokenPair)
 def refresh_tokens(
     body: RefreshBody,
+    request: Request,
     _rl=Depends(rate_limit_auth_refresh),
     uow=Depends(get_uow),
 ):
     with uow:
-        return AuthApiService.refresh_tokens(
-            uow,
-            refresh_token=body.refresh_token,
-        )
+        try:
+            return AuthApiService.refresh_tokens(
+                uow,
+                refresh_token=body.refresh_token,
+                device_id=body.device_id,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+        except RefreshTokenReuse:
+            uow.commit()
+            raise
 
 
 @router.post("/logout", response_model=LogoutResponse)

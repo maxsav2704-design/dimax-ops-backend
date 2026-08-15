@@ -22,6 +22,7 @@ class InstallerDoorSerializer:
         "reason_id",
         "comment",
         "is_locked",
+        "version",
     }
 
     @classmethod
@@ -40,6 +41,7 @@ class InstallerDoorSerializer:
             "reason_id": door.reason_id,
             "comment": door.comment,
             "is_locked": door.is_locked,
+            "version": int(getattr(door, "version", 0) or 0),
         }
         return {key: payload[key] for key in cls.ALLOWED_FIELDS}
 

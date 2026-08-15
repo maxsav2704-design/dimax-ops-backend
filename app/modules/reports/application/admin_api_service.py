@@ -81,6 +81,7 @@ class ReportsAdminApiService:
         "company",
         "project",
         "installer_rate",
+        "sync_state",
     }
     ALLOWED_AUDIT_CATALOG_ACTIONS = {
         "DOOR_TYPE_CREATE",
@@ -97,6 +98,7 @@ class ReportsAdminApiService:
         "INSTALLER_RATE_CREATE",
         "INSTALLER_RATE_UPDATE",
         "INSTALLER_RATE_DELETE",
+        "SYNC_STATE_RESET",
     }
     ALLOWED_AUDIT_ISSUE_ACTIONS = {
         "ISSUE_STATUS_UPDATE",

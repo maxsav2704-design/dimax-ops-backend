@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_uow, require_admin
 from app.api.v1.deps import CurrentUser
 from app.modules.sync.api.admin_schemas import (
+    SyncProblemsResponseDTO,
     SyncResetLegacyResponse,
     SyncStateDTO,
     SyncStatsDTO,
@@ -41,6 +42,28 @@ def get_sync_stats(
         )
 
 
+@router.get("/problems", response_model=SyncProblemsResponseDTO)
+def list_sync_problems(
+    limit: int = Query(default=25, ge=1, le=100),
+    installer_id: UUID | None = Query(default=None),
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+        pattern="^(all|failed|conflict|pending|auth_required)$",
+    ),
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow),
+    admin: CurrentUser = Depends(require_admin),
+) -> SyncProblemsResponseDTO:
+    with uow:
+        return AdminSyncApiService.list_problems(
+            uow,
+            company_id=admin.company_id,
+            installer_id=installer_id,
+            limit=limit,
+            status_filter=status_filter,
+        )
+
+
 @router.post(
     "/states/{installer_id}/reset",
     response_model=SyncStateDTO,
@@ -57,6 +80,7 @@ def reset_sync_state_for_installer(
             uow,
             company_id=admin.company_id,
             user_id=installer_id,
+            actor_user_id=admin.id,
         )
 
 
@@ -71,4 +95,5 @@ def reset_sync_state_legacy(
             uow,
             company_id=admin.company_id,
             installer_id=installer_id,
+            actor_user_id=admin.id,
         )

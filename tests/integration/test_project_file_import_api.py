@@ -4,6 +4,8 @@ import base64
 import io
 import json
 import uuid
+import zipfile
+from html import escape
 
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.utils import ImageReader
@@ -12,6 +14,105 @@ from reportlab.pdfgen import canvas
 
 def _b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+def _b64_bytes(content: bytes) -> str:
+    return base64.b64encode(content).decode("ascii")
+
+
+def _xlsx_cell_ref(row_number: int, col_number: int) -> str:
+    letters = ""
+    current = col_number
+    while current:
+        current, remainder = divmod(current - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return f"{letters}{row_number}"
+
+
+def _xlsx_bytes(headers: list[str], rows: list[list[object]]) -> bytes:
+    shared_values: list[str] = []
+    shared_index: dict[str, int] = {}
+
+    def shared(value: object) -> int:
+        text = str(value)
+        if text not in shared_index:
+            shared_index[text] = len(shared_values)
+            shared_values.append(text)
+        return shared_index[text]
+
+    sheet_rows: list[str] = []
+    all_rows = [list(headers), *rows]
+    for row_number, row in enumerate(all_rows, start=1):
+        cells: list[str] = []
+        for col_number, value in enumerate(row, start=1):
+            ref = _xlsx_cell_ref(row_number, col_number)
+            if isinstance(value, int | float):
+                cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+            else:
+                cells.append(f'<c r="{ref}" t="s"><v>{shared(value)}</v></c>')
+        sheet_rows.append(f'<row r="{row_number}">{"".join(cells)}</row>')
+
+    shared_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        f'count="{len(shared_values)}" uniqueCount="{len(shared_values)}">'
+        + "".join(f"<si><t>{escape(value, quote=False)}</t></si>" for value in shared_values)
+        + "</sst>"
+    )
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        "<sheetData>"
+        + "".join(sheet_rows)
+        + "</sheetData>"
+        "</worksheet>"
+    )
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="DIMAX doors" sheetId="1" r:id="rId1"/></sheets>'
+        "</workbook>"
+    )
+    workbook_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        "</Relationships>"
+    )
+    root_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>'
+        "</Relationships>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/sharedStrings.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+        "</Types>"
+    )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", root_rels_xml)
+        zf.writestr("xl/workbook.xml", workbook_xml)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        zf.writestr("xl/sharedStrings.xml", shared_xml)
+    return buffer.getvalue()
 
 
 def _pdf_b64(lines: list[str]) -> str:
@@ -105,6 +206,107 @@ def test_project_import_file_csv_populates_structured_doors(client_admin_real_uo
     assert any(d["unit_label"].endswith("/1") or d["unit_label"].endswith("/2") for d in doors)
 
 
+def test_project_import_file_xlsx_populates_structured_doors(client_admin_real_uow):
+    project_id = _create_project(client_admin_real_uow, name="Import XLSX Project")
+    door_type_id = _create_door_type(client_admin_real_uow, code="entrance", name="Entrance")
+
+    workbook = _xlsx_bytes(
+        [
+            "order_number",
+            "house",
+            "floor",
+            "apartment",
+            "location",
+            "marking",
+            "door_type",
+            "qty",
+            "price",
+        ],
+        [
+            ["AZ-XLSX-100", "A", 3, 301, "dira", "D-301", "entrance", 1, 1000],
+            ["AZ-XLSX-100", "A", 3, 302, "mamad", "M-302", "entrance", 2, 900],
+        ],
+    )
+
+    analyze_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-upload",
+        files={
+            "file": (
+                "factory_manifest.xlsx",
+                workbook,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={
+            "default_our_price": "0",
+            "create_missing_door_types": "false",
+            "analyze_only": "true",
+        },
+    )
+    assert analyze_resp.status_code == 200, analyze_resp.text
+    analyze_body = analyze_resp.json()
+    assert analyze_body["mode"] == "analyze"
+    assert analyze_body["parsed_rows"] == 2
+    assert analyze_body["prepared_rows"] == 3
+    assert analyze_body["would_import"] == 3
+    assert analyze_body["imported"] == 0
+    assert analyze_body["diagnostics"]["data_summary"]["unique_apartments"] == 2
+    assert analyze_body["diagnostics"]["data_summary"]["zero_price_doors"] == 0
+    assert analyze_body["diagnostics"]["preview_groups"][0]["door_type_ids"] == [
+        door_type_id
+    ]
+
+    import_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-upload",
+        files={
+            "file": (
+                "factory_manifest.xlsx",
+                workbook,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={
+            "default_our_price": "0",
+            "create_missing_door_types": "false",
+            "analyze_only": "false",
+        },
+    )
+    assert import_resp.status_code == 200, import_resp.text
+    import_body = import_resp.json()
+    assert import_body["mode"] == "import"
+    assert import_body["imported"] == 3
+    assert import_body["skipped"] == 0
+
+    details = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
+    assert details.status_code == 200, details.text
+    doors = details.json()["doors"]
+    assert len(doors) == 3
+    assert all(d["order_number"] == "AZ-XLSX-100" for d in doors)
+    assert any(d["apartment_number"] == "301" and d["door_marking"] == "D-301" for d in doors)
+    assert sum(1 for d in doors if d["apartment_number"] == "302") == 2
+
+
+def test_project_import_template_xlsx_download(client_admin_real_uow):
+    resp = client_admin_real_uow.get(
+        "/api/v1/admin/projects/doors/import-template.xlsx?mapping_profile=factory_he_v1"
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "dimax-door-import-template-factory_he_v1.xlsx" in resp.headers[
+        "content-disposition"
+    ]
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        names = set(zf.namelist())
+        assert "xl/workbook.xml" in names
+        assert "xl/worksheets/sheet1.xml" in names
+        sheet_xml = zf.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        assert "door_type" in sheet_xml
+        assert "price" in sheet_xml
+
+
 def test_project_import_file_json_with_default_door_type(client_admin_real_uow):
     project_id = _create_project(client_admin_real_uow, name="Import JSON Project")
     door_type_id = _create_door_type(client_admin_real_uow, code="interior", name="Interior")
@@ -177,55 +379,55 @@ def test_project_import_file_forbidden_for_installer_and_validates_format(client
         },
     )
     assert forbidden_resp.status_code == 403, forbidden_resp.text
-    assert forbidden_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     forbidden_upload = client_installer.post(
         f"/api/v1/admin/projects/{project_id}/doors/import-upload",
         files={"file": ("x.csv", b"a,b\n1,2\n", "text/csv")},
     )
     assert forbidden_upload.status_code == 403, forbidden_upload.text
-    assert forbidden_upload.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_upload.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     forbidden_profiles = client_installer.get("/api/v1/admin/projects/import-mapping-profiles")
     assert forbidden_profiles.status_code == 403, forbidden_profiles.text
-    assert forbidden_profiles.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_profiles.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     forbidden_history = client_installer.get(
         f"/api/v1/admin/projects/{project_id}/doors/import-history"
     )
     assert forbidden_history.status_code == 403, forbidden_history.text
-    assert forbidden_history.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_history.json()["error"]["code"] == "FORBIDDEN_SCOPE"
     forbidden_details = client_installer.get(
         f"/api/v1/admin/projects/{project_id}/doors/import-runs/{uuid.uuid4()}"
     )
     assert forbidden_details.status_code == 403, forbidden_details.text
-    assert forbidden_details.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_details.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     forbidden_retry = client_installer.post(
         f"/api/v1/admin/projects/{project_id}/doors/import-runs/{uuid.uuid4()}/retry",
     )
     assert forbidden_retry.status_code == 403, forbidden_retry.text
-    assert forbidden_retry.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_retry.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     forbidden_bulk_reconcile = client_installer.post(
         "/api/v1/admin/projects/import-runs/reconcile-latest",
         json={"project_ids": [str(project_id)]},
     )
     assert forbidden_bulk_reconcile.status_code == 403, forbidden_bulk_reconcile.text
-    assert forbidden_bulk_reconcile.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_bulk_reconcile.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     forbidden_failed_queue = client_installer.get(
         "/api/v1/admin/projects/import-runs/failed-queue"
     )
     assert forbidden_failed_queue.status_code == 403, forbidden_failed_queue.text
-    assert forbidden_failed_queue.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_failed_queue.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     forbidden_retry_failed = client_installer.post(
         "/api/v1/admin/projects/import-runs/retry-failed",
         json={"run_ids": [str(uuid.uuid4())]},
     )
     assert forbidden_retry_failed.status_code == 403, forbidden_retry_failed.text
-    assert forbidden_retry_failed.json()["error"]["code"] == "FORBIDDEN"
+    assert forbidden_retry_failed.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
 def test_project_import_mapping_profiles_endpoint(client_admin_real_uow):
@@ -363,6 +565,10 @@ def test_project_import_file_analyze_only_preflight_does_not_write(client_admin_
     assert analyze_body["imported"] == 0
     assert analyze_body["would_import"] == 1
     assert analyze_body["would_skip"] == 0
+    assert analyze_body["diagnostics"]["data_summary"]["zero_price_doors"] == 1
+    assert analyze_body["diagnostics"]["preview_groups"][0]["door_type_ids"] == [
+        door_type_id
+    ]
 
     details_before = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
     assert details_before.status_code == 200, details_before.text
@@ -385,6 +591,40 @@ def test_project_import_file_analyze_only_preflight_does_not_write(client_admin_
     details_after = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
     assert details_after.status_code == 200, details_after.text
     assert len(details_after.json()["doors"]) == 1
+
+
+def test_project_import_analyze_only_does_not_create_missing_door_types(
+    client_admin_real_uow,
+):
+    project_id = _create_project(client_admin_real_uow, name="Import Analyze Missing Types")
+
+    csv_payload = (
+        "house,floor,apartment,marking,door_type,qty\n"
+        "A,8,802,AN-802,analyze-created-type,1\n"
+    )
+    analyze_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-file",
+        json={
+            "filename": "factory_manifest_missing_type_preflight.csv",
+            "content_base64": _b64(csv_payload),
+            "create_missing_door_types": True,
+            "default_our_price": "0",
+            "analyze_only": True,
+        },
+    )
+    assert analyze_resp.status_code == 200, analyze_resp.text
+    body = analyze_resp.json()
+    assert body["mode"] == "analyze"
+    assert body["would_import"] == 1
+    assert body["imported"] == 0
+
+    details = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
+    assert details.status_code == 200, details.text
+    assert details.json()["doors"] == []
+
+    dtypes = client_admin_real_uow.get("/api/v1/admin/door-types?q=analyze-created-type")
+    assert dtypes.status_code == 200, dtypes.text
+    assert all(x["code"] != "analyze-created-type" for x in dtypes.json())
 
 
 def test_project_import_file_idempotency_prevents_duplicate_apply(client_admin_real_uow):
@@ -423,6 +663,104 @@ def test_project_import_file_idempotency_prevents_duplicate_apply(client_admin_r
     details = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
     assert details.status_code == 200, details.text
     assert len(details.json()["doors"]) == 1
+
+
+def test_project_import_file_rejects_partial_apply_without_explicit_allow(
+    client_admin_real_uow,
+):
+    project_id = _create_project(client_admin_real_uow, name="Import Partial Guard")
+    door_type_id = _create_door_type(
+        client_admin_real_uow,
+        code="partial-guard",
+        name="Partial Guard",
+    )
+
+    csv_payload = (
+        "house,floor,apartment,marking,price,qty\n"
+        "A,4,401,PG-401,100,1\n"
+        "A,4,402,PG-402,bad_price,1\n"
+    )
+
+    analyze_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-file",
+        json={
+            "filename": "partial_guard.csv",
+            "content_base64": _b64(csv_payload),
+            "default_door_type_id": door_type_id,
+            "default_our_price": "0",
+            "analyze_only": True,
+        },
+    )
+    assert analyze_resp.status_code == 200, analyze_resp.text
+    assert analyze_resp.json()["would_import"] == 1
+    assert len(analyze_resp.json()["errors"]) == 1
+
+    blocked_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-file",
+        json={
+            "filename": "partial_guard.csv",
+            "content_base64": _b64(csv_payload),
+            "default_door_type_id": door_type_id,
+            "default_our_price": "0",
+        },
+    )
+    assert blocked_resp.status_code == 422, blocked_resp.text
+    assert "partial import requires allow_partial_import=true" in blocked_resp.json()["error"]["message"]
+
+    details_before = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
+    assert details_before.status_code == 200, details_before.text
+    assert details_before.json()["doors"] == []
+
+    allowed_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-file",
+        json={
+            "filename": "partial_guard.csv",
+            "content_base64": _b64(csv_payload),
+            "default_door_type_id": door_type_id,
+            "default_our_price": "0",
+            "allow_partial_import": True,
+        },
+    )
+    assert allowed_resp.status_code == 200, allowed_resp.text
+    assert allowed_resp.json()["imported"] == 1
+    assert len(allowed_resp.json()["errors"]) == 1
+
+    details_after = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
+    assert details_after.status_code == 200, details_after.text
+    doors = details_after.json()["doors"]
+    assert len(doors) == 1
+    assert doors[0]["apartment_number"] == "401"
+
+
+def test_project_import_blocked_partial_rolls_back_created_door_types(
+    client_admin_real_uow,
+):
+    project_id = _create_project(client_admin_real_uow, name="Import Partial Rollback")
+
+    csv_payload = (
+        "house,floor,apartment,marking,door_type,price,qty\n"
+        "A,5,501,RB-501,rollback-created-type,100,1\n"
+        "A,5,502,RB-502,rollback-created-type,bad_price,1\n"
+    )
+    blocked_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-file",
+        json={
+            "filename": "partial_rollback.csv",
+            "content_base64": _b64(csv_payload),
+            "default_our_price": "0",
+            "create_missing_door_types": True,
+        },
+    )
+    assert blocked_resp.status_code == 422, blocked_resp.text
+    assert "partial import requires allow_partial_import=true" in blocked_resp.json()["error"]["message"]
+
+    details = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}")
+    assert details.status_code == 200, details.text
+    assert details.json()["doors"] == []
+
+    dtypes = client_admin_real_uow.get("/api/v1/admin/door-types?q=rollback-created-type")
+    assert dtypes.status_code == 200, dtypes.text
+    assert all(x["code"] != "rollback-created-type" for x in dtypes.json())
 
 
 def test_project_import_file_history_and_retry(client_admin_real_uow):
@@ -611,6 +949,7 @@ def test_project_bulk_reconcile_only_failed_runs(client_admin_real_uow):
             "filename": "bulk_only_failed_partial.csv",
             "content_base64": _b64(partial_payload),
             "default_our_price": "0",
+            "allow_partial_import": True,
         },
     )
     assert partial_resp.status_code == 200, partial_resp.text
@@ -672,6 +1011,7 @@ def test_project_failed_queue_and_retry_failed_runs_bulk(client_admin_real_uow):
             "filename": "queue_partial.csv",
             "content_base64": _b64(partial_payload),
             "default_our_price": "0",
+            "allow_partial_import": True,
         },
     )
     assert partial_resp.status_code == 200, partial_resp.text

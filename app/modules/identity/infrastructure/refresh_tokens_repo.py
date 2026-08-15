@@ -25,6 +25,7 @@ class RefreshTokenRepository:
                 RefreshTokenORM.jti == jti,
                 RefreshTokenORM.revoked_at.is_(None),
             )
+            .with_for_update()
             .one_or_none()
         )
 
@@ -37,6 +38,7 @@ class RefreshTokenRepository:
                 RefreshTokenORM.company_id == company_id,
                 RefreshTokenORM.jti == jti,
             )
+            .with_for_update()
             .one_or_none()
         )
 

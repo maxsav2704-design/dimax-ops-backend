@@ -18,19 +18,42 @@ branch_labels = None
 depends_on = None
 
 
+def _has_table(inspector: sa.Inspector, table_name: str) -> bool:
+    return table_name in inspector.get_table_names()
+
+
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if _has_table(inspector, "installer_profiles"):
+        return
+
     op.create_table(
         "installer_profiles",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("company_id", UUID(as_uuid=True), nullable=False),
         sa.Column(
             "user_id",
             UUID(as_uuid=True),
             sa.ForeignKey("users.id", ondelete="CASCADE"),
+            primary_key=True,
             nullable=False,
         ),
+        sa.Column(
+            "company_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("companies.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "installer_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("installers.id", ondelete="CASCADE"),
+            nullable=True,
+            unique=True,
+        ),
         sa.Column("display_name", sa.String(255), nullable=True),
+        sa.Column("phone", sa.String(40), nullable=True),
         sa.Column("language", sa.String(8), nullable=False, server_default="en"),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -43,13 +66,27 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
-        sa.UniqueConstraint("company_id", "user_id", name="uq_installer_profiles_company_user"),
     )
-    op.create_index("ix_installer_profiles_company_id", "installer_profiles", ["company_id"])
-    op.create_index("ix_installer_profiles_user_id", "installer_profiles", ["user_id"])
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'ck_installer_profiles_language'
+          ) THEN
+            ALTER TABLE installer_profiles
+              ADD CONSTRAINT ck_installer_profiles_language
+              CHECK (language IN ('ru', 'en', 'he'));
+          END IF;
+        END $$;
+        """
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_installer_profiles_user_id", table_name="installer_profiles")
-    op.drop_index("ix_installer_profiles_company_id", table_name="installer_profiles")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not _has_table(inspector, "installer_profiles"):
+        return
+
     op.drop_table("installer_profiles")

@@ -7,18 +7,28 @@ from datetime import datetime, timezone
 import httpx
 
 from app.core.config import settings
+from app.shared.infrastructure.observability import get_logger, log_event
 
 # System actor for auto-actions (audit log)
 SYSTEM_ACTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+logger = get_logger(__name__)
 
 
 @dataclass
 class HealthResult:
     installer_id: str
+    installer_name: str | None
+    installer_phone: str | None
     status: str
     lag: int
     days_offline: int
     last_seen_at: str | None
+    failed_events: int
+    queue_pending: int
+    queue_conflicts: int
+    queue_blocked: int
+    queue_auth_required: int
+    problem_count: int
 
 
 class SyncHealthService:
@@ -56,18 +66,52 @@ class SyncHealthService:
         now = SyncHealthService._utcnow()
         max_cursor = uow.sync_change_log.max_cursor(company_id=company_id)
 
-        rows = uow.sync_state.list_states_for_health(company_id=company_id)
+        state_rows = uow.sync_state.list_states_with_installers(company_id=company_id)
+        rows = [state for state, _installer in state_rows]
+        failed_event_counts = uow.sync_events.count_failed_by_installer(
+            company_id=company_id
+        )
+        queue_counts = uow.sync_queue.count_problem_statuses_by_installer(
+            company_id=company_id
+        )
 
         results: list[HealthResult] = []
         danger_items = []
         warn_items = []
         ok_count = 0
+        total_failed_events = 0
+        total_queue_pending = 0
+        total_queue_conflicts = 0
+        total_queue_blocked = 0
+        total_queue_auth_required = 0
 
-        for r in rows:
+        for r, installer in state_rows:
             last_ack = int(r.last_cursor_ack or 0)
             lag = max(0, int(max_cursor - last_ack))
             days_offline = SyncHealthService._days_offline(r.last_seen_at)
             status = SyncHealthService._status(lag, days_offline)
+            failed_events = failed_event_counts.get(r.installer_id, 0)
+            installer_queue_counts = queue_counts.get(r.installer_id, {})
+            queue_pending = installer_queue_counts.get("PENDING", 0)
+            queue_conflicts = installer_queue_counts.get("CONFLICT", 0)
+            queue_blocked = installer_queue_counts.get("BLOCKED", 0)
+            queue_auth_required = installer_queue_counts.get("AUTH_REQUIRED", 0)
+            problem_count = (
+                failed_events
+                + queue_conflicts
+                + queue_blocked
+                + queue_auth_required
+            )
+            if problem_count > 0:
+                status = "DANGER"
+            elif queue_pending > 0 and status == "OK":
+                status = "WARN"
+
+            total_failed_events += failed_events
+            total_queue_pending += queue_pending
+            total_queue_conflicts += queue_conflicts
+            total_queue_blocked += queue_blocked
+            total_queue_auth_required += queue_auth_required
 
             r.health_status = status
             r.health_lag = lag
@@ -76,12 +120,20 @@ class SyncHealthService:
             results.append(
                 HealthResult(
                     installer_id=str(r.installer_id),
+                    installer_name=installer.full_name if installer else None,
+                    installer_phone=installer.phone if installer else None,
                     status=status,
                     lag=lag,
                     days_offline=days_offline,
                     last_seen_at=(
                         r.last_seen_at.isoformat() if r.last_seen_at else None
                     ),
+                    failed_events=failed_events,
+                    queue_pending=queue_pending,
+                    queue_conflicts=queue_conflicts,
+                    queue_blocked=queue_blocked,
+                    queue_auth_required=queue_auth_required,
+                    problem_count=problem_count,
                 )
             )
 
@@ -99,7 +151,7 @@ class SyncHealthService:
                     installer = uow.installers.get(
                         company_id=company_id, installer_id=r.installer_id
                     )
-                    SyncHealthService._send_webhook_alert(
+                    alert_sent = SyncHealthService._send_webhook_alert(
                         company_id=str(company_id),
                         installer_id=str(r.installer_id),
                         lag=int(r.health_lag or 0),
@@ -113,9 +165,10 @@ class SyncHealthService:
                         installer_name=installer.full_name if installer else None,
                         installer_phone=installer.phone if installer else None,
                     )
-                    r.last_alert_at = now
-                    r.last_alert_lag = int(r.health_lag or 0)
-                    alerts_sent += 1
+                    if alert_sent:
+                        r.last_alert_at = now
+                        r.last_alert_lag = int(r.health_lag or 0)
+                        alerts_sent += 1
 
         uow.session.flush()
 
@@ -167,6 +220,17 @@ class SyncHealthService:
                 "dead": dead_count,
                 "never_seen": never_seen,
                 "danger_pct": danger_pct,
+                "failed_events": total_failed_events,
+                "queue_pending": total_queue_pending,
+                "queue_conflicts": total_queue_conflicts,
+                "queue_blocked": total_queue_blocked,
+                "queue_auth_required": total_queue_auth_required,
+                "problem_total": (
+                    total_failed_events
+                    + total_queue_conflicts
+                    + total_queue_blocked
+                    + total_queue_auth_required
+                ),
             },
             "alerts_sent": alerts_sent,
             "top_laggers": [x.__dict__ for x in top_laggers],
@@ -195,7 +259,7 @@ class SyncHealthService:
         max_cursor: int,
         installer_name: str | None = None,
         installer_phone: str | None = None,
-    ) -> None:
+    ) -> bool:
         payload = {
             "type": "SYNC_DANGER",
             "company_id": company_id,
@@ -211,13 +275,23 @@ class SyncHealthService:
         if installer_phone is not None:
             payload["installer_phone"] = installer_phone
         try:
-            httpx.post(
+            response = httpx.post(
                 settings.SYNC_ALERT_WEBHOOK_URL,
                 json=payload,
                 timeout=5.0,
             )
-        except Exception:
-            pass
+            response.raise_for_status()
+        except Exception as exc:
+            log_event(
+                logger,
+                "sync.health.webhook.failed",
+                level="warning",
+                company_id=company_id,
+                installer_id=installer_id,
+                error_type=type(exc).__name__,
+            )
+            return False
+        return True
 
     @staticmethod
     def _create_or_close_sync_risk_issues(

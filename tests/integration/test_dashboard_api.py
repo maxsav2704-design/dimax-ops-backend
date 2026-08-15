@@ -19,4 +19,4 @@ def test_admin_dashboard_returns_sync_health_payload(client_admin_real_uow):
 def test_admin_dashboard_forbidden_for_installer_role(client_installer):
     resp = client_installer.get("/api/v1/admin/dashboard")
     assert resp.status_code == 403, resp.text
-    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"

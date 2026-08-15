@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from app.api.v1.pagination import PaginationDTO
 
 
-class InstallerIssueDTO(BaseModel):
+class InstallerIssueReportDTO(BaseModel):
     id: uuid.UUID
     door_id: uuid.UUID
     project_id: uuid.UUID
@@ -21,7 +21,7 @@ class InstallerIssueDTO(BaseModel):
 
 
 class InstallerIssuesListResponse(BaseModel):
-    items: list[InstallerIssueDTO]
+    items: list[InstallerIssueReportDTO]
     pagination: PaginationDTO
 
 
@@ -29,3 +29,7 @@ class InstallerIssueCreateBody(BaseModel):
     door_id: uuid.UUID
     title: str | None = Field(default=None, max_length=200)
     details: str | None = Field(default=None, max_length=2000)
+
+
+class InstallerIssueUpdateBody(BaseModel):
+    comment: str | None = Field(default=None, max_length=2000)

@@ -115,4 +115,4 @@ def test_public_file_download_by_token_consumes_usage(
 def test_admin_files_endpoints_forbidden_for_installer(client_installer):
     resp = client_installer.get("/api/v1/admin/files/downloads")
     assert resp.status_code == 403, resp.text
-    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"

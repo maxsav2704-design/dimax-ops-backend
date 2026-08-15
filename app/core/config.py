@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@db:5432/dimax"
     JWT_SECRET: str = "change-me"
     JWT_ISSUER: str = "dimax"
-    JWT_ACCESS_TTL_MIN: int = 30
+    JWT_ACCESS_TTL_MIN: int = 15
     JWT_REFRESH_TTL_DAYS: int = 30
     PLATFORM_API_TOKEN: str = ""
 
@@ -79,8 +79,8 @@ class Settings(BaseSettings):
 
     PUBLIC_FILES_RL_WINDOW_SEC: int = 60
     PUBLIC_FILES_RL_MAX_REQ: int = 30
-    AUTH_LOGIN_RL_WINDOW_SEC: int = 60
-    AUTH_LOGIN_RL_MAX_REQ: int = 60
+    AUTH_LOGIN_RL_WINDOW_SEC: int = 900
+    AUTH_LOGIN_RL_MAX_REQ: int = 5
     AUTH_REFRESH_RL_WINDOW_SEC: int = 60
     AUTH_REFRESH_RL_MAX_REQ: int = 120
 

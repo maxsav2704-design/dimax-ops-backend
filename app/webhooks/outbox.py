@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -34,9 +35,17 @@ logger = get_logger(__name__)
 def _validate_outbox_webhook_token(request: Request) -> None:
     token = (settings.OUTBOX_WEBHOOK_TOKEN or "").strip()
     if not token:
-        return
+        log_event(
+            logger,
+            "webhook.outbox.forbidden",
+            level="warning",
+            reason="webhook_disabled",
+            path=str(request.url.path),
+            client_ip=request.client.host if request.client else None,
+        )
+        raise Forbidden("Outbox webhook is disabled")
     provided = (request.headers.get("X-Webhook-Token") or "").strip()
-    if provided != token:
+    if not secrets.compare_digest(provided, token):
         log_event(
             logger,
             "webhook.outbox.forbidden",

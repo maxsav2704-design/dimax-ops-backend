@@ -4,9 +4,11 @@ import uuid
 from datetime import date
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     Enum,
     ForeignKey,
+    Index,
     Numeric,
     String,
     UniqueConstraint,
@@ -30,6 +32,23 @@ class ProjectORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin, SoftDel
     __table_args__ = (
         UniqueConstraint(
             "company_id", "name", "address", name="uq_projects_company_name_address"
+        ),
+        Index(
+            "ix_projects_company_code_active",
+            "company_id",
+            "code",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_projects_lifecycle_status", "lifecycle_status"),
+        Index("ix_projects_health_status", "health_status"),
+        CheckConstraint(
+            "lifecycle_status IN ('PLANNED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED')",
+            name="ck_projects_lifecycle_status",
+        ),
+        CheckConstraint(
+            "health_status IN ('NORMAL', 'AT_RISK', 'BLOCKED')",
+            name="ck_projects_health_status",
         ),
     )
 
@@ -81,7 +100,7 @@ class ProjectORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin, SoftDel
     )
 
 
-class ProjectImportRunORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
+class ProjectImportRunORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "project_import_runs"
     __table_args__ = (
         UniqueConstraint(
@@ -93,6 +112,12 @@ class ProjectImportRunORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin
         ),
     )
 
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="CASCADE"),

@@ -7,9 +7,15 @@ on:
       - "app/**"
       - "alembic/**"
       - "tests/**"
+      - "scripts/**"
       - "requirements.txt"
+      - "requirements-audit.txt"
+      - "constraints.txt"
       - "Dockerfile"
+      - "docker-entrypoint.sh"
       - "docker-compose.yml"
+      - "docker-compose.production.yml"
+      - ".env.production.example"
       - "pytest.ini"
       - ".github/workflows/backend-tests.yml"
   pull_request:
@@ -17,9 +23,15 @@ on:
       - "app/**"
       - "alembic/**"
       - "tests/**"
+      - "scripts/**"
       - "requirements.txt"
+      - "requirements-audit.txt"
+      - "constraints.txt"
       - "Dockerfile"
+      - "docker-entrypoint.sh"
       - "docker-compose.yml"
+      - "docker-compose.production.yml"
+      - ".env.production.example"
       - "pytest.ini"
       - ".github/workflows/backend-tests.yml"
 
@@ -74,8 +86,11 @@ jobs:
       - name: Prepare env
         run: cp .env.example .env
 
-      - name: Run architecture contract test
-        run: docker compose run --rm --no-deps api pytest -q tests/architecture/test_module_structure.py
+      - name: Run architecture and security contract tests
+        run: >
+          docker compose run --rm --no-deps api pytest -q
+          tests/architecture
+          tests/test_security_hashes.py
 
   api-contract:
     runs-on: ubuntu-latest
@@ -152,6 +167,12 @@ jobs:
 
       - name: Upgrade to head again
         run: docker compose run --rm --no-deps api alembic upgrade head
+
+      - name: Legacy product library upgrade and downgrade smoke
+        run: >
+          docker compose run --rm --no-deps
+          -e DIMAX_LEGACY_MIGRATION_SMOKE=1
+          api python scripts/db_legacy_product_library_migration_smoke.py
 
       - name: Teardown
         if: always()

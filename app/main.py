@@ -5,11 +5,14 @@ import uuid
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from app.api.v1.errors import install_error_handlers
 from app.api.v1.routers import router as v1_router
 from app.core.config import settings
+from app.shared.infrastructure.db.session import engine
 from app.shared.infrastructure.observability import (
     configure_logging,
     get_logger,
@@ -87,6 +90,28 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/ready", include_in_schema=False)
+    def readiness():
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except Exception as exc:
+            log_event(
+                logger,
+                "app.readiness.failed",
+                level="warning",
+                check="database",
+                error_type=type(exc).__name__,
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "checks": {"database": "unavailable"},
+                },
+            )
+        return {"status": "ok", "checks": {"database": "ready"}}
 
     app.include_router(v1_router)
     return app

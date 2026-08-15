@@ -6,6 +6,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.modules.projects.domain.enums import (
+    ProjectHealthStatus,
+    ProjectLifecycleStatus,
+)
+
 
 class ProjectCreateBody(BaseModel):
     name: str = Field(min_length=2, max_length=200)
@@ -13,6 +18,7 @@ class ProjectCreateBody(BaseModel):
     address: str = Field(default="", max_length=400)
     planned_start_date: date | None = None
     planned_end_date: date | None = None
+    lifecycle_status: ProjectLifecycleStatus = ProjectLifecycleStatus.ACTIVE
     developer_company: str | None = Field(default=None, max_length=200)
     contact_name: str | None = Field(default=None, max_length=200)
     contact_phone: str | None = Field(default=None, max_length=40)
@@ -35,6 +41,7 @@ class ProjectUpdateBody(BaseModel):
     code: str | None = Field(default=None, max_length=40)
     planned_start_date: date | None = None
     planned_end_date: date | None = None
+    lifecycle_status: ProjectLifecycleStatus | None = None
     developer_company: str | None = Field(default=None, max_length=200)
     contact_name: str | None = Field(default=None, max_length=200)
     contact_phone: str | None = Field(default=None, max_length=40)
@@ -57,8 +64,8 @@ class ProjectListItem(BaseModel):
     code: str | None = None
     address: str
     status: str
-    lifecycle_status: str = "ACTIVE"
-    health_status: str = "NORMAL"
+    lifecycle_status: ProjectLifecycleStatus = ProjectLifecycleStatus.ACTIVE
+    health_status: ProjectHealthStatus = ProjectHealthStatus.NORMAL
 
 
 class ProjectListResponse(BaseModel):
@@ -117,6 +124,7 @@ class ImportDoorsFromFileBody(BaseModel):
     strict_required_fields: bool | None = None
     create_missing_door_types: bool = False
     analyze_only: bool = False
+    allow_partial_import: bool = False
 
 
 class ImportDoorsFromFileErrorDTO(BaseModel):
@@ -136,6 +144,7 @@ class ImportDataSummaryDTO(BaseModel):
     prepared_rows: int = 0
     rows_with_errors: int = 0
     duplicate_rows_skipped: int = 0
+    zero_price_doors: int = 0
     unique_order_numbers: int = 0
     unique_houses: int = 0
     unique_floors: int = 0
@@ -152,6 +161,7 @@ class ImportPreviewGroupDTO(BaseModel):
     door_marking: str | None = None
     door_count: int = 0
     location_codes: list[str] = Field(default_factory=list)
+    door_type_ids: list[UUID] = Field(default_factory=list)
 
 
 class ImportColumnsDiagnosticsDTO(BaseModel):
@@ -317,6 +327,30 @@ class AssignInstallerBody(BaseModel):
     installer_id: UUID
 
 
+class BulkAssignInstallerBody(BaseModel):
+    door_ids: list[UUID] = Field(min_length=1, max_length=500)
+    installer_id: UUID
+
+
+class BulkAssignInstallerResponse(BaseModel):
+    assigned: int
+    skipped: int
+    assigned_door_ids: list[UUID]
+
+
+class ManualDoorCreateBody(BaseModel):
+    product_id: UUID
+    door_code: str = Field(min_length=1, max_length=120)
+    unit: str = Field(min_length=1, max_length=120)
+    floor: str | None = Field(default=None, max_length=40)
+    location_code: str | None = Field(default=None, max_length=80)
+    order_number: str | None = Field(default=None, max_length=80)
+    install_type: str | None = Field(default=None, max_length=120)
+    is_critical: bool = False
+    assigned_installer_id: UUID | None = None
+    planned_install_date: date | None = None
+
+
 class DoorDTO(BaseModel):
     id: UUID
     unit_label: str
@@ -404,8 +438,8 @@ class ProjectDetailsResponse(BaseModel):
     planned_start_date: date | None = None
     planned_end_date: date | None = None
     status: str
-    lifecycle_status: str = "ACTIVE"
-    health_status: str = "NORMAL"
+    lifecycle_status: ProjectLifecycleStatus = ProjectLifecycleStatus.ACTIVE
+    health_status: ProjectHealthStatus = ProjectHealthStatus.NORMAL
     developer: ProjectDeveloperDetailsDTO | None = None
     developer_company: str | None
     contact_name: str | None

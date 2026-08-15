@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.shared.infrastructure.db.base import Base
+from app.shared.infrastructure.db.model_registry import import_all_orm_models
 
 # --- импортируем ВСЕ ORM модели, чтобы они зарегистрировались в metadata ---
 from app.modules.identity.infrastructure.models import (  # noqa: F401
@@ -19,10 +20,15 @@ from app.modules.identity.infrastructure.refresh_tokens_models import (  # noqa:
 from app.modules.audit.infrastructure.models import AuditLogORM  # noqa: F401
 from app.modules.door_types.infrastructure.models import DoorTypeORM  # noqa: F401
 from app.modules.reasons.infrastructure.models import ReasonORM  # noqa: F401
-from app.modules.installers.infrastructure.models import InstallerORM  # noqa: F401
+from app.modules.installers.infrastructure.models import (  # noqa: F401
+    InstallerORM,
+    InstallerProfileORM,
+)
+from app.modules.library.infrastructure.models import ProductLibraryItemORM  # noqa: F401
 from app.modules.rates.infrastructure.models import InstallerRateORM  # noqa: F401
 from app.modules.projects.infrastructure.models import ProjectORM  # noqa: F401
 from app.modules.doors.infrastructure.models import DoorORM  # noqa: F401
+from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM  # noqa: F401
 from app.modules.issues.infrastructure.models import IssueORM  # noqa: F401
 from app.modules.journal.infrastructure.models import (  # noqa: F401
     JournalORM,
@@ -47,14 +53,20 @@ from app.modules.addons.infrastructure.models import (  # noqa: F401
 )
 from app.modules.sync.infrastructure.models import (  # noqa: F401
     InstallerSyncStateORM,
+    SyncQueueItemORM,
     SyncChangeLogORM,
     SyncEventORM,
+)
+from app.modules.earnings.infrastructure.models import (  # noqa: F401
+    ClientPriceSnapshotORM,
+    CompletedWorkORM,
 )
 from app.modules.companies.infrastructure.models import CompanyPlanORM  # noqa: F401
 from app.modules.settings.infrastructure.models import (  # noqa: F401
     CommunicationTemplateORM,
 )
 # -------------------------------------------------------------------------
+import_all_orm_models()
 
 config = context.config
 

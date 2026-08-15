@@ -10,6 +10,10 @@ from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 
 
+def _enum_value(value: object) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+
 class DoorRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -142,8 +146,11 @@ class DoorRepository:
                 "apartment_number": r.apartment_number,
                 "location_code": r.location_code,
                 "door_marking": r.door_marking,
-                "status": str(r.status),
+                "status": _enum_value(r.status),
+                "reason_id": str(r.reason_id) if r.reason_id else None,
                 "comment": r.comment,
+                "is_locked": bool(r.is_locked),
+                "version": int(getattr(r, "version", 0) or 0),
                 "updated_at": (
                     r.updated_at.isoformat() if r.updated_at else None
                 ),
@@ -178,8 +185,11 @@ class DoorRepository:
                 "apartment_number": r.apartment_number,
                 "location_code": r.location_code,
                 "door_marking": r.door_marking,
-                "status": str(r.status),
+                "status": _enum_value(r.status),
+                "reason_id": str(r.reason_id) if r.reason_id else None,
                 "comment": r.comment,
+                "is_locked": bool(r.is_locked),
+                "version": int(getattr(r, "version", 0) or 0),
                 "updated_at": r.updated_at,
             }
             for r in rows

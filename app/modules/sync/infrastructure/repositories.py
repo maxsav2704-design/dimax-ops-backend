@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import desc, func, nulls_last, or_
+from sqlalchemy import and_, desc, func, nulls_last, or_
 from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
@@ -36,6 +36,18 @@ class SyncEventRepository:
             )
             .first()
             is not None
+        )
+
+    def get_by_client_event(
+        self, *, company_id: uuid.UUID, client_event_id: str
+    ) -> SyncEventORM | None:
+        return (
+            self.session.query(SyncEventORM)
+            .filter(
+                SyncEventORM.company_id == company_id,
+                SyncEventORM.client_event_id == client_event_id,
+            )
+            .one_or_none()
         )
 
     def create_pending(
@@ -72,6 +84,65 @@ class SyncEventRepository:
         row.applied_at = utcnow()
         row.apply_error = error[:5000]
         self.session.add(row)
+
+    def count_failed_by_installer(
+        self, *, company_id: uuid.UUID
+    ) -> dict[uuid.UUID, int]:
+        rows = (
+            self.session.query(SyncEventORM.installer_id, func.count(SyncEventORM.id))
+            .filter(
+                SyncEventORM.company_id == company_id,
+                SyncEventORM.apply_error.isnot(None),
+            )
+            .group_by(SyncEventORM.installer_id)
+            .all()
+        )
+        return {installer_id: int(count or 0) for installer_id, count in rows}
+
+    def count_failed(
+        self, *, company_id: uuid.UUID, installer_id: uuid.UUID | None = None
+    ) -> int:
+        query = self.session.query(func.count(SyncEventORM.id)).filter(
+            SyncEventORM.company_id == company_id,
+            SyncEventORM.apply_error.isnot(None),
+        )
+        if installer_id is not None:
+            query = query.filter(SyncEventORM.installer_id == installer_id)
+        return int(query.scalar() or 0)
+
+    def list_failed_with_installers(
+        self,
+        *,
+        company_id: uuid.UUID,
+        limit: int,
+        installer_id: uuid.UUID | None = None,
+    ) -> list[tuple[SyncEventORM, InstallerORM | None]]:
+        query = (
+            self.session.query(SyncEventORM, InstallerORM)
+            .join(
+                InstallerORM,
+                and_(
+                    InstallerORM.company_id == SyncEventORM.company_id,
+                    InstallerORM.id == SyncEventORM.installer_id,
+                ),
+                isouter=True,
+            )
+            .filter(
+                SyncEventORM.company_id == company_id,
+                SyncEventORM.apply_error.isnot(None),
+            )
+        )
+        if installer_id is not None:
+            query = query.filter(SyncEventORM.installer_id == installer_id)
+        rows = (
+            query.order_by(
+                nulls_last(desc(SyncEventORM.applied_at)),
+                desc(SyncEventORM.created_at),
+            )
+            .limit(limit)
+            .all()
+        )
+        return [(event, installer) for event, installer in rows]
 
 
 class SyncChangeLogRepository:
@@ -127,16 +198,35 @@ class SyncChangeLogRepository:
             SyncChangeLogORM.cursor_id > since_cursor,
         ]
 
+        shared_project_change_types = (
+            SyncChangeType.PROJECT_BASE,
+            SyncChangeType.PROJECT_ADDON_PLAN,
+            SyncChangeType.CATALOG_ADDON_TYPES,
+        )
+
+        direct_installer_filter = and_(
+            SyncChangeLogORM.installer_id == installer_id,
+            SyncChangeLogORM.change_type == SyncChangeType.PROJECT_ASSIGNMENTS,
+        )
+
         if project_ids:
+            direct_installer_filter = or_(
+                direct_installer_filter,
+                and_(
+                    SyncChangeLogORM.installer_id == installer_id,
+                    SyncChangeLogORM.project_id.in_(project_ids),
+                ),
+            )
             scope_filter = or_(
-                SyncChangeLogORM.installer_id == installer_id,
+                direct_installer_filter,
                 (
                     SyncChangeLogORM.installer_id.is_(None)
                     & SyncChangeLogORM.project_id.in_(project_ids)
+                    & SyncChangeLogORM.change_type.in_(shared_project_change_types)
                 ),
             )
         else:
-            scope_filter = SyncChangeLogORM.installer_id == installer_id
+            scope_filter = direct_installer_filter
 
         q = (
             self.session.query(SyncChangeLogORM)
@@ -168,6 +258,18 @@ class SyncChangeLogRepository:
 class InstallerSyncStateRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
+
+    def get(
+        self, *, company_id: uuid.UUID, installer_id: uuid.UUID
+    ) -> InstallerSyncStateORM | None:
+        return (
+            self.session.query(InstallerSyncStateORM)
+            .filter(
+                InstallerSyncStateORM.company_id == company_id,
+                InstallerSyncStateORM.installer_id == installer_id,
+            )
+            .one_or_none()
+        )
 
     def get_or_create(
         self, *, company_id: uuid.UUID, installer_id: uuid.UUID
@@ -341,6 +443,80 @@ class InstallerSyncQueueRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def get(
+        self,
+        *,
+        company_id: uuid.UUID,
+        item_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> SyncQueueItemORM | None:
+        return (
+            self.session.query(SyncQueueItemORM)
+            .filter(
+                SyncQueueItemORM.company_id == company_id,
+                SyncQueueItemORM.id == item_id,
+                SyncQueueItemORM.user_id == user_id,
+            )
+            .one_or_none()
+        )
+
+    def create_or_update_pending(
+        self,
+        *,
+        company_id: uuid.UUID,
+        user_id: uuid.UUID,
+        item_id: uuid.UUID,
+        device_id: str,
+        project_id: uuid.UUID | None,
+        entity_type: str,
+        entity_id: uuid.UUID,
+        operation_type: str,
+        payload: dict,
+        base_version: int,
+    ) -> SyncQueueItemORM:
+        row = self.get(
+            company_id=company_id,
+            item_id=item_id,
+            user_id=user_id,
+        )
+        if row is None:
+            row = SyncQueueItemORM(
+                id=item_id,
+                company_id=company_id,
+                user_id=user_id,
+                created_at=utcnow(),
+            )
+        row.device_id = device_id
+        row.project_id = project_id
+        row.entity_type = entity_type
+        row.entity_id = entity_id
+        row.operation_type = operation_type
+        row.payload = payload or {}
+        row.base_version = int(base_version)
+        row.status = "PENDING"
+        row.conflict_code = None
+        row.synced_at = None
+        self.session.add(row)
+        return row
+
+    def mark_applied(self, row: SyncQueueItemORM) -> None:
+        row.status = "APPLIED"
+        row.conflict_code = None
+        row.synced_at = utcnow()
+        self.session.add(row)
+
+    def mark_conflict(self, row: SyncQueueItemORM, *, conflict_code: str) -> None:
+        row.status = "CONFLICT"
+        row.conflict_code = conflict_code
+        row.synced_at = None
+        self.session.add(row)
+
+    def mark_auth_required(self, row: SyncQueueItemORM) -> None:
+        row.status = "AUTH_REQUIRED"
+        row.conflict_code = None
+        row.synced_at = None
+        self.session.add(row)
+
     def list_for_user(
         self,
         *,
@@ -359,6 +535,93 @@ class InstallerSyncQueueRepository:
             )
             .all()
         )
+
+    def count_problem_statuses_by_installer(
+        self, *, company_id: uuid.UUID
+    ) -> dict[uuid.UUID, dict[str, int]]:
+        problem_statuses = ("PENDING", "CONFLICT", "BLOCKED", "AUTH_REQUIRED")
+        rows = (
+            self.session.query(
+                InstallerORM.id,
+                SyncQueueItemORM.status,
+                func.count(SyncQueueItemORM.id),
+            )
+            .join(
+                InstallerORM,
+                and_(
+                    InstallerORM.company_id == SyncQueueItemORM.company_id,
+                    InstallerORM.user_id == SyncQueueItemORM.user_id,
+                ),
+            )
+            .filter(
+                SyncQueueItemORM.company_id == company_id,
+                SyncQueueItemORM.status.in_(problem_statuses),
+            )
+            .group_by(InstallerORM.id, SyncQueueItemORM.status)
+            .all()
+        )
+        result: dict[uuid.UUID, dict[str, int]] = {}
+        for installer_id, status, count in rows:
+            result.setdefault(installer_id, {})[status] = int(count or 0)
+        return result
+
+    def list_problem_items_with_installers(
+        self,
+        *,
+        company_id: uuid.UUID,
+        limit: int,
+        installer_id: uuid.UUID | None = None,
+        statuses: tuple[str, ...] | None = None,
+    ) -> list[tuple[SyncQueueItemORM, InstallerORM | None]]:
+        problem_statuses = statuses or ("PENDING", "CONFLICT", "BLOCKED", "AUTH_REQUIRED")
+        query = (
+            self.session.query(SyncQueueItemORM, InstallerORM)
+            .join(
+                InstallerORM,
+                and_(
+                    InstallerORM.company_id == SyncQueueItemORM.company_id,
+                    InstallerORM.user_id == SyncQueueItemORM.user_id,
+                ),
+                isouter=True,
+            )
+            .filter(
+                SyncQueueItemORM.company_id == company_id,
+                SyncQueueItemORM.status.in_(problem_statuses),
+            )
+        )
+        if installer_id is not None:
+            query = query.filter(InstallerORM.id == installer_id)
+        rows = (
+            query.order_by(
+                desc(SyncQueueItemORM.created_at),
+                desc(SyncQueueItemORM.id),
+            )
+            .limit(limit)
+            .all()
+        )
+        return [(item, installer) for item, installer in rows]
+
+    def count_problem_items(
+        self,
+        *,
+        company_id: uuid.UUID,
+        installer_id: uuid.UUID | None = None,
+        statuses: tuple[str, ...] | None = None,
+    ) -> int:
+        problem_statuses = statuses or ("PENDING", "CONFLICT", "BLOCKED", "AUTH_REQUIRED")
+        query = self.session.query(func.count(SyncQueueItemORM.id)).filter(
+            SyncQueueItemORM.company_id == company_id,
+            SyncQueueItemORM.status.in_(problem_statuses),
+        )
+        if installer_id is not None:
+            query = query.join(
+                InstallerORM,
+                and_(
+                    InstallerORM.company_id == SyncQueueItemORM.company_id,
+                    InstallerORM.user_id == SyncQueueItemORM.user_id,
+                ),
+            ).filter(InstallerORM.id == installer_id)
+        return int(query.scalar() or 0)
 
 
 class SyncChangeLogGCRepository:

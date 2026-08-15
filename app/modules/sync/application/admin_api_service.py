@@ -2,12 +2,35 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.modules.sync.api.admin_schemas import SyncStateDTO, SyncStatsDTO
+from app.modules.sync.api.admin_schemas import (
+    SyncProblemsResponseDTO,
+    SyncStateDTO,
+    SyncStatsDTO,
+)
 from app.modules.sync.application.admin_service import AdminSyncStateService
 from app.shared.domain.errors import NotFound
 
 
 class AdminSyncApiService:
+    @staticmethod
+    def list_problems(
+        uow,
+        *,
+        company_id: UUID,
+        limit: int,
+        installer_id: UUID | None = None,
+        status_filter: str | None = None,
+    ) -> SyncProblemsResponseDTO:
+        return SyncProblemsResponseDTO(
+            **AdminSyncStateService.list_problems(
+                uow,
+                company_id=company_id,
+                installer_id=installer_id,
+                limit=limit,
+                status_filter=status_filter,
+            )
+        )
+
     @staticmethod
     def list_states(uow, *, company_id: UUID) -> list[SyncStateDTO]:
         items = AdminSyncStateService.list_states(uow, company_id=company_id)
@@ -25,11 +48,13 @@ class AdminSyncApiService:
         *,
         company_id: UUID,
         user_id: UUID,
+        actor_user_id: UUID | None = None,
     ) -> SyncStateDTO:
         result = AdminSyncStateService.reset_sync_state(
             uow,
             company_id=company_id,
             user_id=user_id,
+            actor_user_id=actor_user_id,
         )
         if result is None:
             raise NotFound("Sync state not found")
@@ -41,11 +66,13 @@ class AdminSyncApiService:
         *,
         company_id: UUID,
         installer_id: UUID,
+        actor_user_id: UUID | None = None,
     ) -> dict:
         ok = AdminSyncStateService.reset_installer(
             uow,
             company_id=company_id,
             installer_id=installer_id,
+            actor_user_id=actor_user_id,
         )
         if not ok:
             raise NotFound("Sync state not found")

@@ -53,6 +53,8 @@ class InstallerProjectListItem(BaseModel):
     address: str
     status: str
     waze_url: str | None
+    whatsapp_url: str | None = None
+    call_url: str | None = None
 
 
 class InstallerProjectListResponse(BaseModel):
@@ -74,6 +76,7 @@ class InstallerDoorDTO(BaseModel):
     reason_id: UUID | None
     comment: str | None
     is_locked: bool
+    version: int
 
 
 class InstallerIssueDTO(BaseModel):

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.api.v1 import rate_limit
 from app.modules.identity.domain.enums import UserRole
 from app.modules.installers.infrastructure.models import InstallerORM
 
@@ -22,10 +23,18 @@ def _login(client_raw, *, company_id: str, email: str, password: str) -> str:
             "company_id": company_id,
             "email": email,
             "password": password,
+            "device_id": f"rbac-{email}",
         },
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
+
+
+@pytest.fixture(autouse=True)
+def reset_auth_rate_limits():
+    rate_limit._reset_rate_limits_for_tests()
+    yield
+    rate_limit._reset_rate_limits_for_tests()
 
 
 @pytest.fixture()
@@ -123,6 +132,8 @@ def test_rbac_matrix_admin_endpoints(client_raw, rbac_tokens):
         ("GET", "/api/v1/admin/reports/audit-catalogs/export", None, 200),
         ("GET", "/api/v1/admin/reports/audit-installer-rates", None, 200),
         ("GET", "/api/v1/admin/reports/audit-installer-rates/export", None, 200),
+        ("GET", "/api/v1/admin/earnings/ledger", None, 200),
+        ("GET", "/api/v1/admin/earnings/ledger/export", None, 200),
         (
             "POST",
             "/api/v1/admin/projects/import-runs/reconcile-latest",
@@ -155,6 +166,7 @@ def test_rbac_matrix_admin_endpoints(client_raw, rbac_tokens):
         ("GET", "/api/v1/admin/addons/types", None, 200),
         ("GET", f"/api/v1/admin/calendar/events?starts_at={starts}&ends_at={ends}", None, 200),
         ("GET", "/api/v1/admin/sync/health/summary", None, 200),
+        ("GET", "/api/v1/admin/sync/problems", None, 200),
     ]
 
     for method, path, payload, admin_expected_status in cases:
@@ -168,6 +180,7 @@ def test_rbac_matrix_admin_endpoints(client_raw, rbac_tokens):
             headers=_auth(rbac_tokens["installer"]),
         )
         assert installer.status_code == 403, f"{path} installer: {installer.text}"
+        assert installer.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
         admin = client_raw.request(
             method,

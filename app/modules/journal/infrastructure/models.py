@@ -75,13 +75,11 @@ class JournalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
         Enum(JournalDeliveryStatus, name="journal_delivery_status"),
         nullable=False,
         default=JournalDeliveryStatus.NONE,
-        index=True,
     )
     whatsapp_delivery_status: Mapped[JournalDeliveryStatus] = mapped_column(
         Enum(JournalDeliveryStatus, name="journal_delivery_status"),
         nullable=False,
         default=JournalDeliveryStatus.NONE,
-        index=True,
     )
 
     email_last_sent_at: Mapped[datetime | None] = mapped_column(

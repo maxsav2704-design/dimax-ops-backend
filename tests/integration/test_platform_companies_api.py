@@ -1,11 +1,57 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
+import httpx
 from sqlalchemy import text
 
 from app.core.config import settings
 from app.modules.companies.application import alerts_service as alerts_module
+
+
+def test_plan_limit_webhook_delivery_is_observable(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "PLAN_ALERT_WEBHOOK_URL", "https://alerts.local/plan")
+    response = httpx.Response(
+        202,
+        request=httpx.Request("POST", "https://alerts.local/plan"),
+    )
+    monkeypatch.setattr(alerts_module.httpx, "post", lambda *args, **kwargs: response)
+    company_id = uuid.uuid4()
+
+    with caplog.at_level(logging.INFO, logger=alerts_module.__name__):
+        alerts_module.CompanyLimitAlertsService._send_webhook_alert(
+            company_id=company_id,
+            action="PLAN_LIMIT_ALERT_WARN_PROJECTS",
+            payload={"metric": "projects"},
+        )
+
+    assert '"event": "company.plan_limit.webhook_delivered"' in caplog.text
+    assert f'"company_id": "{company_id}"' in caplog.text
+    assert '"status_code": 202' in caplog.text
+    assert "alerts.local" not in caplog.text
+
+
+def test_plan_limit_webhook_failure_is_best_effort_and_observable(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "PLAN_ALERT_WEBHOOK_URL", "https://alerts.local/secret-path")
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://alerts.local/secret-path"),
+    )
+    monkeypatch.setattr(alerts_module.httpx, "post", lambda *args, **kwargs: response)
+    company_id = uuid.uuid4()
+
+    with caplog.at_level(logging.WARNING, logger=alerts_module.__name__):
+        alerts_module.CompanyLimitAlertsService._send_webhook_alert(
+            company_id=company_id,
+            action="PLAN_LIMIT_ALERT_DANGER_DOORS_PER_PROJECT",
+            payload={"metric": "doors_per_project"},
+        )
+
+    assert '"event": "company.plan_limit.webhook_failed"' in caplog.text
+    assert '"error_type": "HTTPStatusError"' in caplog.text
+    assert '"status_code": 503' in caplog.text
+    assert "alerts.local" not in caplog.text
 
 
 def _cleanup_company(db_session, company_id: str) -> None:
@@ -63,6 +109,7 @@ def _login_admin(client_raw, *, company_id: str, email: str, password: str) -> s
             "company_id": company_id,
             "email": email,
             "password": password,
+            "device_id": f"platform-{email}",
         },
     )
     assert login_resp.status_code == 200, login_resp.text
@@ -135,6 +182,7 @@ def test_platform_create_company_bootstraps_admin_and_can_login(
                 "company_id": company_id,
                 "email": admin_email,
                 "password": admin_password,
+                "device_id": "platform-bootstrap-device",
             },
         )
         assert login_resp.status_code == 200, login_resp.text
@@ -280,6 +328,10 @@ def test_plan_limits_soft_enforced_for_installers_projects_and_doors(
         webhook_calls.append({"url": url, "json": json, "timeout": timeout})
         class _Resp:
             status_code = 200
+
+            @staticmethod
+            def raise_for_status():
+                return None
         return _Resp()
 
     monkeypatch.setattr(alerts_module.httpx, "post", _fake_plan_alert_post)

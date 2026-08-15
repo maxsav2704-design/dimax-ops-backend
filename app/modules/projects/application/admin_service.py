@@ -6,8 +6,14 @@ from decimal import Decimal, InvalidOperation
 
 from app.modules.audit.application.service import AuditService
 from app.modules.companies.application.alerts_service import CompanyLimitAlertsService
+from app.modules.companies.application.limits_service import CompanyLimitsService
 from app.modules.companies.domain.errors import CompanyPlanLimitExceeded
+from app.modules.door_types.infrastructure.models import DoorTypeORM
+from app.modules.doors.application.sync_payload import build_door_sync_payload
+from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.projects.api.schemas import (
+    DoorDTO,
     FailedImportRunsQueueResponse,
     ProjectLatestImportReviewResponse,
     ProjectBulkImportReconcileResponse,
@@ -22,6 +28,7 @@ from app.modules.projects.api.schemas import (
 from app.modules.projects.application.file_import_service import (
     ProjectFileImportService,
 )
+from app.modules.projects.application.sync_payload import build_project_sync_payload
 from app.modules.projects.application.use_cases import ProjectUseCases
 from app.modules.projects.infrastructure.models import ProjectImportRunORM
 from app.shared.application.navigation import (
@@ -32,7 +39,8 @@ from app.shared.application.navigation import (
     build_whatsapp_url,
     resolve_locale,
 )
-from app.shared.domain.errors import NotFound, ValidationError
+from app.modules.sync.domain.enums import SyncChangeType
+from app.shared.domain.errors import Conflict, NotFound, ValidationError
 from app.shared.infrastructure.observability import get_logger, log_event
 
 
@@ -48,6 +56,13 @@ def _empty_to_none(value: str | None) -> str | None:
         return None
     text = str(value).strip()
     return text if text else None
+
+
+def _door_type_code_from_install_type(value: str) -> str:
+    code = re.sub(r"[^A-Za-z0-9]+", "_", value.strip().upper()).strip("_")
+    if not code:
+        code = "MANUAL"
+    return f"LIB_{code}"[:64]
 
 
 def _order_number_matches(value: str | None, query: str | None) -> bool:
@@ -149,6 +164,7 @@ def _audit_import_diagnostics(diagnostics: dict | None) -> dict | None:
             "duplicate_rows_skipped": _safe_int(
                 data_summary.get("duplicate_rows_skipped"), 0
             ),
+            "zero_price_doors": _safe_int(data_summary.get("zero_price_doors"), 0),
             "unique_order_numbers": _safe_int(
                 data_summary.get("unique_order_numbers"), 0
             ),
@@ -175,6 +191,9 @@ def _audit_import_diagnostics(diagnostics: dict | None) -> dict | None:
                 "door_count": _safe_int(item.get("door_count"), 0),
                 "location_codes": [
                     str(x)[:80] for x in (item.get("location_codes") or [])[:10]
+                ],
+                "door_type_ids": [
+                    str(x)[:64] for x in (item.get("door_type_ids") or [])[:10]
                 ],
             }
         )
@@ -602,6 +621,12 @@ class ProjectAdminService:
             "default_code": "auto_v1",
             "items": items,
         }
+
+    @staticmethod
+    def build_import_template_xlsx(*, mapping_profile: str) -> bytes:
+        return ProjectFileImportService.build_import_template_xlsx(
+            mapping_profile=mapping_profile,
+        )
 
     @staticmethod
     def list_projects(
@@ -1147,6 +1172,7 @@ class ProjectAdminService:
         address: str,
         planned_start_date,
         planned_end_date,
+        lifecycle_status,
         developer_company: str | None,
         contact_name: str | None,
         contact_phone: str | None,
@@ -1171,6 +1197,7 @@ class ProjectAdminService:
                 address=address,
                 planned_start_date=planned_start_date,
                 planned_end_date=planned_end_date,
+                lifecycle_status=lifecycle_status,
                 developer_company=developer_company,
                 contact_name=contact_name,
                 contact_phone=contact_phone,
@@ -1274,6 +1301,176 @@ class ProjectAdminService:
         return ImportDoorsResponse(imported=imported)
 
     @staticmethod
+    def create_manual_door(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        project_id: uuid.UUID,
+        payload: dict,
+    ) -> DoorDTO:
+        project = uow.projects.get(company_id=company_id, project_id=project_id)
+        if project is None:
+            raise NotFound("Project not found", details={"project_id": str(project_id)})
+
+        product_id = payload.get("product_id")
+        product = uow.product_library.get(
+            company_id=company_id,
+            item_id=uuid.UUID(str(product_id)),
+        )
+        if product is None:
+            raise NotFound("Library product not found", details={"product_id": str(product_id)})
+        if product.status != "ACTIVE":
+            raise Conflict("Library product is archived", details={"product_id": str(product_id)})
+
+        door_code = _empty_to_none(payload.get("door_code"))
+        unit_label = _empty_to_none(payload.get("unit"))
+        if door_code is None or unit_label is None:
+            raise ValidationError("door_code and unit are required")
+
+        duplicate = (
+            uow.session.query(DoorORM.id)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.project_id == project_id,
+                DoorORM.door_code == door_code,
+            )
+            .first()
+        )
+        if duplicate is not None:
+            raise Conflict(
+                "Door code already exists in this project",
+                details={"door_code": door_code, "project_id": str(project_id)},
+            )
+
+        install_type = _empty_to_none(payload.get("install_type")) or product.install_type
+        door_type_code = _door_type_code_from_install_type(install_type)
+        door_type = uow.door_types.get_by_code(
+            company_id=company_id,
+            code=door_type_code,
+        )
+        if door_type is None:
+            door_type = DoorTypeORM(
+                company_id=company_id,
+                code=door_type_code,
+                name=install_type,
+                is_active=True,
+                is_critical_default=bool(payload.get("is_critical")),
+            )
+            uow.door_types.save(door_type)
+            uow.session.flush()
+        elif not door_type.is_active:
+            raise Conflict(
+                "Mapped door type is inactive",
+                details={"door_type_id": str(door_type.id), "code": door_type_code},
+            )
+
+        installer_id = payload.get("assigned_installer_id")
+        if installer_id is not None:
+            installer_id = uuid.UUID(str(installer_id))
+            installer = uow.installers.get(company_id=company_id, installer_id=installer_id)
+            if installer is None or installer.deleted_at is not None or not installer.is_active:
+                raise NotFound("Installer not found", details={"installer_id": str(installer_id)})
+
+        CompanyLimitsService.assert_can_add_doors_to_project(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+            adding_count=1,
+        )
+        door = DoorORM(
+            company_id=company_id,
+            project_id=project_id,
+            door_type_id=door_type.id,
+            unit_label=unit_label,
+            door_code=door_code,
+            order_number=_empty_to_none(payload.get("order_number")),
+            floor_label=_empty_to_none(payload.get("floor")),
+            apartment_number=unit_label,
+            location_code=_empty_to_none(payload.get("location_code")),
+            door_marking=door_code,
+            our_price=Decimal("0"),
+            installer_id=installer_id,
+            status=DoorStatus.NOT_INSTALLED,
+            reason_id=None,
+            comment=None,
+            installed_at=None,
+            is_locked=False,
+            is_critical=bool(payload.get("is_critical")),
+        )
+        uow.doors.save(door)
+        uow.session.flush()
+
+        if installer_id is not None:
+            uow.sync_change_log.add_change(
+                company_id=company_id,
+                change_type=SyncChangeType.PROJECT_BASE,
+                entity_id=project_id,
+                project_id=project_id,
+                installer_id=installer_id,
+                payload=build_project_sync_payload(project),
+            )
+            uow.sync_change_log.add_change(
+                company_id=company_id,
+                change_type=SyncChangeType.PROJECT_ASSIGNMENTS,
+                entity_id=project_id,
+                project_id=project_id,
+                installer_id=installer_id,
+                payload={
+                    "kind": "manual_door_created",
+                    "project_id": str(project_id),
+                    "affected_door_ids": [str(door.id)],
+                },
+            )
+            uow.sync_change_log.add_change(
+                company_id=company_id,
+                change_type=SyncChangeType.DOOR,
+                entity_id=door.id,
+                project_id=project_id,
+                installer_id=installer_id,
+                payload=build_door_sync_payload(door),
+            )
+
+        AuditService.add_independent(
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            entity_type="door",
+            entity_id=door.id,
+            action="MANUAL_DOOR_CREATE",
+            after={
+                "project_id": str(project_id),
+                "door_code": door_code,
+                "unit_label": unit_label,
+                "product_id": str(product.id),
+                "door_type_id": str(door_type.id),
+                "installer_id": str(installer_id) if installer_id else None,
+            },
+        )
+        CompanyLimitAlertsService.evaluate_and_alert(
+            uow,
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            metric_keys=["doors_per_project"],
+        )
+        return DoorDTO(
+            id=door.id,
+            unit_label=door.unit_label,
+            door_type_id=door.door_type_id,
+            our_price=door.our_price,
+            order_number=door.order_number,
+            house_number=door.house_number,
+            floor_label=door.floor_label,
+            apartment_number=door.apartment_number,
+            location_code=door.location_code,
+            door_marking=door.door_marking,
+            status=_status_value(door.status),
+            installer_id=door.installer_id,
+            reason_id=door.reason_id,
+            comment=door.comment,
+            is_locked=door.is_locked,
+        )
+
+    @staticmethod
     def import_doors_from_file(
         uow,
         *,
@@ -1289,6 +1486,7 @@ class ProjectAdminService:
         strict_required_fields: bool | None,
         create_missing_door_types: bool,
         analyze_only: bool,
+        allow_partial_import: bool = False,
     ) -> ImportDoorsFromFileResponse:
         try:
             data = ProjectFileImportService.import_project_doors_from_file(
@@ -1304,6 +1502,7 @@ class ProjectAdminService:
                 strict_required_fields=strict_required_fields,
                 create_missing_door_types=create_missing_door_types,
                 analyze_only=analyze_only,
+                allow_partial_import=allow_partial_import,
             )
         except CompanyPlanLimitExceeded as e:
             AuditService.add_independent(
@@ -1569,3 +1768,23 @@ class ProjectAdminService:
             door_id=door_id,
             installer_id=installer_id,
         )
+
+    @staticmethod
+    def bulk_assign_installer_to_doors(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        door_ids: list[uuid.UUID],
+        installer_id: uuid.UUID,
+    ) -> dict:
+        assigned, skipped, assigned_door_ids = ProjectUseCases.assign_installer_to_doors(
+            uow,
+            company_id=company_id,
+            door_ids=door_ids,
+            installer_id=installer_id,
+        )
+        return {
+            "assigned": assigned,
+            "skipped": skipped,
+            "assigned_door_ids": assigned_door_ids,
+        }

@@ -2,18 +2,25 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-
 from decimal import Decimal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.core.security.password import validate_new_password
 from app.modules.identity.domain.enums import UserRole
+
+
+def _validate_password_bytes(value: str) -> str:
+    return validate_new_password(value)
+
 
 class PlatformCompanyCreateDTO(BaseModel):
     name: str = Field(min_length=2, max_length=200)
     admin_email: EmailStr
     admin_password: str = Field(min_length=6, max_length=200)
     admin_full_name: str = Field(min_length=2, max_length=255)
+
+    _password_bytes = field_validator("admin_password")(_validate_password_bytes)
 
 
 class PlatformCompanyStatusUpdateDTO(BaseModel):
@@ -90,6 +97,8 @@ class PlatformCompanyUserCreateDTO(BaseModel):
     password: str = Field(min_length=6, max_length=200)
     role: UserRole = UserRole.ADMIN
     is_active: bool = True
+
+    _password_bytes = field_validator("password")(_validate_password_bytes)
 
 
 class PlatformCompanyUserDTO(BaseModel):

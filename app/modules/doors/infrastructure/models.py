@@ -35,7 +35,21 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
             "company_id", "project_id", "unit_label", "door_type_id",
             name="uq_doors_project_unit_type",
         ),
+        UniqueConstraint(
+            "project_id",
+            "door_code",
+            name="uq_doors_project_door_code",
+        ),
         CheckConstraint("our_price >= 0", name="ck_doors_our_price_nonnegative"),
+        CheckConstraint(
+            "installer_rate_snapshot IS NULL OR installer_rate_snapshot > 0",
+            name="ck_doors_installer_rate_positive",
+        ),
+        CheckConstraint(
+            "surcharge_pct >= 0",
+            name="ck_doors_surcharge_nonnegative",
+        ),
+        CheckConstraint("version >= 0", name="ck_doors_version_nonnegative"),
         Index("ix_doors_project_status", "project_id", "status"),
     )
 
@@ -67,12 +81,16 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     installer_rate_snapshot: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    apply_surcharge_to_installer: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
 
     status: Mapped[DoorStatus] = mapped_column(
         Enum(DoorStatus, name="door_status"),
         nullable=False,
         default=DoorStatus.NOT_INSTALLED,
-        index=True,
     )
 
     installer_id: Mapped[uuid.UUID | None] = mapped_column(

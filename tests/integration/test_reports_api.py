@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import base64
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.modules.addons.domain.enums import AddonFactSource
@@ -9,6 +10,7 @@ from app.modules.addons.infrastructure.models import (
     AddonTypeORM,
     ProjectAddonFactORM,
     ProjectAddonPlanORM,
+    ProjectUrgencySurchargeORM,
 )
 from app.modules.audit.infrastructure.models import AuditAlertReadCursorORM, AuditLogORM
 from app.modules.calendar.domain.enums import CalendarEventType
@@ -18,14 +20,20 @@ from app.modules.calendar.infrastructure.models import (
 )
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.earnings.infrastructure.models import ClientPriceSnapshotORM, CompletedWorkORM
 from app.modules.issues.domain.enums import IssuePriority, IssueStatus, IssueWorkflowState
 from app.modules.issues.infrastructure.models import IssueORM
+from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectImportRunORM, ProjectORM
 from app.modules.rates.infrastructure.models import InstallerRateORM
 from app.modules.reasons.infrastructure.models import ReasonORM
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 def _seed_issue_report_row(db_session, *, company_id, make_door_type, unit_label: str):
@@ -951,6 +959,107 @@ def test_reports_installer_project_profitability_returns_cross_view_rows(
     assert risk_body["items"][0]["open_issues"] == 1
 
 
+def test_reports_installer_project_profitability_includes_addon_only_work(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_installer,
+):
+    installer = make_installer(full_name="Addon Only Installer", phone="+10000001022")
+    suffix = uuid.uuid4().hex[:8]
+    project = ProjectORM(
+        company_id=company_id,
+        name=f"Addon Only Project {suffix}",
+        address=f"Addon Only Street {suffix}",
+        status=ProjectStatus.OK,
+    )
+    addon_type = AddonTypeORM(
+        company_id=company_id,
+        name=f"Addon Only Type {suffix}",
+        unit="pcs",
+        default_client_price=Decimal("30.00"),
+        default_installer_price=Decimal("10.00"),
+        is_active=True,
+    )
+    db_session.add_all([project, addon_type])
+    db_session.flush()
+
+    db_session.add(
+        ProjectAddonPlanORM(
+            company_id=company_id,
+            project_id=project.id,
+            addon_type_id=addon_type.id,
+            qty_planned=Decimal("3.00"),
+            client_price=Decimal("30.00"),
+            installer_price=Decimal("10.00"),
+        )
+    )
+    db_session.add(
+        ProjectAddonFactORM(
+            company_id=company_id,
+            project_id=project.id,
+            addon_type_id=addon_type.id,
+            installer_id=installer.id,
+            qty_done=Decimal("3.00"),
+            done_at=datetime.now(timezone.utc),
+            comment="Addon-only report row",
+            source=AddonFactSource.ONLINE,
+            client_event_id=None,
+        )
+    )
+    db_session.commit()
+
+    cross_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reports/installer-project-profitability"
+        "?limit=100&sort_by=profit_total&sort_dir=desc"
+    )
+    assert cross_resp.status_code == 200, cross_resp.text
+    cross_item = next(
+        item
+        for item in cross_resp.json()["items"]
+        if item["installer_id"] == str(installer.id)
+        and item["project_id"] == str(project.id)
+    )
+    assert cross_item["installed_doors"] == 0
+    assert Decimal(str(cross_item["addons_done_qty"])) == Decimal("3.00")
+    assert Decimal(str(cross_item["revenue_total"])) == Decimal("90.00")
+    assert Decimal(str(cross_item["payroll_total"])) == Decimal("30.00")
+    assert Decimal(str(cross_item["profit_total"])) == Decimal("60.00")
+
+    matrix_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reports/installers-profitability-matrix?limit=100"
+    )
+    assert matrix_resp.status_code == 200, matrix_resp.text
+    matrix_item = next(
+        item
+        for item in matrix_resp.json()["items"]
+        if item["installer_id"] == str(installer.id)
+    )
+    assert matrix_item["active_projects"] == 1
+    assert matrix_item["installed_doors"] == 0
+    assert Decimal(str(matrix_item["revenue_total"])) == Decimal("90.00")
+    assert Decimal(str(matrix_item["payroll_total"])) == Decimal("30.00")
+    assert Decimal(str(matrix_item["profit_total"])) == Decimal("60.00")
+
+    details_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/reports/installers-kpi/{installer.id}"
+    )
+    assert details_resp.status_code == 200, details_resp.text
+    details = details_resp.json()
+    assert details["active_projects"] == 1
+    assert details["installed_doors"] == 0
+    assert Decimal(str(details["revenue_total"])) == Decimal("90.00")
+    assert Decimal(str(details["payroll_total"])) == Decimal("30.00")
+    assert Decimal(str(details["profit_total"])) == Decimal("60.00")
+    top_project = next(
+        item for item in details["top_projects"] if item["project_id"] == str(project.id)
+    )
+    assert top_project["installed_doors"] == 0
+    assert Decimal(str(top_project["revenue_total"])) == Decimal("90.00")
+    assert Decimal(str(top_project["payroll_total"])) == Decimal("30.00")
+    assert Decimal(str(top_project["profit_total"])) == Decimal("60.00")
+
+
 def test_reports_risk_concentration_returns_executive_risk_views(
     client_admin_real_uow,
     db_session,
@@ -1249,6 +1358,189 @@ def test_reports_installer_kpi_details_returns_expected_metrics(
     assert {item["order_number"] for item in body["order_breakdown"]} == {"AZ-901", "AZ-902"}
 
 
+def test_reports_addon_payroll_uses_completed_work_correction(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_installer,
+    make_door_type,
+):
+    installer = make_installer(full_name="Reports Addon Corrected", phone="+10000000992")
+    door_type = make_door_type(name="Reports Addon Anchor Door")
+    suffix = uuid.uuid4().hex[:8]
+    now = datetime.now(timezone.utc)
+    project = ProjectORM(
+        company_id=company_id,
+        name=f"Reports Addon Project {suffix}",
+        address=f"Reports Addon Street {suffix}",
+        status=ProjectStatus.OK,
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    door = DoorORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label=f"ADDON-CORR-{suffix}",
+        order_number=f"ADDON-CORR-{suffix}",
+        our_price=Decimal("0.00"),
+        status=DoorStatus.NOT_INSTALLED,
+        installer_id=installer.id,
+        installer_rate_snapshot=None,
+        reason_id=None,
+        comment=None,
+        installed_at=None,
+        is_locked=False,
+    )
+    db_session.add(door)
+
+    addon_type = AddonTypeORM(
+        company_id=company_id,
+        name=f"Reports Corrected Addon {suffix}",
+        unit="pcs",
+        default_client_price=Decimal("25.00"),
+        default_installer_price=Decimal("12.00"),
+        is_active=True,
+    )
+    db_session.add(addon_type)
+    db_session.flush()
+
+    db_session.add(
+        ProjectAddonPlanORM(
+            company_id=company_id,
+            project_id=project.id,
+            addon_type_id=addon_type.id,
+            qty_planned=Decimal("2.00"),
+            client_price=Decimal("25.00"),
+            installer_price=Decimal("12.00"),
+        )
+    )
+    fact = ProjectAddonFactORM(
+        company_id=company_id,
+        project_id=project.id,
+        addon_type_id=addon_type.id,
+        installer_id=installer.id,
+        qty_done=Decimal("2.00"),
+        done_at=now,
+        comment="Corrected from ledger",
+        source=AddonFactSource.ONLINE,
+        client_event_id=None,
+    )
+    db_session.add(fact)
+    db_session.flush()
+
+    original = CompletedWorkORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_id=None,
+        addon_fact_id=fact.id,
+        installer_id=installer.id,
+        completed_at=now,
+        quantity=Decimal("2.00"),
+        rate_snapshot=Decimal("12.00"),
+        amount_snapshot=Decimal("24.00"),
+        work_kind="ADDON",
+        entry_type="ORIGINAL",
+        correction_ref_id=None,
+        reason="Original add-on payout",
+    )
+    db_session.add(original)
+    db_session.commit()
+
+    correction_resp = client_admin_real_uow.post(
+        "/api/v1/admin/earnings/corrections",
+        json={
+            "completed_work_id": str(original.id),
+            "rate_snapshot": "18.00",
+            "reason": "Correct add-on payout in reports",
+        },
+    )
+    assert correction_resp.status_code == 201, correction_resp.text
+
+    def assert_money(body: dict) -> None:
+        assert Decimal(str(body["revenue_total"])) == Decimal("50.00")
+        assert Decimal(str(body["payroll_total"])) == Decimal("36.00")
+        assert Decimal(str(body["profit_total"])) == Decimal("14.00")
+
+    kpi_resp = client_admin_real_uow.get("/api/v1/admin/reports/kpi")
+    assert kpi_resp.status_code == 200, kpi_resp.text
+    assert_money(kpi_resp.json())
+
+    project_profit_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/reports/project-profit/{project.id}"
+    )
+    assert project_profit_resp.status_code == 200, project_profit_resp.text
+    assert_money(project_profit_resp.json())
+
+    installer_details_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/reports/installers-kpi/{installer.id}"
+    )
+    assert installer_details_resp.status_code == 200, installer_details_resp.text
+    installer_details = installer_details_resp.json()
+    assert Decimal(str(installer_details["addon_revenue_total"])) == Decimal("50.00")
+    assert Decimal(str(installer_details["addon_payroll_total"])) == Decimal("36.00")
+    assert Decimal(str(installer_details["addon_profit_total"])) == Decimal("14.00")
+    assert_money(installer_details)
+
+    matrix_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reports/installers-profitability-matrix?limit=100"
+    )
+    assert matrix_resp.status_code == 200, matrix_resp.text
+    matrix_item = next(
+        item
+        for item in matrix_resp.json()["items"]
+        if item["installer_id"] == str(installer.id)
+    )
+    assert_money(matrix_item)
+
+    installer_project_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reports/installer-project-profitability?limit=100"
+    )
+    assert installer_project_resp.status_code == 200, installer_project_resp.text
+    installer_project_item = next(
+        item
+        for item in installer_project_resp.json()["items"]
+        if item["installer_id"] == str(installer.id)
+        and item["project_id"] == str(project.id)
+    )
+    assert_money(installer_project_item)
+
+    plan_fact_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/reports/project-plan-fact/{project.id}"
+    )
+    assert plan_fact_resp.status_code == 200, plan_fact_resp.text
+    plan_fact = plan_fact_resp.json()
+    assert Decimal(str(plan_fact["actual_revenue_total"])) == Decimal("50.00")
+    assert Decimal(str(plan_fact["actual_payroll_total"])) == Decimal("36.00")
+    assert Decimal(str(plan_fact["actual_profit_total"])) == Decimal("14.00")
+
+    margin_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reports/projects-margin?limit=100"
+    )
+    assert margin_resp.status_code == 200, margin_resp.text
+    margin_item = next(
+        item for item in margin_resp.json()["items"] if item["project_id"] == str(project.id)
+    )
+    assert_money(margin_item)
+
+    issues_addons_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reports/issues-addons-impact?limit=50"
+    )
+    assert issues_addons_resp.status_code == 200, issues_addons_resp.text
+    issues_addons = issues_addons_resp.json()
+    assert Decimal(str(issues_addons["summary"]["addon_revenue_total"])) == Decimal("50.00")
+    assert Decimal(str(issues_addons["summary"]["addon_payroll_total"])) == Decimal("36.00")
+    assert Decimal(str(issues_addons["summary"]["addon_profit_total"])) == Decimal("14.00")
+    addon_impact = next(
+        item
+        for item in issues_addons["addon_impact"]
+        if item["addon_type_id"] == str(addon_type.id)
+    )
+    assert Decimal(str(addon_impact["payroll_total"])) == Decimal("36.00")
+    assert Decimal(str(addon_impact["profit_total"])) == Decimal("14.00")
+
+
 def test_reports_top_reasons_respects_date_period(
     client_admin_real_uow,
     db_session,
@@ -1490,7 +1782,18 @@ def test_reports_project_plan_fact_returns_expected_metrics(
         source=AddonFactSource.ONLINE,
         client_event_id=None,
     )
-    db_session.add_all([addon_plan, addon_fact])
+    urgency_surcharge = ProjectUrgencySurchargeORM(
+        company_id=company_id,
+        project_id=project.id,
+        scope="ORDER_NUMBER",
+        order_number="PF-ORDER-1",
+        reason="Urgent install window",
+        client_amount=Decimal("75.00"),
+        installer_amount=Decimal("30.00"),
+        effective_date=date(2026, 4, 26),
+        notes="Commercially approved",
+    )
+    db_session.add_all([addon_plan, addon_fact, urgency_surcharge])
     db_session.commit()
 
     resp = client_admin_real_uow.get(
@@ -1516,9 +1819,157 @@ def test_reports_project_plan_fact_returns_expected_metrics(
     assert Decimal(str(body["profit_gap_total"])) == Decimal("198.00")
     assert Decimal(str(body["planned_addons_qty"])) == Decimal("5.00")
     assert Decimal(str(body["actual_addons_qty"])) == Decimal("2.00")
+    assert body["urgency_surcharges_count"] == 1
+    assert body["urgency_order_surcharges_count"] == 1
+    assert Decimal(str(body["urgency_client_total"])) == Decimal("75.00")
+    assert Decimal(str(body["urgency_installer_total"])) == Decimal("30.00")
+    assert Decimal(str(body["urgency_profit_total"])) == Decimal("45.00")
     assert body["missing_planned_rates_doors"] == 0
     assert body["missing_actual_rates_doors"] == 0
     assert body["missing_addon_plans_facts"] == 0
+
+
+def test_reports_reflect_import_bulk_assignment_and_installer_completion(
+    client_admin_real_uow,
+    client_installer,
+    db_session,
+    company_id,
+    installer_user,
+    make_door_type,
+):
+    installer = InstallerORM(
+        company_id=company_id,
+        full_name="Import Bulk Earnings Installer",
+        phone="+10000001991",
+        email=None,
+        address=None,
+        passport_id=None,
+        notes=None,
+        status="ACTIVE",
+        is_active=True,
+        user_id=installer_user.id,
+    )
+    project = ProjectORM(
+        company_id=company_id,
+        name="Import Bulk Earnings Project",
+        address="Import bulk earnings address",
+        status=ProjectStatus.OK,
+        lifecycle_status="ACTIVE",
+        health_status="NORMAL",
+    )
+    db_session.add_all([installer, project])
+    db_session.commit()
+
+    door_type = make_door_type(code="import-bulk-earnings", name="Import Bulk Earnings Door")
+    db_session.add(
+        InstallerRateORM(
+            company_id=company_id,
+            installer_id=installer.id,
+            door_type_id=door_type.id,
+            effective_from=datetime.now(timezone.utc) - timedelta(days=1),
+            price=Decimal("80.00"),
+        )
+    )
+    db_session.commit()
+
+    csv_payload = (
+        "order_number,house,floor,apartment,location,marking,door_type,qty,price\n"
+        "EARN-BULK-100,A,4,401,dira,D-401,import-bulk-earnings,1,150\n"
+        "EARN-BULK-100,A,4,402,mamad,M-402,import-bulk-earnings,1,150\n"
+    )
+    import_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project.id}/doors/import-file",
+        json={
+            "filename": "import_bulk_earnings.csv",
+            "content_base64": _b64(csv_payload),
+            "default_our_price": "0",
+        },
+    )
+    assert import_resp.status_code == 200, import_resp.text
+    assert import_resp.json()["imported"] == 2
+
+    details_resp = client_admin_real_uow.get(f"/api/v1/admin/projects/{project.id}")
+    assert details_resp.status_code == 200, details_resp.text
+    imported_doors = sorted(
+        details_resp.json()["doors"],
+        key=lambda row: row["apartment_number"] or "",
+    )
+    assert [row["apartment_number"] for row in imported_doors] == ["401", "402"]
+    door_ids = [row["id"] for row in imported_doors]
+
+    bulk_assign_resp = client_admin_real_uow.post(
+        "/api/v1/admin/projects/doors/bulk-assign-installer",
+        json={"door_ids": door_ids, "installer_id": str(installer.id)},
+    )
+    assert bulk_assign_resp.status_code == 200, bulk_assign_resp.text
+    assert bulk_assign_resp.json()["assigned"] == 2
+
+    in_progress_resp = client_installer.patch(
+        f"/api/v1/installer/doors/{door_ids[0]}/status",
+        json={"status": DoorStatus.IN_PROGRESS.value},
+    )
+    assert in_progress_resp.status_code == 200, in_progress_resp.text
+    install_resp = client_installer.patch(
+        f"/api/v1/installer/doors/{door_ids[0]}/status",
+        json={"status": DoorStatus.INSTALLED.value},
+    )
+    assert install_resp.status_code == 200, install_resp.text
+
+    completed = (
+        db_session.query(CompletedWorkORM)
+        .filter(
+            CompletedWorkORM.company_id == company_id,
+            CompletedWorkORM.door_id == uuid.UUID(door_ids[0]),
+            CompletedWorkORM.work_kind == "DOOR",
+            CompletedWorkORM.entry_type == "ORIGINAL",
+        )
+        .one()
+    )
+    assert Decimal(str(completed.rate_snapshot)) == Decimal("80.00")
+    assert Decimal(str(completed.amount_snapshot)) == Decimal("80.00")
+
+    ledger_resp = client_admin_real_uow.get(
+        (
+            "/api/v1/admin/earnings/ledger"
+            f"?installer_id={installer.id}"
+            f"&project_id={project.id}"
+            "&work_kind=DOOR&entry_type=ORIGINAL"
+        )
+    )
+    assert ledger_resp.status_code == 200, ledger_resp.text
+    ledger_items = ledger_resp.json()["items"]
+    assert len(ledger_items) == 1
+    assert ledger_items[0]["door_id"] == door_ids[0]
+    assert ledger_items[0]["door_label"] == "A-4-401-dira-D-401"
+    assert ledger_items[0]["rate_snapshot"] == "80.00"
+    assert ledger_items[0]["amount_snapshot"] == "80.00"
+
+    earnings_resp = client_installer.get("/api/v1/installer/earnings/summary?period=day")
+    assert earnings_resp.status_code == 200, earnings_resp.text
+    earnings_body = earnings_resp.json()
+    assert Decimal(str(earnings_body["total"])) >= Decimal("80.00")
+    assert any(
+        row["door_label"] == "A-4-401-dira-D-401" and row["amount"] == "80.00"
+        for row in earnings_body["rows"]
+    )
+
+    plan_fact_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/reports/project-plan-fact/{project.id}"
+    )
+    assert plan_fact_resp.status_code == 200, plan_fact_resp.text
+    plan_fact = plan_fact_resp.json()
+    assert plan_fact["total_doors"] == 2
+    assert plan_fact["installed_doors"] == 1
+    assert plan_fact["not_installed_doors"] == 1
+    assert plan_fact["completion_pct"] == 50.0
+    assert Decimal(str(plan_fact["planned_revenue_total"])) == Decimal("300.00")
+    assert Decimal(str(plan_fact["actual_revenue_total"])) == Decimal("150.00")
+    assert Decimal(str(plan_fact["planned_payroll_total"])) == Decimal("160.00")
+    assert Decimal(str(plan_fact["actual_payroll_total"])) == Decimal("80.00")
+    assert Decimal(str(plan_fact["planned_profit_total"])) == Decimal("140.00")
+    assert Decimal(str(plan_fact["actual_profit_total"])) == Decimal("70.00")
+    assert plan_fact["missing_planned_rates_doors"] == 0
+    assert plan_fact["missing_actual_rates_doors"] == 0
 
 
 def test_reports_projects_margin_returns_sorted_profitability(
@@ -2125,30 +2576,276 @@ def test_install_snapshot_uses_latest_effective_rate_at_install_time(
     assert installed.installer_rate_snapshot == Decimal("110.00")
 
 
+def test_reports_kpi_uses_correction_ledger_over_door_snapshot(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_installer,
+    make_door_type,
+):
+    installer = make_installer(full_name="Correction Reports Installer", phone="+10000001031")
+    door_type = make_door_type(name="Correction Reports Door")
+    project = ProjectORM(
+        company_id=company_id,
+        name="Correction Reports Project",
+        address="Correction Reports Street",
+        status=ProjectStatus.OK,
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    door = DoorORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="CORR-REP-1",
+        our_price=Decimal("100.00"),
+        status=DoorStatus.INSTALLED,
+        installer_id=installer.id,
+        installer_rate_snapshot=Decimal("40.00"),
+        reason_id=None,
+        comment=None,
+        installed_at=datetime.now(timezone.utc),
+        is_locked=True,
+    )
+    db_session.add(door)
+    db_session.flush()
+
+    original = CompletedWorkORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_id=door.id,
+        installer_id=installer.id,
+        completed_at=door.installed_at,
+        quantity=Decimal("1.00"),
+        rate_snapshot=Decimal("40.00"),
+        amount_snapshot=Decimal("40.00"),
+        entry_type="ORIGINAL",
+        correction_ref_id=None,
+        reason=None,
+    )
+    db_session.add(original)
+    db_session.flush()
+    db_session.add(
+        ClientPriceSnapshotORM(
+            company_id=company_id,
+            completed_work_id=original.id,
+            base_client_rate=Decimal("100.00"),
+            final_client_rate=Decimal("100.00"),
+            final_installer_rate=Decimal("40.00"),
+        )
+    )
+    db_session.commit()
+
+    correction_resp = client_admin_real_uow.post(
+        "/api/v1/admin/earnings/corrections",
+        json={
+            "completed_work_id": str(original.id),
+            "rate_snapshot": "55.00",
+            "reason": "Finance correction",
+        },
+    )
+    assert correction_resp.status_code == 201, correction_resp.text
+
+    resp = client_admin_real_uow.get("/api/v1/admin/reports/kpi")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert Decimal(str(body["revenue_total"])) == Decimal("100.00")
+    assert Decimal(str(body["payroll_total"])) == Decimal("55.00")
+    assert Decimal(str(body["profit_total"])) == Decimal("45.00")
+
+
+def test_reports_date_range_uses_completed_work_period_for_ledger_doors(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_installer,
+    make_door_type,
+):
+    installer = make_installer(full_name="Period Ledger Installer", phone="+10000001033")
+    door_type = make_door_type(name="Period Ledger Door")
+    project = ProjectORM(
+        company_id=company_id,
+        name="Period Ledger Project",
+        address="Period Ledger Street",
+        status=ProjectStatus.OK,
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    ledger_date = now - timedelta(days=20)
+    door = DoorORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="PERIOD-LEDGER-1",
+        our_price=Decimal("100.00"),
+        status=DoorStatus.INSTALLED,
+        installer_id=installer.id,
+        installer_rate_snapshot=Decimal("40.00"),
+        reason_id=None,
+        comment=None,
+        installed_at=now,
+        is_locked=True,
+    )
+    db_session.add(door)
+    db_session.flush()
+
+    completed = CompletedWorkORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_id=door.id,
+        installer_id=installer.id,
+        completed_at=ledger_date,
+        quantity=Decimal("1.00"),
+        rate_snapshot=Decimal("40.00"),
+        amount_snapshot=Decimal("40.00"),
+        entry_type="ORIGINAL",
+        correction_ref_id=None,
+        reason=None,
+    )
+    db_session.add(completed)
+    db_session.flush()
+    db_session.add(
+        ClientPriceSnapshotORM(
+            company_id=company_id,
+            completed_work_id=completed.id,
+            base_client_rate=Decimal("100.00"),
+            final_client_rate=Decimal("100.00"),
+            final_installer_rate=Decimal("40.00"),
+        )
+    )
+    db_session.commit()
+
+    params = {
+        "date_from": (now - timedelta(days=1)).isoformat(),
+        "date_to": (now + timedelta(days=1)).isoformat(),
+    }
+
+    kpi_resp = client_admin_real_uow.get("/api/v1/admin/reports/kpi", params=params)
+    assert kpi_resp.status_code == 200, kpi_resp.text
+    kpi = kpi_resp.json()
+    assert kpi["installed_doors"] == 0
+    assert Decimal(str(kpi["revenue_total"])) == Decimal("0.00")
+    assert Decimal(str(kpi["payroll_total"])) == Decimal("0.00")
+    assert Decimal(str(kpi["profit_total"])) == Decimal("0.00")
+
+    installers_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reports/installers-kpi",
+        params=params,
+    )
+    assert installers_resp.status_code == 200, installers_resp.text
+    assert installers_resp.json()["items"] == []
+
+    project_profit_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/reports/project-profit/{project.id}",
+        params=params,
+    )
+    assert project_profit_resp.status_code == 200, project_profit_resp.text
+    project_profit = project_profit_resp.json()
+    assert project_profit["installed_doors"] == 0
+    assert Decimal(str(project_profit["revenue_total"])) == Decimal("0.00")
+    assert Decimal(str(project_profit["payroll_total"])) == Decimal("0.00")
+    assert Decimal(str(project_profit["profit_total"])) == Decimal("0.00")
+
+
+def test_reports_project_profit_uses_client_snapshot_totals_when_present(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_installer,
+    make_door_type,
+):
+    installer = make_installer(full_name="Snapshot Reports Installer", phone="+10000001032")
+    door_type = make_door_type(name="Snapshot Reports Door")
+    project = ProjectORM(
+        company_id=company_id,
+        name="Snapshot Reports Project",
+        address="Snapshot Reports Street",
+        status=ProjectStatus.OK,
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    door = DoorORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="SUR-REP-1",
+        our_price=Decimal("100.00"),
+        status=DoorStatus.INSTALLED,
+        installer_id=installer.id,
+        installer_rate_snapshot=Decimal("50.00"),
+        reason_id=None,
+        comment=None,
+        installed_at=datetime.now(timezone.utc),
+        is_locked=True,
+    )
+    db_session.add(door)
+    db_session.flush()
+
+    completed = CompletedWorkORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_id=door.id,
+        installer_id=installer.id,
+        completed_at=door.installed_at,
+        quantity=Decimal("1.00"),
+        rate_snapshot=Decimal("60.00"),
+        amount_snapshot=Decimal("60.00"),
+        entry_type="ORIGINAL",
+        correction_ref_id=None,
+        reason=None,
+    )
+    db_session.add(completed)
+    db_session.flush()
+    db_session.add(
+        ClientPriceSnapshotORM(
+            company_id=company_id,
+            completed_work_id=completed.id,
+            base_client_rate=Decimal("100.00"),
+            final_client_rate=Decimal("120.00"),
+            final_installer_rate=Decimal("60.00"),
+        )
+    )
+    db_session.commit()
+
+    resp = client_admin_real_uow.get(
+        f"/api/v1/admin/reports/project-profit/{project.id}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["installed_doors"] == 1
+    assert Decimal(str(body["revenue_total"])) == Decimal("120.00")
+    assert Decimal(str(body["payroll_total"])) == Decimal("60.00")
+    assert Decimal(str(body["profit_total"])) == Decimal("60.00")
+
+
 def test_reports_forbidden_for_installer_role(client_installer):
     resp = client_installer.get("/api/v1/admin/reports/kpi")
     assert resp.status_code == 403, resp.text
-    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     installers_kpi_resp = client_installer.get("/api/v1/admin/reports/installers-kpi")
     assert installers_kpi_resp.status_code == 403, installers_kpi_resp.text
-    assert installers_kpi_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert installers_kpi_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     installers_kpi_export_resp = client_installer.get(
         "/api/v1/admin/reports/installers-kpi/export"
     )
     assert installers_kpi_export_resp.status_code == 403, installers_kpi_export_resp.text
-    assert installers_kpi_export_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert installers_kpi_export_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     order_kpi_resp = client_installer.get("/api/v1/admin/reports/order-numbers-kpi")
     assert order_kpi_resp.status_code == 403, order_kpi_resp.text
-    assert order_kpi_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert order_kpi_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     order_kpi_export_resp = client_installer.get(
         "/api/v1/admin/reports/order-numbers-kpi/export"
     )
     assert order_kpi_export_resp.status_code == 403, order_kpi_export_resp.text
-    assert order_kpi_export_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert order_kpi_export_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
 def test_reports_limit_alerts_feed_and_mark_read(

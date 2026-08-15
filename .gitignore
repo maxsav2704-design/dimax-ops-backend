@@ -6,6 +6,9 @@ __pycache__/
 
 # Local env
 .env
+.env.local
+.env.*.local
+.env.production
 
 # Build and tooling
 .mypy_cache/

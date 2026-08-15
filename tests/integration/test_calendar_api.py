@@ -285,7 +285,7 @@ def test_calendar_admin_forbidden_for_installer_role(client_installer):
     q = f"starts_at={_iso(now)}&ends_at={_iso(now + timedelta(hours=1))}"
     resp = client_installer.get(f"/api/v1/admin/calendar/events?{q}")
     assert resp.status_code == 403, resp.text
-    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
 def test_calendar_validation_and_not_found(client_admin_real_uow):

@@ -55,6 +55,21 @@ Workspace shortcut:
 .\workspace.cmd test-backend-gate
 ```
 
+Python dependencies are resolved through the tested exact pins in
+`constraints.txt`. Local and CI installs must keep the constraint file active:
+
+```bash
+pip install -c constraints.txt -r requirements.txt
+pip check
+```
+
+The full workspace release gate also builds and smoke-tests the immutable
+production image. Run that image contract separately with:
+
+```powershell
+.\workspace.cmd test-production-image
+```
+
 ## Important docs
 
 - `TESTING.md`
@@ -69,7 +84,7 @@ Workspace shortcut:
 Production env validation:
 
 ```bash
-python scripts/validate_production_env.py --env-file .env
+python scripts/validate_production_env.py --env-file .env.production.local
 ```
 
 ## Repository role

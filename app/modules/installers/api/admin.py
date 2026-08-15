@@ -4,7 +4,12 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.api.v1.deps import (
+    CurrentUser,
+    ensure_admin_can_manage_users,
+    get_uow,
+    require_admin,
+)
 from app.modules.installers.api.schemas import (
     InstallerCreateDTO,
     InstallerDTO,
@@ -60,6 +65,7 @@ def create_installer(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerDTO:
     with uow:
+        ensure_admin_can_manage_users(uow, current_user)
         return InstallersAdminApiService.create_installer(
             uow,
             company_id=current_user.company_id,
@@ -76,6 +82,7 @@ def update_installer(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerDTO:
     with uow:
+        ensure_admin_can_manage_users(uow, current_user)
         return InstallersAdminApiService.update_installer(
             uow,
             company_id=current_user.company_id,
@@ -92,6 +99,7 @@ def delete_installer(
     current_user: CurrentUser = Depends(require_admin),
 ) -> None:
     with uow:
+        ensure_admin_can_manage_users(uow, current_user)
         InstallersAdminApiService.delete_installer(
             uow,
             company_id=current_user.company_id,
@@ -109,6 +117,7 @@ def link_user(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerDTO:
     with uow:
+        ensure_admin_can_manage_users(uow, current_user)
         return InstallersAdminApiService.link_user(
             uow,
             company_id=current_user.company_id,
@@ -125,6 +134,7 @@ def unlink_user(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerDTO:
     with uow:
+        ensure_admin_can_manage_users(uow, current_user)
         return InstallersAdminApiService.unlink_user(
             uow,
             company_id=current_user.company_id,

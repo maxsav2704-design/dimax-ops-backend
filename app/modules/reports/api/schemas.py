@@ -292,6 +292,11 @@ class ProjectPlanFactResponse(BaseModel):
     profit_gap_total: Decimal
     planned_addons_qty: Decimal
     actual_addons_qty: Decimal
+    urgency_surcharges_count: int
+    urgency_order_surcharges_count: int
+    urgency_client_total: Decimal
+    urgency_installer_total: Decimal
+    urgency_profit_total: Decimal
     missing_planned_rates_doors: int
     missing_actual_rates_doors: int
     missing_addon_plans_facts: int
@@ -388,6 +393,11 @@ class ProjectRiskDrilldownSummaryResponse(BaseModel):
     blocked_issue_profit_at_risk: Decimal
     addon_revenue_total: Decimal
     addon_profit_total: Decimal
+    urgency_surcharges_count: int
+    urgency_order_surcharges_count: int
+    urgency_client_total: Decimal
+    urgency_installer_total: Decimal
+    urgency_profit_total: Decimal
     missing_planned_rates_doors: int
     missing_actual_rates_doors: int
     missing_addon_plans_facts: int

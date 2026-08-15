@@ -30,6 +30,7 @@ def test_admin_endpoint_with_refresh_token_is_rejected(
             "company_id": str(company_id),
             "email": user.email,
             "password": password,
+            "device_id": "auth-guards-device",
         },
     )
     assert login_resp.status_code == 200, login_resp.text

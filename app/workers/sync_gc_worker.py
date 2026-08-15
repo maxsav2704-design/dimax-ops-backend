@@ -11,10 +11,13 @@ from app.modules.sync.infrastructure.repositories import (
     InstallerSyncStateRepository,
     SyncChangeLogGCRepository,
 )
+from app.shared.infrastructure.db.model_registry import import_all_orm_models
 from app.shared.infrastructure.db.session import SessionLocal
 
 
 def run_once() -> None:
+    import_all_orm_models()
+
     session: Session = SessionLocal()
     try:
         state_repo = InstallerSyncStateRepository(session)

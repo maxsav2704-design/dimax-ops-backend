@@ -43,8 +43,6 @@ class AddonsInstallerApiService:
                 {
                     "addon_type_id": str(p.addon_type_id),
                     "qty_planned": str(p.qty_planned),
-                    "client_price": str(p.client_price),
-                    "installer_price": str(p.installer_price),
                 }
                 for p in plan_rows
             ],

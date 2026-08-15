@@ -13,13 +13,15 @@ from app.main import create_app
 from app.modules.calendar.domain.enums import CalendarEventType
 from app.modules.calendar.infrastructure.models import CalendarEventAssigneeORM, CalendarEventORM
 from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM
 from app.modules.doors.infrastructure.models import DoorORM
-from app.modules.earnings.infrastructure.models import CompletedWorkORM
+from app.modules.earnings.infrastructure.models import ClientPriceSnapshotORM, CompletedWorkORM
 from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
-from app.modules.sync.infrastructure.models import SyncQueueItemORM
+from app.modules.rates.infrastructure.models import InstallerRateORM
+from app.modules.sync.infrastructure.models import SyncChangeLogORM, SyncQueueItemORM
 
 
 @pytest.fixture()
@@ -131,6 +133,24 @@ def test_door_status_installer_can_set_in_progress(
     db_session.refresh(door)
     assert door.status == DoorStatus.IN_PROGRESS
 
+    history = (
+        db_session.query(DoorStatusHistoryORM)
+        .filter(DoorStatusHistoryORM.door_id == door.id)
+        .one()
+    )
+    assert history.from_status == DoorStatus.NOT_INSTALLED.value
+    assert history.to_status == DoorStatus.IN_PROGRESS.value
+    assert history.source == "MOBILE_API"
+
+    changes = (
+        db_session.query(SyncChangeLogORM)
+        .filter(SyncChangeLogORM.entity_id == door.id)
+        .all()
+    )
+    assert len(changes) == 1
+    assert changes[0].payload["status"] == DoorStatus.IN_PROGRESS.value
+    assert changes[0].payload["version"] == 1
+
 
 def test_door_status_installer_can_set_installed(
     installer_client_phase2,
@@ -151,6 +171,7 @@ def test_door_status_installer_can_set_installed(
         installer_id=installer_id,
         status=DoorStatus.IN_PROGRESS,
     )
+    door.installer_rate_snapshot = Decimal("75.00")
     db_session.add(door)
     db_session.commit()
 
@@ -164,6 +185,88 @@ def test_door_status_installer_can_set_installed(
     db_session.refresh(door)
     assert door.status == DoorStatus.INSTALLED
     assert door.is_locked is True
+
+
+def test_door_status_installed_requires_positive_installer_rate(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Missing Rate", address="B1")
+    door_type = make_door_type(name="Missing Rate Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="B-02",
+        installer_id=installer_id,
+        status=DoorStatus.IN_PROGRESS,
+    )
+    db_session.add(door)
+    db_session.commit()
+
+    resp = client.patch(
+        f"/api/v1/installer/doors/{door.id}/status",
+        json={"status": "INSTALLED"},
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert resp.json()["error"]["field"] == "installer_rate"
+    db_session.expire_all()
+    persisted = db_session.get(DoorORM, door.id)
+    assert persisted is not None
+    assert persisted.status == DoorStatus.IN_PROGRESS
+    assert persisted.is_locked is False
+    assert (
+        db_session.query(CompletedWorkORM)
+        .filter(CompletedWorkORM.door_id == door.id)
+        .count()
+        == 0
+    )
+
+
+def test_direct_install_requires_positive_installer_rate(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Direct Missing Rate", address="B2")
+    door_type = make_door_type(name="Direct Missing Rate Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="B-03",
+        installer_id=installer_id,
+    )
+    db_session.add(door)
+    db_session.commit()
+
+    resp = client.post(f"/api/v1/installer/doors/{door.id}/install")
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert resp.json()["error"]["field"] == "installer_rate"
+    db_session.expire_all()
+    persisted = db_session.get(DoorORM, door.id)
+    assert persisted is not None
+    assert persisted.status == DoorStatus.NOT_INSTALLED
+    assert persisted.is_locked is False
+    assert (
+        db_session.query(CompletedWorkORM)
+        .filter(CompletedWorkORM.door_id == door.id)
+        .count()
+        == 0
+    )
 
 
 def test_door_status_installer_cannot_set_cancelled(
@@ -273,6 +376,356 @@ def test_door_status_installed_creates_completed_work_row(
     assert Decimal(str(row.amount_snapshot)) == Decimal("77.00")
 
 
+def test_direct_installer_install_creates_earnings_ledger_and_client_snapshot(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Direct Install Ledger", address="E1")
+    door_type = make_door_type(name="Direct Install Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="E-01A",
+        installer_id=installer_id,
+        status=DoorStatus.NOT_INSTALLED,
+    )
+    door.our_price = Decimal("100.00")
+    door.surcharge_pct = Decimal("125.00")
+    door.apply_surcharge_to_installer = True
+    db_session.add(door)
+    db_session.add(
+        InstallerRateORM(
+            company_id=company_id,
+            installer_id=installer_id,
+            door_type_id=door_type.id,
+            effective_from=datetime.now(timezone.utc) - timedelta(days=1),
+            price=Decimal("80.00"),
+        )
+    )
+    db_session.commit()
+
+    resp = client.post(f"/api/v1/installer/doors/{door.id}/install")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "ok": True,
+        "id": str(door.id),
+        "status": "INSTALLED",
+        "version": 1,
+    }
+
+    db_session.refresh(door)
+    assert door.status == DoorStatus.INSTALLED
+    assert door.is_locked is True
+    assert door.version == 1
+    assert Decimal(str(door.installer_rate_snapshot)) == Decimal("80.00")
+
+    completed = (
+        db_session.query(CompletedWorkORM)
+        .filter(CompletedWorkORM.company_id == company_id, CompletedWorkORM.door_id == door.id)
+        .one()
+    )
+    snapshot = (
+        db_session.query(ClientPriceSnapshotORM)
+        .filter(
+            ClientPriceSnapshotORM.company_id == company_id,
+            ClientPriceSnapshotORM.completed_work_id == completed.id,
+        )
+        .one()
+    )
+    assert Decimal(str(completed.rate_snapshot)) == Decimal("100.00")
+    assert Decimal(str(completed.amount_snapshot)) == Decimal("100.00")
+    assert Decimal(str(snapshot.final_client_rate)) == Decimal("125.00")
+    assert Decimal(str(snapshot.final_installer_rate)) == Decimal("100.00")
+
+
+def test_direct_installer_not_installed_returns_versioned_response(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+    make_reason,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Direct Not Installed", address="E2")
+    door_type = make_door_type(name="Direct Not Installed Door")
+    reason = make_reason(name="Blocked access")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="E-02",
+        installer_id=installer_id,
+        status=DoorStatus.IN_PROGRESS,
+    )
+    db_session.add(door)
+    db_session.commit()
+
+    resp = client.post(
+        f"/api/v1/installer/doors/{door.id}/not-installed",
+        json={"reason_id": str(reason.id), "comment": "Entrance blocked"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "ok": True,
+        "id": str(door.id),
+        "status": "NOT_INSTALLED",
+        "version": 1,
+    }
+
+    db_session.refresh(door)
+    assert door.status == DoorStatus.NOT_INSTALLED
+    assert door.reason_id == reason.id
+    assert door.comment == "Entrance blocked"
+
+
+def test_admin_override_installed_does_not_duplicate_active_door_earning(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_door_type,
+    make_installer,
+):
+    installer = make_installer(full_name="Override Idempotent", phone="+972500009011")
+    project = _make_project(company_id=company_id, name="Override Idempotent", address="E3")
+    door_type = make_door_type(name="Override Idempotent Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="E-03",
+        installer_id=installer.id,
+        status=DoorStatus.NOT_INSTALLED,
+    )
+    door.our_price = Decimal("100.00")
+    db_session.add(door)
+    db_session.add(
+        InstallerRateORM(
+            company_id=company_id,
+            installer_id=installer.id,
+            door_type_id=door_type.id,
+            effective_from=datetime.now(timezone.utc) - timedelta(days=1),
+            price=Decimal("90.00"),
+        )
+    )
+    db_session.commit()
+
+    install_resp = client_admin_real_uow.post(f"/api/v1/admin/doors/{door.id}/install")
+    assert install_resp.status_code == 200, install_resp.text
+    assert install_resp.json() == {
+        "ok": True,
+        "id": str(door.id),
+        "status": "INSTALLED",
+        "version": 1,
+    }
+
+    for reason in ("audit replay", "second replay"):
+        override_resp = client_admin_real_uow.post(
+            f"/api/v1/admin/doors/{door.id}/override",
+            json={"new_status": "INSTALLED", "override_reason": reason},
+        )
+        assert override_resp.status_code == 200, override_resp.text
+
+    originals = (
+        db_session.query(CompletedWorkORM)
+        .filter(
+            CompletedWorkORM.company_id == company_id,
+            CompletedWorkORM.door_id == door.id,
+            CompletedWorkORM.work_kind == "DOOR",
+            CompletedWorkORM.entry_type == "ORIGINAL",
+        )
+        .all()
+    )
+    assert len(originals) == 1
+    assert Decimal(str(originals[0].amount_snapshot)) == Decimal("90.00")
+
+
+def test_admin_override_not_installed_reverses_completed_work_row(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_door_type,
+    make_installer,
+    make_reason,
+):
+    installer = make_installer(full_name="Override Reversal", phone="+972500009001")
+    project = _make_project(company_id=company_id, name="Override Reversal", address="E4")
+    door_type = make_door_type(name="Override Reversal Door")
+    reason = make_reason(name="Admin rollback")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="E-04",
+        installer_id=installer.id,
+        status=DoorStatus.NOT_INSTALLED,
+    )
+    door.our_price = Decimal("100.00")
+    db_session.add(door)
+    db_session.add(
+        InstallerRateORM(
+            company_id=company_id,
+            installer_id=installer.id,
+            door_type_id=door_type.id,
+            effective_from=datetime.now(timezone.utc) - timedelta(days=1),
+            price=Decimal("90.00"),
+        )
+    )
+    db_session.commit()
+
+    install_resp = client_admin_real_uow.post(f"/api/v1/admin/doors/{door.id}/install")
+    assert install_resp.status_code == 200, install_resp.text
+
+    original = (
+        db_session.query(CompletedWorkORM)
+        .filter(
+            CompletedWorkORM.company_id == company_id,
+            CompletedWorkORM.door_id == door.id,
+            CompletedWorkORM.entry_type == "ORIGINAL",
+        )
+        .one()
+    )
+
+    override_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/doors/{door.id}/override",
+        json={
+            "new_status": "NOT_INSTALLED",
+            "reason_id": str(reason.id),
+            "comment": "Rollback after inspection",
+            "override_reason": "Wrong completion report",
+        },
+    )
+    assert override_resp.status_code == 200, override_resp.text
+
+    reversal = (
+        db_session.query(CompletedWorkORM)
+        .filter(
+            CompletedWorkORM.company_id == company_id,
+            CompletedWorkORM.door_id == door.id,
+            CompletedWorkORM.entry_type == "REVERSAL",
+        )
+        .one()
+    )
+    assert reversal.correction_ref_id == original.id
+    assert Decimal(str(reversal.amount_snapshot)) == Decimal("-90.00")
+    assert reversal.reason == "Wrong completion report"
+
+
+def test_door_status_installed_keeps_base_rate_when_surcharge_not_applied_to_installer(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="No Installer Surcharge", address="E2")
+    door_type = make_door_type(name="No Surcharge Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="E-02",
+        installer_id=installer_id,
+        status=DoorStatus.IN_PROGRESS,
+    )
+    door.our_price = Decimal("100.00")
+    door.installer_rate_snapshot = Decimal("50.00")
+    door.surcharge_pct = Decimal("120.00")
+    door.apply_surcharge_to_installer = False
+    db_session.add(door)
+    db_session.commit()
+
+    resp = client.patch(
+        f"/api/v1/installer/doors/{door.id}/status",
+        json={"status": "INSTALLED"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    completed = (
+        db_session.query(CompletedWorkORM)
+        .filter(CompletedWorkORM.company_id == company_id, CompletedWorkORM.door_id == door.id)
+        .one()
+    )
+    snapshot = (
+        db_session.query(ClientPriceSnapshotORM)
+        .filter(
+            ClientPriceSnapshotORM.company_id == company_id,
+            ClientPriceSnapshotORM.completed_work_id == completed.id,
+        )
+        .one()
+    )
+    assert Decimal(str(completed.rate_snapshot)) == Decimal("50.00")
+    assert Decimal(str(completed.amount_snapshot)) == Decimal("50.00")
+    assert Decimal(str(snapshot.base_client_rate)) == Decimal("100.00")
+    assert Decimal(str(snapshot.final_client_rate)) == Decimal("120.00")
+    assert Decimal(str(snapshot.final_installer_rate)) == Decimal("50.00")
+
+
+def test_door_status_installed_applies_surcharge_to_installer_when_enabled(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Installer Surcharge", address="E3")
+    door_type = make_door_type(name="Installer Surcharge Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="E-03",
+        installer_id=installer_id,
+        status=DoorStatus.IN_PROGRESS,
+    )
+    door.our_price = Decimal("100.00")
+    door.installer_rate_snapshot = Decimal("50.00")
+    door.surcharge_pct = Decimal("120.00")
+    door.apply_surcharge_to_installer = True
+    db_session.add(door)
+    db_session.commit()
+
+    resp = client.patch(
+        f"/api/v1/installer/doors/{door.id}/status",
+        json={"status": "INSTALLED"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    completed = (
+        db_session.query(CompletedWorkORM)
+        .filter(CompletedWorkORM.company_id == company_id, CompletedWorkORM.door_id == door.id)
+        .one()
+    )
+    snapshot = (
+        db_session.query(ClientPriceSnapshotORM)
+        .filter(
+            ClientPriceSnapshotORM.company_id == company_id,
+            ClientPriceSnapshotORM.completed_work_id == completed.id,
+        )
+        .one()
+    )
+    assert Decimal(str(completed.rate_snapshot)) == Decimal("60.00")
+    assert Decimal(str(completed.amount_snapshot)) == Decimal("60.00")
+    assert Decimal(str(snapshot.base_client_rate)) == Decimal("100.00")
+    assert Decimal(str(snapshot.final_client_rate)) == Decimal("120.00")
+    assert Decimal(str(snapshot.final_installer_rate)) == Decimal("60.00")
+
+
 def test_installer_can_create_issue_and_open_door(
     installer_client_phase2,
     db_session,
@@ -358,6 +811,55 @@ def test_installer_can_list_own_created_issues(
         "total": 1,
         "total_pages": 1,
     }
+
+
+def test_installer_can_update_issue_comment_and_list_empty_media(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Issue Comment", address="GC")
+    door_type = make_door_type(name="Issue Comment Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="GC-01",
+        installer_id=installer_id,
+    )
+    db_session.add(door)
+    db_session.flush()
+    issue = IssueORM(
+        company_id=company_id,
+        door_id=door.id,
+        status="OPEN",
+        workflow_state="NEW",
+        priority="P3",
+        title="Visible issue",
+        details="Old comment",
+        created_by_user_id=user.id,
+        owner_user_id=user.id,
+    )
+    db_session.add(issue)
+    db_session.commit()
+
+    patch_resp = client.patch(
+        f"/api/v1/installer/issues/{issue.id}",
+        json={"comment": "Need another visit"},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    assert patch_resp.json()["details"] == "Need another visit"
+
+    db_session.refresh(issue)
+    assert issue.details == "Need another visit"
+
+    media_resp = client.get(f"/api/v1/installer/issues/{issue.id}/media")
+    assert media_resp.status_code == 200, media_resp.text
+    assert media_resp.json() == {"items": []}
 
 
 def test_installer_sync_queue_list_has_pagination_object(
@@ -508,6 +1010,68 @@ def test_installer_earnings_summary_excludes_superseded_originals(
     assert resp.json()["total"] == "55.00"
 
 
+def test_installer_earnings_summary_includes_reversal_adjustments(
+    installer_client_phase2,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Reversal Adjustment", address="J2")
+    door_type = make_door_type(name="Reversal Adjustment Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="J-02",
+        installer_id=installer_id,
+    )
+    db_session.add(door)
+    db_session.flush()
+
+    reversal_date = datetime.now(timezone.utc)
+    original = CompletedWorkORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_id=door.id,
+        installer_id=installer_id,
+        completed_at=reversal_date - timedelta(days=1),
+        quantity=Decimal("1.00"),
+        rate_snapshot=Decimal("40.00"),
+        amount_snapshot=Decimal("40.00"),
+        entry_type="ORIGINAL",
+    )
+    db_session.add(original)
+    db_session.flush()
+    db_session.add(
+        CompletedWorkORM(
+            company_id=company_id,
+            project_id=project.id,
+            door_id=door.id,
+            installer_id=installer_id,
+            completed_at=reversal_date,
+            quantity=Decimal("1.00"),
+            rate_snapshot=Decimal("-40.00"),
+            amount_snapshot=Decimal("-40.00"),
+            entry_type="REVERSAL",
+            correction_ref_id=original.id,
+            reason="Admin override: door marked NOT_INSTALLED",
+        )
+    )
+    db_session.commit()
+
+    resp = client.get(
+        f"/api/v1/installer/earnings/summary?period=day&date={reversal_date.date().isoformat()}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == "-40.00"
+    assert body["jobs_count"] == 1
+    assert body["rows"][0]["amount"] == "-40.00"
+
+
 def test_installer_monthly_earnings_summary_returns_weekly_breakdown(
     installer_client_phase2,
     db_session,
@@ -573,13 +1137,14 @@ def test_installer_workspace_returns_aggregates(
     )
     db_session.add(door)
     db_session.flush()
+    event_now = datetime.now(timezone.utc)
     event = CalendarEventORM(
         company_id=company_id,
         title="Today task",
         event_type=CalendarEventType.INSTALLATION,
         location="Workspace address",
-        starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
-        ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        starts_at=event_now - timedelta(minutes=30),
+        ends_at=event_now + timedelta(minutes=30),
         project_id=project.id,
         description=None,
     )
@@ -650,13 +1215,14 @@ def test_installer_workspace_does_not_leak_other_installer_data(
     )
     db_session.add_all([my_door, other_door])
     db_session.flush()
+    event_now = datetime.now(timezone.utc)
     my_event = CalendarEventORM(
         company_id=company_id,
         title="Mine",
         event_type=CalendarEventType.INSTALLATION,
         location="Mine",
-        starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
-        ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        starts_at=event_now - timedelta(minutes=30),
+        ends_at=event_now + timedelta(minutes=30),
         project_id=project_mine.id,
     )
     other_event = CalendarEventORM(
@@ -664,8 +1230,8 @@ def test_installer_workspace_does_not_leak_other_installer_data(
         title="Other",
         event_type=CalendarEventType.INSTALLATION,
         location="Other",
-        starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
-        ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        starts_at=event_now - timedelta(minutes=30),
+        ends_at=event_now + timedelta(minutes=30),
         project_id=project_other.id,
     )
     db_session.add_all([my_event, other_event])

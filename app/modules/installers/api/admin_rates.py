@@ -5,7 +5,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.api.v1.deps import (
+    CurrentUser,
+    ensure_admin_can_view_rates,
+    get_uow,
+    require_admin,
+)
 from app.modules.installers.api.rates_schemas import (
     InstallerRatesBulkBody,
     InstallerRatesBulkResponse,
@@ -35,6 +40,7 @@ def get_installer_rate_timeline(
     ):
         raise HTTPException(status_code=422, detail="as_of must include timezone")
     with uow:
+        ensure_admin_can_view_rates(uow, current_user)
         return InstallerRatesAdminApiService.rate_timeline(
             uow,
             company_id=current_user.company_id,
@@ -54,6 +60,7 @@ def list_installer_rates(
     current_user: CurrentUser = Depends(require_admin),
 ) -> list[InstallerRateDTO]:
     with uow:
+        ensure_admin_can_view_rates(uow, current_user)
         return InstallerRatesAdminApiService.list_rates(
             uow,
             company_id=current_user.company_id,
@@ -71,6 +78,7 @@ def get_installer_rate(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerRateDTO:
     with uow:
+        ensure_admin_can_view_rates(uow, current_user)
         return InstallerRatesAdminApiService.get_rate(
             uow,
             company_id=current_user.company_id,
@@ -85,6 +93,7 @@ def create_installer_rate(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerRateDTO:
     with uow:
+        ensure_admin_can_view_rates(uow, current_user)
         return InstallerRatesAdminApiService.create_rate(
             uow,
             company_id=current_user.company_id,
@@ -101,6 +110,7 @@ def update_installer_rate(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerRateDTO:
     with uow:
+        ensure_admin_can_view_rates(uow, current_user)
         return InstallerRatesAdminApiService.update_rate(
             uow,
             company_id=current_user.company_id,
@@ -117,6 +127,7 @@ def bulk_installer_rates(
     current_user: CurrentUser = Depends(require_admin),
 ) -> InstallerRatesBulkResponse:
     with uow:
+        ensure_admin_can_view_rates(uow, current_user)
         data = InstallerRatesAdminApiService.bulk_rates(
             uow,
             company_id=current_user.company_id,
@@ -136,6 +147,7 @@ def delete_installer_rate(
     current_user: CurrentUser = Depends(require_admin),
 ) -> None:
     with uow:
+        ensure_admin_can_view_rates(uow, current_user)
         InstallerRatesAdminApiService.delete_rate(
             uow,
             company_id=current_user.company_id,

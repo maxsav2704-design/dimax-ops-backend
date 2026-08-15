@@ -11,6 +11,7 @@ from app.shared.domain.errors import (
     DomainError,
     Forbidden,
     NotFound,
+    TooManyRequests,
     Unauthorized,
     ValidationError,
 )
@@ -38,6 +39,8 @@ def _http_status_to_error_code(status_code: int) -> str | None:
         return "NOT_FOUND"
     if status_code == 409:
         return "CONFLICT"
+    if status_code == 429:
+        return "TOO_MANY_REQUESTS"
     if status_code == 422:
         return "VALIDATION_ERROR"
     return None
@@ -55,6 +58,8 @@ def install_error_handlers(app: FastAPI) -> None:
             status = 403
         elif isinstance(exc, Conflict):
             status = 409
+        elif isinstance(exc, TooManyRequests):
+            status = 429
         elif isinstance(exc, ValidationError):
             status = 422
 

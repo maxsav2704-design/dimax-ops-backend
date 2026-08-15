@@ -32,7 +32,7 @@ curl -fsS https://<api-host>/health
 Check environment integrity:
 
 ```powershell
-python scripts/validate_production_env.py --env-file .env
+python scripts/validate_production_env.py --env-file .env.production.local
 ```
 
 What to verify:
@@ -209,7 +209,7 @@ Safe recovery actions:
 1. validate env:
 
 ```powershell
-python scripts/validate_production_env.py --env-file .env
+python scripts/validate_production_env.py --env-file .env.production.local
 ```
 
 2. inspect failed message in admin outbox endpoint

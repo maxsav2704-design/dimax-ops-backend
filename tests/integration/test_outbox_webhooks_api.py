@@ -218,6 +218,7 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
     caplog,
 ):
     caplog.set_level(logging.INFO)
+    monkeypatch.setattr(settings, "OUTBOX_WEBHOOK_TOKEN", "")
     msg = _seed_outbox_context(
         db_session,
         company_id=company_id,
@@ -225,8 +226,25 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
         provider_message_id="SG-EVENT-1",
     )
 
+    disabled = client_raw.post(
+        "/api/v1/webhooks/outbox/status",
+        json={
+            "provider": "sendgrid",
+            "channel": "EMAIL",
+            "provider_message_id": "SG-EVENT-1",
+            "event_id": "evt-disabled",
+            "status": "delivered",
+        },
+    )
+    assert disabled.status_code == 403, disabled.text
+    assert any('"reason": "webhook_disabled"' in row.message for row in caplog.records)
+
+    webhook_token = "test-outbox-webhook-token-32-chars"
+    webhook_headers = {"X-Webhook-Token": webhook_token}
+    monkeypatch.setattr(settings, "OUTBOX_WEBHOOK_TOKEN", webhook_token)
     resp = client_raw.post(
         "/api/v1/webhooks/outbox/status",
+        headers=webhook_headers,
         json={
             "provider": "sendgrid",
             "channel": "EMAIL",
@@ -262,6 +280,7 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
 
     duplicate = client_raw.post(
         "/api/v1/webhooks/outbox/status",
+        headers=webhook_headers,
         json={
             "provider": "sendgrid",
             "channel": "EMAIL",
@@ -295,7 +314,6 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
     assert duplicate_event is not None
     assert duplicate_event.payload["_delivery_result"] == "duplicate"
 
-    monkeypatch.setattr(settings, "OUTBOX_WEBHOOK_TOKEN", "secret-webhook-token")
     forbidden = client_raw.post(
         "/api/v1/webhooks/outbox/status",
         json={
@@ -311,7 +329,7 @@ def test_outbox_generic_status_webhook_resolves_by_provider_message_and_supports
 
     allowed = client_raw.post(
         "/api/v1/webhooks/outbox/status",
-        headers={"X-Webhook-Token": "secret-webhook-token"},
+        headers=webhook_headers,
         json={
             "provider": "sendgrid",
             "channel": "EMAIL",

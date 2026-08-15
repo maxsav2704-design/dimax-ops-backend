@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, String, text
+from sqlalchemy import DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.shared.infrastructure.db.base import Base, UUIDPrimaryKeyMixin, TenantMixin
+from app.shared.infrastructure.db.base import Base, UUIDPrimaryKeyMixin
 
 
-class DoorStatusHistoryORM(Base, UUIDPrimaryKeyMixin, TenantMixin):
+class DoorStatusHistoryORM(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "door_status_history"
 
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     door_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("doors.id", ondelete="CASCADE"),
@@ -25,7 +26,7 @@ class DoorStatusHistoryORM(Base, UUIDPrimaryKeyMixin, TenantMixin):
     )
     from_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     to_status: Mapped[str] = mapped_column(String(40), nullable=False)
-    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(40), nullable=False, server_default=text("'SYSTEM'"))
     created_at: Mapped[object] = mapped_column(
         DateTime(timezone=True),
