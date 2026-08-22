@@ -48,6 +48,7 @@ HTTP:
 
 - `http.request.completed`
 - `http.request.failed`
+- paths are route templates; query values and exception messages are intentionally absent
 
 ## Minimum dashboard panels
 

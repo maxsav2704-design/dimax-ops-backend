@@ -52,6 +52,8 @@ class InstallerProjectListItem(BaseModel):
     name: str
     address: str
     status: str
+    lifecycle_status: str
+    health_status: str
     waze_url: str | None
     whatsapp_url: str | None = None
     call_url: str | None = None
@@ -125,6 +127,8 @@ class InstallerProjectDetailsResponse(BaseModel):
     developer_company: str | None = None
     developer_notes: str | None = None
     status: str
+    lifecycle_status: str
+    health_status: str
     doors: list[InstallerDoorDTO]
     issues_open: list[InstallerIssueDTO]
     door_types_catalog: list[DoorTypeMiniDTO]

@@ -13,6 +13,7 @@ __pycache__/
 # Build and tooling
 .mypy_cache/
 .ruff_cache/
+.cache/
 
 # OS/editor
 .DS_Store

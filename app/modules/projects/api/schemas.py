@@ -119,7 +119,10 @@ class ImportDoorsFromFileBody(BaseModel):
     delimiter: str | None = Field(default=None, max_length=3)
     mapping_profile: str = Field(
         default="auto_v1",
-        pattern=r"^(auto_v1|factory_he_v1|factory_ru_v1|generic_en_v1)$",
+        pattern=(
+            r"^(auto_v1|factory_he_v1|factory_ru_v1|generic_en_v1|"
+            r"supplier_delivery_he_v1)$"
+        ),
     )
     strict_required_fields: bool | None = None
     create_missing_door_types: bool = False
@@ -162,6 +165,7 @@ class ImportPreviewGroupDTO(BaseModel):
     door_count: int = 0
     location_codes: list[str] = Field(default_factory=list)
     door_type_ids: list[UUID] = Field(default_factory=list)
+    door_type_labels: list[str] = Field(default_factory=list)
 
 
 class ImportColumnsDiagnosticsDTO(BaseModel):

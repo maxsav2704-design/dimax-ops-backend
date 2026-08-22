@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.modules.journal.domain.enums import JournalDeliveryStatus
 from app.modules.journal.infrastructure.models import (
+    JournalAddonItemORM,
     JournalDoorItemORM,
     JournalFileORM,
     JournalORM,
     JournalSignatureORM,
 )
+from app.modules.journal.domain.enums import JournalStatus
 
 
 class JournalRepository:
@@ -31,9 +33,14 @@ class JournalRepository:
             .one_or_none()
         )
 
-    def get_by_token(self, *, token: str) -> JournalORM | None:
+    def get_by_token(
+        self,
+        *,
+        token: str,
+        for_update: bool = False,
+    ) -> JournalORM | None:
         now = datetime.now(timezone.utc)
-        return (
+        query = (
             self.session.query(JournalORM)
             .filter(
                 JournalORM.public_token == token,
@@ -42,8 +49,10 @@ class JournalRepository:
                     JournalORM.public_token_expires_at > now,
                 ),
             )
-            .one_or_none()
         )
+        if for_update:
+            query = query.with_for_update()
+        return query.one_or_none()
 
     def list(
         self,
@@ -68,6 +77,60 @@ class JournalRepository:
     def save(self, journal: JournalORM) -> None:
         self.session.add(journal)
 
+    def list_for_installer(
+        self,
+        *,
+        company_id: uuid.UUID,
+        installer_id: uuid.UUID,
+        limit: int = 100,
+    ) -> list[JournalORM]:
+        return (
+            self.session.query(JournalORM)
+            .filter(
+                JournalORM.company_id == company_id,
+                JournalORM.installer_id == installer_id,
+            )
+            .order_by(JournalORM.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def get_for_installer(
+        self,
+        *,
+        company_id: uuid.UUID,
+        installer_id: uuid.UUID,
+        journal_id: uuid.UUID,
+    ) -> JournalORM | None:
+        return (
+            self.session.query(JournalORM)
+            .filter(
+                JournalORM.company_id == company_id,
+                JournalORM.installer_id == installer_id,
+                JournalORM.id == journal_id,
+            )
+            .one_or_none()
+        )
+
+    def get_draft_for_installer_project(
+        self,
+        *,
+        company_id: uuid.UUID,
+        installer_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> JournalORM | None:
+        return (
+            self.session.query(JournalORM)
+            .filter(
+                JournalORM.company_id == company_id,
+                JournalORM.installer_id == installer_id,
+                JournalORM.project_id == project_id,
+                JournalORM.status == JournalStatus.DRAFT,
+            )
+            .order_by(JournalORM.created_at.desc())
+            .first()
+        )
+
     def delete_items(
         self, *, company_id: uuid.UUID, journal_id: uuid.UUID
     ) -> None:
@@ -77,6 +140,17 @@ class JournalRepository:
         ).delete(synchronize_session=False)
 
     def add_items(self, items: list[JournalDoorItemORM]) -> None:
+        self.session.add_all(items)
+
+    def delete_addon_items(
+        self, *, company_id: uuid.UUID, journal_id: uuid.UUID
+    ) -> None:
+        self.session.query(JournalAddonItemORM).filter(
+            JournalAddonItemORM.company_id == company_id,
+            JournalAddonItemORM.journal_id == journal_id,
+        ).delete(synchronize_session=False)
+
+    def add_addon_items(self, items: list[JournalAddonItemORM]) -> None:
         self.session.add_all(items)
 
     def list_items(
@@ -97,6 +171,34 @@ class JournalRepository:
 
     def add_signature(self, sig: JournalSignatureORM) -> None:
         self.session.add(sig)
+
+    def list_addon_items(
+        self,
+        *,
+        company_id: uuid.UUID,
+        journal_id: uuid.UUID,
+    ) -> list[JournalAddonItemORM]:
+        return (
+            self.session.query(JournalAddonItemORM)
+            .filter(
+                JournalAddonItemORM.company_id == company_id,
+                JournalAddonItemORM.journal_id == journal_id,
+            )
+            .order_by(JournalAddonItemORM.done_at.asc())
+            .all()
+        )
+
+    def get_signature(
+        self, *, company_id: uuid.UUID, journal_id: uuid.UUID
+    ) -> JournalSignatureORM | None:
+        return (
+            self.session.query(JournalSignatureORM)
+            .filter(
+                JournalSignatureORM.company_id == company_id,
+                JournalSignatureORM.journal_id == journal_id,
+            )
+            .one_or_none()
+        )
 
     def upsert_file(self, file: JournalFileORM) -> None:
         self.session.query(JournalFileORM).filter(
@@ -147,6 +249,11 @@ class JournalRepository:
             j.email_last_sent_at = sent_at
         if error is not None:
             j.email_last_error = error[:5000]
+        elif status in (
+            JournalDeliveryStatus.PENDING,
+            JournalDeliveryStatus.DELIVERED,
+        ):
+            j.email_last_error = None
         self.session.add(j)
 
     def set_whatsapp_status(

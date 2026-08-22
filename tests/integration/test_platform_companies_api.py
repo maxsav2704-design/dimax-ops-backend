@@ -16,7 +16,7 @@ def test_plan_limit_webhook_delivery_is_observable(monkeypatch, caplog):
         202,
         request=httpx.Request("POST", "https://alerts.local/plan"),
     )
-    monkeypatch.setattr(alerts_module.httpx, "post", lambda *args, **kwargs: response)
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: response)
     company_id = uuid.uuid4()
 
     with caplog.at_level(logging.INFO, logger=alerts_module.__name__):
@@ -38,7 +38,7 @@ def test_plan_limit_webhook_failure_is_best_effort_and_observable(monkeypatch, c
         503,
         request=httpx.Request("POST", "https://alerts.local/secret-path"),
     )
-    monkeypatch.setattr(alerts_module.httpx, "post", lambda *args, **kwargs: response)
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: response)
     company_id = uuid.uuid4()
 
     with caplog.at_level(logging.WARNING, logger=alerts_module.__name__):
@@ -334,7 +334,7 @@ def test_plan_limits_soft_enforced_for_installers_projects_and_doors(
                 return None
         return _Resp()
 
-    monkeypatch.setattr(alerts_module.httpx, "post", _fake_plan_alert_post)
+    monkeypatch.setattr(httpx, "post", _fake_plan_alert_post)
 
     admin_email = f"owner-{uuid.uuid4().hex[:8]}@example.com"
     admin_password = "PlatformPass123"

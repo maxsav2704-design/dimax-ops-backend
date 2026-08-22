@@ -188,8 +188,20 @@ def test_installer_projects_list_shows_only_assigned_projects(
     row_a = next(x for x in items if x["id"] == str(project_a.id))
     _assert_exact_keys(
         row_a,
-        {"id", "name", "address", "status", "waze_url", "whatsapp_url", "call_url"},
+        {
+            "id",
+            "name",
+            "address",
+            "status",
+            "lifecycle_status",
+            "health_status",
+            "waze_url",
+            "whatsapp_url",
+            "call_url",
+        },
     )
+    assert row_a["lifecycle_status"] == "ACTIVE"
+    assert row_a["health_status"] == "NORMAL"
     assert row_a["waze_url"] is not None
     assert "navigate=yes" in row_a["waze_url"]
     assert row_a["whatsapp_url"] is not None
@@ -356,6 +368,8 @@ def test_installer_project_details_returns_scoped_data(
             "developer_company",
             "developer_notes",
             "status",
+            "lifecycle_status",
+            "health_status",
             "doors",
             "issues_open",
             "door_types_catalog",
@@ -366,6 +380,8 @@ def test_installer_project_details_returns_scoped_data(
     )
     assert body["id"] == str(project.id)
     assert body["name"] == "Installer Details Project"
+    assert body["lifecycle_status"] == "ACTIVE"
+    assert body["health_status"] == "NORMAL"
     assert body["address_details"] == {
         "street": "Harbor",
         "building": "11",

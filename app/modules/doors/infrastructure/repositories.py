@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.projects.infrastructure.models import ProjectORM
 
 
 def _enum_value(value: object) -> str:
@@ -95,9 +96,12 @@ class DoorRepository:
     ) -> list[uuid.UUID]:
         rows = (
             self.session.query(distinct(DoorORM.project_id))
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(
                 DoorORM.company_id == company_id,
                 DoorORM.installer_id == installer_id,
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
             )
             .all()
         )
@@ -113,8 +117,13 @@ class DoorRepository:
             return []
         rows = (
             self.session.query(distinct(DoorORM.project_id))
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(DoorORM.company_id == company_id)
             .filter(DoorORM.installer_id.in_(installer_ids))
+            .filter(
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
+            )
             .all()
         )
         return [r[0] for r in rows]
@@ -127,9 +136,12 @@ class DoorRepository:
     ) -> list[dict]:
         rows = (
             self.session.query(DoorORM)
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(
                 DoorORM.company_id == company_id,
                 DoorORM.installer_id == installer_id,
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
             )
             .order_by(DoorORM.project_id.asc())
             .all()
@@ -165,9 +177,15 @@ class DoorRepository:
         installer_id: uuid.UUID,
         since: datetime | None,
     ) -> list[dict]:
-        q = self.session.query(DoorORM).filter(
-            DoorORM.company_id == company_id,
-            DoorORM.installer_id == installer_id,
+        q = (
+            self.session.query(DoorORM)
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.installer_id == installer_id,
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
+            )
         )
         if since is not None:
             q = q.filter(DoorORM.updated_at > since)

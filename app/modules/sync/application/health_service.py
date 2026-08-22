@@ -4,8 +4,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-import httpx
-
 from app.core.config import settings
 from app.shared.infrastructure.observability import get_logger, log_event
 
@@ -275,6 +273,8 @@ class SyncHealthService:
         if installer_phone is not None:
             payload["installer_phone"] = installer_phone
         try:
+            import httpx
+
             response = httpx.post(
                 settings.SYNC_ALERT_WEBHOOK_URL,
                 json=payload,

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.api.v1.deps import get_uow
 from app.modules.journal.api.schemas import (
-    OkResponse,
+    PublicSignResponse,
     PublicJournalGetResponse,
     PublicSignBody,
 )
@@ -22,7 +22,7 @@ def public_get(token: str, uow=Depends(get_uow)) -> PublicJournalGetResponse:
         return JournalPublicApiService.public_get(uow, token=token)
 
 
-@router.post("/{token}/sign", response_model=OkResponse)
+@router.post("/{token}/sign", response_model=PublicSignResponse)
 def public_sign(
     token: str,
     body: PublicSignBody,
@@ -33,7 +33,7 @@ def public_sign(
     ua = request.headers.get("user-agent")
 
     with uow:
-        JournalPublicApiService.public_sign(
+        return JournalPublicApiService.public_sign(
             uow,
             token=token,
             signer_name=body.signer_name,
@@ -41,4 +41,3 @@ def public_sign(
             ip=ip,
             user_agent=ua,
         )
-    return OkResponse()

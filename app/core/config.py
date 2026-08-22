@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     SEED_ADMIN_FULL_NAME: str = "Admin DIMAX"
 
     PUBLIC_BASE_URL: str = "http://localhost:8000"
+    PUBLIC_APP_BASE_URL: str = "http://localhost:5174"
     CORS_ALLOW_ORIGINS: str = (
         "http://localhost:5173,"
         "http://127.0.0.1:5173,"

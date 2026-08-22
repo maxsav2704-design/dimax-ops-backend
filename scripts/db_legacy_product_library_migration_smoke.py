@@ -5,6 +5,7 @@ import uuid
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 
@@ -13,7 +14,6 @@ LEGACY_PRODUCT_ID = uuid.UUID("00000000-0000-0000-0000-000000004901")
 NEW_PRODUCT_ID = uuid.UUID("00000000-0000-0000-0000-000000004902")
 PRICE_ID = uuid.UUID("00000000-0000-0000-0000-000000004903")
 LEGACY_REVISION = "0048_users_email_citext"
-HEAD_REVISION = "0057_payroll_correction_uq"
 
 
 def _database_url() -> str:
@@ -38,6 +38,13 @@ def _assert_revision(connection, expected: str) -> None:
     actual = _current_revision(connection)
     if actual != expected:
         raise AssertionError(f"Expected Alembic revision {expected}, got {actual}")
+
+
+def _head_revision(alembic_config: Config) -> str:
+    heads = ScriptDirectory.from_config(alembic_config).get_heads()
+    if len(heads) != 1:
+        raise AssertionError(f"Expected one Alembic head, got {heads}")
+    return heads[0]
 
 
 def _table_exists(connection, table_name: str) -> bool:
@@ -199,11 +206,11 @@ def _constraint_names(connection, table_name: str) -> set[str]:
     )
 
 
-def _verify_upgrade(database_url: str) -> None:
+def _verify_upgrade(database_url: str, *, expected_revision: str) -> None:
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
-            _assert_revision(connection, HEAD_REVISION)
+            _assert_revision(connection, expected_revision)
             assert _table_exists(connection, "product_library")
             assert _table_exists(connection, "product_library_items")
 
@@ -302,15 +309,16 @@ def main() -> int:
     _assert_enabled()
     database_url = _database_url()
     alembic_config = Config("alembic.ini")
+    head_revision = _head_revision(alembic_config)
 
     command.downgrade(alembic_config, LEGACY_REVISION)
     _prepare_legacy_fixture(database_url)
     command.upgrade(alembic_config, "head")
-    _verify_upgrade(database_url)
+    _verify_upgrade(database_url, expected_revision=head_revision)
     command.downgrade(alembic_config, LEGACY_REVISION)
     _verify_downgrade(database_url)
     command.upgrade(alembic_config, "head")
-    _verify_upgrade(database_url)
+    _verify_upgrade(database_url, expected_revision=head_revision)
 
     print(
         "[legacy-product-library-migration] OK: "

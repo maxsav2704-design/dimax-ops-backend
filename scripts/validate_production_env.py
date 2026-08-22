@@ -34,6 +34,7 @@ RUNTIME_REQUIRED_KEYS = (
     "DATABASE_URL",
     "JWT_SECRET",
     "PUBLIC_BASE_URL",
+    "PUBLIC_APP_BASE_URL",
     "CORS_ALLOW_ORIGINS",
     "MINIO_ENDPOINT",
     "MINIO_ACCESS_KEY",
@@ -363,6 +364,13 @@ def _validate_environment(
             require_https=True,
         )
     )
+    errors.extend(
+        validate_url(
+            "PUBLIC_APP_BASE_URL",
+            value_of(env, "PUBLIC_APP_BASE_URL"),
+            require_https=True,
+        )
+    )
     errors.extend(validate_cors_origins(value_of(env, "CORS_ALLOW_ORIGINS")))
     errors.extend(validate_minio(env))
 
@@ -376,7 +384,11 @@ def _validate_environment(
         )
 
     email_enabled = boolean_values["EMAIL_ENABLED"]
-    if email_enabled:
+    if not email_enabled:
+        errors.append(
+            "EMAIL_ENABLED must be true in production for signed journal PDF delivery"
+        )
+    else:
         errors.extend(validate_smtp(env))
 
     whatsapp_errors, whatsapp_warnings = validate_whatsapp(

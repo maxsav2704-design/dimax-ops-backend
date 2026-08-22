@@ -55,6 +55,7 @@ services:
       - "8000"
       - --workers
       - ${DIMAX_WEB_CONCURRENCY:-2}
+      - --no-access-log
     ports:
       - ${DIMAX_API_BIND:-127.0.0.1:8000}:8000
     healthcheck:

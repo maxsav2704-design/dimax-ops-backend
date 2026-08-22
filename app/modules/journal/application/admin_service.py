@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import uuid
 
+from app.core.config import settings
 from app.modules.journal.api.schemas import (
     JournalCreateResponse,
     JournalExportPdfResponse,
     JournalMarkReadyResponse,
 )
 from app.modules.journal.application.use_cases import JournalUseCases
+from app.modules.journal.application.submission_policy import (
+    JournalSubmissionPolicy,
+)
 from app.shared.domain.errors import Conflict, NotFound
 
 
@@ -151,6 +155,13 @@ class JournalAdminService:
         company_id: uuid.UUID,
         journal_id: uuid.UUID,
     ) -> JournalMarkReadyResponse:
+        journal = uow.journals.get(
+            company_id=company_id,
+            journal_id=journal_id,
+        )
+        if journal is None:
+            raise NotFound("Journal not found")
+        JournalSubmissionPolicy.evaluate(uow, journal=journal).require()
         token = JournalUseCases.mark_ready(
             uow,
             company_id=company_id,
@@ -159,6 +170,9 @@ class JournalAdminService:
         return JournalMarkReadyResponse(
             public_token=token,
             public_url=f"/api/v1/public/journals/{token}",
+            signing_url=(
+                f"{settings.PUBLIC_APP_BASE_URL.rstrip('/')}/acceptance/{token}"
+            ),
         )
 
     @staticmethod

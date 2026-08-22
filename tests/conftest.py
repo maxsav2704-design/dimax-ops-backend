@@ -42,6 +42,8 @@ from app.modules.installers.infrastructure.rates_repository import InstallerRate
 from app.modules.installers.infrastructure.repositories import InstallerRepository
 from app.modules.library.infrastructure.repositories import ProductLibraryRepository
 from app.modules.issues.infrastructure.repositories import IssueRepository
+from app.modules.journal.infrastructure.repositories import JournalRepository
+from app.modules.outbox.infrastructure.repositories import OutboxRepository
 from app.modules.documents.infrastructure.repositories import DocumentRepository
 from app.modules.files.infrastructure.repositories import (
     FileDownloadEventRepository,
@@ -91,6 +93,8 @@ class TestUnitOfWork:
         self.product_library = ProductLibraryRepository(self.session)
         self.doors = DoorRepository(self.session)
         self.issues = IssueRepository(self.session)
+        self.journals = JournalRepository(self.session)
+        self.outbox = OutboxRepository(self.session)
         self.documents = DocumentRepository(self.session)
         self.file_tokens = FileTokenRepository(self.session)
         self.file_download_events = FileDownloadEventRepository(self.session)

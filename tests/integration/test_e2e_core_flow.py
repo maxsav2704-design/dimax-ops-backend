@@ -71,7 +71,11 @@ def test_e2e_auth_projects_addons_journal_sync_flow(
     create_project_resp = client_raw.post(
         "/api/v1/admin/projects",
         headers=admin_headers,
-        json={"name": "E2E Project", "address": "E2E Address"},
+        json={
+            "name": "E2E Project",
+            "address": "E2E Address",
+            "contact_email": "developer.e2e@example.com",
+        },
     )
     assert create_project_resp.status_code == 200, create_project_resp.text
     project_id = create_project_resp.json()["id"]

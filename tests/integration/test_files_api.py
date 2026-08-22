@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
-from app.modules.files.infrastructure.models import FileDownloadEventORM
+from fastapi.testclient import TestClient
+
+from app.main import create_app
+from app.modules.files.infrastructure.models import (
+    FileDownloadEventORM,
+    FileDownloadTokenORM,
+)
+from app.modules.files.infrastructure.repositories import FileTokenRepository
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 
@@ -110,6 +120,72 @@ def test_public_file_download_by_token_consumes_usage(
         .first()
     )
     assert event is not None
+
+
+def test_public_file_download_token_is_consumed_atomically(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    monkeypatch,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Concurrent Public Files {uuid.uuid4().hex[:8]}",
+    )
+    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    share_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/pdf/share",
+        json={"ttl_sec": 300, "uses": 1},
+    )
+    assert share_resp.status_code == 200, share_resp.text
+
+    parsed = urlparse(share_resp.json()["url"])
+    token = parsed.path.rsplit("/", 1)[-1]
+    original_get_by_token = FileTokenRepository.get_by_token
+
+    def slow_locked_get_by_token(self, requested_token):
+        row = original_get_by_token(self, requested_token)
+        time.sleep(0.2)
+        return row
+
+    monkeypatch.setattr(
+        FileTokenRepository,
+        "get_by_token",
+        slow_locked_get_by_token,
+    )
+
+    start = threading.Barrier(2)
+    app = create_app()
+    with TestClient(app) as first_client, TestClient(app) as second_client:
+        def download_once(client):
+            start.wait(timeout=10)
+            return client.get(parsed.path)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(download_once, first_client)
+            second = executor.submit(download_once, second_client)
+            responses = [first.result(timeout=90), second.result(timeout=90)]
+
+    assert sorted(response.status_code for response in responses) == [200, 403]
+
+    db_session.expire_all()
+    event_rows = (
+        db_session.query(FileDownloadEventORM)
+        .filter(
+            FileDownloadEventORM.company_id == company_id,
+            FileDownloadEventORM.source == "PUBLIC_TOKEN",
+            FileDownloadEventORM.token == token,
+        )
+        .all()
+    )
+    token_row = (
+        db_session.query(FileDownloadTokenORM)
+        .filter(FileDownloadTokenORM.token == token)
+        .one()
+    )
+    assert len(event_rows) == 1
+    assert token_row.uses_left == 0
 
 
 def test_admin_files_endpoints_forbidden_for_installer(client_installer):

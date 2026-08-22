@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
 
 from app.core.config import settings
 from app.modules.audit.infrastructure.models import AuditLogORM
+from app.modules.door_types.infrastructure.models import DoorTypeORM
+from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.identity.domain.enums import UserRole
 from app.modules.identity.infrastructure.models import AdminProfileORM
 from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, OutboxStatus
@@ -27,13 +32,35 @@ def _login(client_raw, *, company_id: str, email: str, password: str) -> str:
 
 
 def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectORM:
+    suffix = uuid.uuid4().hex[:8]
     row = ProjectORM(
         company_id=company_id,
         name=name,
         address=f"{name} address",
+        contact_email="developer@example.com",
         status=ProjectStatus.OK,
     )
-    db_session.add(row)
+    door_type = DoorTypeORM(
+        company_id=company_id,
+        code=f"outbox-{suffix}",
+        name=f"Outbox Door {suffix}",
+        is_active=True,
+    )
+    db_session.add_all([row, door_type])
+    db_session.flush()
+    db_session.add(
+        DoorORM(
+            company_id=company_id,
+            project_id=row.id,
+            door_type_id=door_type.id,
+            unit_label=f"OUTBOX-{suffix}",
+            door_code=f"OUTBOX-{suffix}",
+            our_price=Decimal("100.00"),
+            status=DoorStatus.INSTALLED,
+            installed_at=datetime.now(timezone.utc),
+            is_locked=True,
+        )
+    )
     db_session.commit()
     db_session.refresh(row)
     return row

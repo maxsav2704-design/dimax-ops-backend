@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -170,9 +171,9 @@ def test_sync_health_failed_webhook_does_not_consume_alert_cooldown(
     )
 
     def fail_delivery(*_args, **_kwargs):
-        raise health_service.httpx.ConnectError("delivery unavailable")
+        raise httpx.ConnectError("delivery unavailable")
 
-    monkeypatch.setattr(health_service.httpx, "post", fail_delivery)
+    monkeypatch.setattr(httpx, "post", fail_delivery)
 
     failed_response = client_admin_real_uow.post("/api/v1/admin/sync/health/run")
     assert failed_response.status_code == 200, failed_response.text
@@ -199,7 +200,7 @@ def test_sync_health_failed_webhook_does_not_consume_alert_cooldown(
         deliveries.append((args, kwargs))
         return SuccessfulResponse()
 
-    monkeypatch.setattr(health_service.httpx, "post", deliver)
+    monkeypatch.setattr(httpx, "post", deliver)
 
     success_response = client_admin_real_uow.post("/api/v1/admin/sync/health/run")
     assert success_response.status_code == 200, success_response.text

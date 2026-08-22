@@ -3,8 +3,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import httpx
-
 from app.core.config import settings
 from app.modules.audit.application.service import AuditService
 from app.shared.infrastructure.observability import get_logger, log_event
@@ -126,8 +124,10 @@ class CompanyLimitAlertsService:
             "ts": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
         }
-        response: httpx.Response | None = None
+        response = None
         try:
+            import httpx
+
             response = httpx.post(webhook, json=body, timeout=5.0)
             response.raise_for_status()
         except Exception as exc:

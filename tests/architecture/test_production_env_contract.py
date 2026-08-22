@@ -17,13 +17,20 @@ def _valid_env() -> dict[str, str]:
         "SEED_ADMIN_EMAIL": "owner@dimax.co.il",
         "SEED_ADMIN_PASSWORD": "StrongAdminPass!2026",
         "PUBLIC_BASE_URL": "https://api.dimax.co.il",
+        "PUBLIC_APP_BASE_URL": "https://ops.dimax.co.il",
         "CORS_ALLOW_ORIGINS": "https://ops.dimax.co.il",
         "MINIO_ENDPOINT": "s3.dimax.co.il:443",
         "MINIO_ACCESS_KEY": "DIMAXACCESS",
         "MINIO_SECRET_KEY": "long-storage-secret-2026",
         "MINIO_BUCKET": "dimax-production",
         "MINIO_SECURE": "true",
-        "EMAIL_ENABLED": "false",
+        "EMAIL_ENABLED": "true",
+        "SMTP_HOST": "smtp.dimax.co.il",
+        "SMTP_PORT": "587",
+        "SMTP_TLS": "true",
+        "SMTP_USER": "dimax-production-mailer",
+        "SMTP_PASSWORD": "smtp-production-secret-2026",
+        "SMTP_FROM": "operations@dimax.co.il",
         "WHATSAPP_ENABLED": "false",
         "WHATSAPP_FALLBACK_TO_EMAIL": "false",
         "TWILIO_WEBHOOK_VALIDATE": "false",
@@ -112,10 +119,23 @@ def test_integration_toggles_must_be_explicit() -> None:
     assert "EMAIL_ENABLED must be an explicit true/false value" in errors
 
 
+def test_disabled_email_is_rejected_for_signed_journal_delivery() -> None:
+    env = _valid_env()
+    env["EMAIL_ENABLED"] = "false"
+
+    errors, _warnings = validate_production_env.validate_environment(env)
+
+    assert (
+        "EMAIL_ENABLED must be true in production for signed journal PDF delivery"
+        in errors
+    )
+
+
 def test_whatsapp_fallback_requires_configured_email() -> None:
     env = _valid_env()
     env.update(
         {
+            "EMAIL_ENABLED": "false",
             "WHATSAPP_ENABLED": "true",
             "WHATSAPP_FALLBACK_TO_EMAIL": "true",
         }
@@ -183,3 +203,25 @@ def test_production_container_contract_runs_fail_closed_runtime_validation() -> 
     assert 'if [ "${APP_ENV:-development}" = "production" ]' in entrypoint
     assert "validate_production_env.py --runtime" in entrypoint
     assert "APP_ENV: production" in compose
+
+
+def test_backend_image_precompiles_hash_validated_bytecode_outside_source_tree() -> None:
+    backend_root = Path(__file__).resolve().parents[2]
+    dockerfile = (backend_root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "ENV PYTHONPYCACHEPREFIX=/opt/dimax-pycache" in dockerfile
+    assert "python -m compileall --invalidation-mode checked-hash" in dockerfile
+    assert "/app/app /app/alembic" in dockerfile
+
+
+def test_backend_launchers_disable_unredacted_uvicorn_access_logs() -> None:
+    backend_root = Path(__file__).resolve().parents[2]
+
+    for relative_path in (
+        "Dockerfile",
+        "docker-compose.yml",
+        "docker-compose.production.yml",
+    ):
+        launcher = (backend_root / relative_path).read_text(encoding="utf-8")
+
+        assert launcher.count("uvicorn") == launcher.count("--no-access-log")

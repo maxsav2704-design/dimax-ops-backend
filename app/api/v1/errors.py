@@ -17,6 +17,19 @@ from app.shared.domain.errors import (
 )
 
 
+def _public_validation_errors(exc: RequestValidationError) -> list[dict]:
+    public_errors: list[dict] = []
+    for error in exc.errors():
+        public_errors.append(
+            {
+                "type": str(error.get("type") or "validation_error"),
+                "loc": list(error.get("loc") or ()),
+                "msg": str(error.get("msg") or "Invalid value"),
+            }
+        )
+    return public_errors
+
+
 def _error_content(*, code: str, message: str, field=None, meta=None) -> dict:
     return {
         "error": {
@@ -79,7 +92,7 @@ def install_error_handlers(app: FastAPI) -> None:
         exc: RequestValidationError,
     ):
         field = None
-        errors = jsonable_encoder(exc.errors())
+        errors = jsonable_encoder(_public_validation_errors(exc))
         if isinstance(errors, list) and errors:
             loc = errors[0].get("loc") or []
             if isinstance(loc, (list, tuple)) and loc:

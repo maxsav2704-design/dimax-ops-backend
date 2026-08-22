@@ -18,6 +18,14 @@ Fields include:
 - `status_code`
 - `duration_ms`
 - `client_ip`
+- `query_keys`
+- `error_type` for failed requests
+
+Request logs use route templates and never include path parameter values,
+query values, validation inputs, or exception messages. The Uvicorn access log is
+disabled because it would duplicate requests with unredacted URLs. Any external
+reverse proxy must use the same rule; the repository Nginx example provides a
+sanitized API access log.
 
 ## Critical flow events
 
@@ -76,4 +84,5 @@ Operator quick reference:
 
 ## Note
 
-These logs are observability-only changes. They do not change domain behavior or API contracts.
+These logs do not change domain behavior. Unexpected application failures return
+the stable `INTERNAL_ERROR` envelope and can be correlated by `X-Request-ID`.

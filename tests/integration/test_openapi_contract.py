@@ -782,7 +782,37 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         spec,
         path="/api/v1/public/journals/{token}/sign",
         method="post",
-    ) == "#/components/schemas/OkResponse"
+    ) == "#/components/schemas/PublicSignResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals",
+        method="get",
+    ) == "#/components/schemas/InstallerJournalListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/prepare",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalDetailsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}",
+        method="get",
+    ) == "#/components/schemas/InstallerJournalDetailsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}/refresh",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalDetailsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}/mark-ready",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalMarkReadyResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}/pdf-link",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalPdfLinkResponse"
 
     public_file_schema = _response_schema(
         spec,

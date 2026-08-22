@@ -1,16 +1,29 @@
 from __future__ import annotations
 
+import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from app.main import create_app
+from app.modules.addons.domain.enums import AddonFactSource
+from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
-from app.modules.identity.infrastructure.models import CompanyORM
+from app.modules.identity.infrastructure.models import CompanyORM, UserORM
+from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.journal.domain.enums import JournalStatus
-from app.modules.journal.infrastructure.models import JournalORM
+from app.modules.journal.infrastructure.models import (
+    JournalORM,
+    JournalSignatureORM,
+)
+from app.modules.journal.infrastructure.repositories import JournalRepository
+from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 
@@ -20,6 +33,7 @@ def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectO
         company_id=company_id,
         name=name,
         address=f"{name} address",
+        contact_email=f"acceptance-{uuid.uuid4().hex[:8]}@example.com",
         status=ProjectStatus.OK,
     )
     db_session.add(row)
@@ -36,6 +50,7 @@ def _create_door(
     door_type_id: uuid.UUID,
     unit_label: str,
     status: DoorStatus,
+    installer_id: uuid.UUID | None = None,
 ) -> DoorORM:
     installed_at = datetime.now(timezone.utc) if status == DoorStatus.INSTALLED else None
     row = DoorORM(
@@ -45,7 +60,7 @@ def _create_door(
         unit_label=unit_label,
         our_price=Decimal("100.00"),
         status=status,
-        installer_id=None,
+        installer_id=installer_id,
         reason_id=None,
         comment=None,
         installed_at=installed_at,
@@ -55,6 +70,201 @@ def _create_door(
     db_session.commit()
     db_session.refresh(row)
     return row
+
+
+def test_installer_journal_is_scoped_and_signed_pdf_is_queued_for_delivery(
+    client_installer,
+    installer_user,
+    admin_user,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    installer = InstallerORM(
+        company_id=company_id,
+        full_name="Journal Installer",
+        phone=f"+97250{uuid.uuid4().hex[:7]}",
+        email=None,
+        address=None,
+        passport_id=None,
+        notes=None,
+        status="ACTIVE",
+        is_active=True,
+        user_id=installer_user.id,
+    )
+    other_installer = InstallerORM(
+        company_id=company_id,
+        full_name="Other Journal Installer",
+        phone=f"+97251{uuid.uuid4().hex[:7]}",
+        email=None,
+        address=None,
+        passport_id=None,
+        notes=None,
+        status="ACTIVE",
+        is_active=True,
+        user_id=None,
+    )
+    db_session.add_all([installer, other_installer])
+    db_session.commit()
+    db_session.refresh(installer)
+    db_session.refresh(other_installer)
+
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name="Installer Journal Project",
+    )
+    project.developer_company = "Builder Acceptance Ltd"
+    project.contact_email = "acceptance@builder.example"
+    foreign_project = _create_project(
+        db_session,
+        company_id=company_id,
+        name="Foreign Installer Journal Project",
+    )
+    door_type = make_door_type(name="Installer Journal Door")
+    addon_type = AddonTypeORM(
+        company_id=company_id,
+        name="Frame adjustment",
+        unit="pcs",
+        default_client_price=Decimal("20.00"),
+        default_installer_price=Decimal("10.00"),
+        is_active=True,
+    )
+    db_session.add(addon_type)
+    db_session.commit()
+    db_session.refresh(addon_type)
+
+    _create_door(
+        db_session,
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="OWN-01",
+        status=DoorStatus.INSTALLED,
+        installer_id=installer.id,
+    )
+    _create_door(
+        db_session,
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="OTHER-01",
+        status=DoorStatus.INSTALLED,
+        installer_id=other_installer.id,
+    )
+    _create_door(
+        db_session,
+        company_id=company_id,
+        project_id=foreign_project.id,
+        door_type_id=door_type.id,
+        unit_label="FOREIGN-01",
+        status=DoorStatus.INSTALLED,
+        installer_id=other_installer.id,
+    )
+    db_session.add_all(
+        [
+            ProjectAddonFactORM(
+                company_id=company_id,
+                project_id=project.id,
+                addon_type_id=addon_type.id,
+                installer_id=installer.id,
+                qty_done=Decimal("2.00"),
+                done_at=datetime.now(timezone.utc),
+                comment="Own completed addon",
+                source=AddonFactSource.ONLINE,
+                client_event_id=f"journal-own-{uuid.uuid4().hex}",
+            ),
+            ProjectAddonFactORM(
+                company_id=company_id,
+                project_id=project.id,
+                addon_type_id=addon_type.id,
+                installer_id=other_installer.id,
+                qty_done=Decimal("3.00"),
+                done_at=datetime.now(timezone.utc),
+                comment="Other installer addon",
+                source=AddonFactSource.ONLINE,
+                client_event_id=f"journal-other-{uuid.uuid4().hex}",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    denied = client_installer.post(
+        "/api/v1/installer/journals/prepare",
+        json={"project_id": str(foreign_project.id)},
+    )
+    assert denied.status_code == 403, denied.text
+
+    prepared = client_installer.post(
+        "/api/v1/installer/journals/prepare",
+        json={"project_id": str(project.id)},
+    )
+    assert prepared.status_code == 200, prepared.text
+    prepared_body = prepared.json()
+    assert prepared_body["completed_doors"] == 1
+    assert prepared_body["completed_addons"] == 1
+    assert [row["unit_label"] for row in prepared_body["doors"]] == ["OWN-01"]
+    assert [row["comment"] for row in prepared_body["addon_items"]] == [
+        "Own completed addon"
+    ]
+
+    listed = client_installer.get("/api/v1/installer/journals")
+    assert listed.status_code == 200, listed.text
+    assert [row["project_id"] for row in listed.json()["items"]] == [
+        str(project.id)
+    ]
+
+    journal_id = prepared_body["id"]
+    ready = client_installer.post(
+        f"/api/v1/installer/journals/{journal_id}/mark-ready"
+    )
+    assert ready.status_code == 200, ready.text
+    signing_url = ready.json()["signing_url"]
+    token = signing_url.rsplit("/", 1)[-1]
+
+    public_document = client_installer.get(f"/api/v1/public/journals/{token}")
+    assert public_document.status_code == 200, public_document.text
+    assert [row["unit_label"] for row in public_document.json()["items"]] == [
+        "OWN-01"
+    ]
+    assert len(public_document.json()["addon_items"]) == 1
+
+    signed = client_installer.post(
+        f"/api/v1/public/journals/{token}/sign",
+        json={
+            "signer_name": "Developer Representative",
+            "signature_payload": {
+                "version": 1,
+                "viewport": {"width": 320, "height": 120},
+                "strokes": [
+                    [{"x": 20, "y": 70}, {"x": 140, "y": 35}]
+                ],
+            },
+        },
+    )
+    assert signed.status_code == 200, signed.text
+    assert signed.json() == {
+        "ok": True,
+        "pdf_ready": True,
+        "email_queued": True,
+    }
+
+    db_session.expire_all()
+    admin_email = (
+        db_session.query(UserORM.email).filter(UserORM.id == admin_user.id).scalar()
+    )
+    message = (
+        db_session.query(OutboxMessageORM)
+        .filter(
+            OutboxMessageORM.company_id == company_id,
+            OutboxMessageORM.correlation_id == uuid.UUID(journal_id),
+        )
+        .one()
+    )
+    assert message.payload["to_email"] == "acceptance@builder.example"
+    assert admin_email in message.payload["cc_emails"]
+    assert message.payload["delivery_reason"] == "SIGNED_JOURNAL"
+    assert message.payload["attachment_name"].endswith(".pdf")
 
 
 def test_journal_admin_public_sign_flow(
@@ -175,6 +385,95 @@ def test_journal_admin_public_sign_flow(
     )
     assert second_sign_resp.status_code == 403, second_sign_resp.text
     assert second_sign_resp.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_public_journal_can_only_be_signed_once_concurrently(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+    make_door_type,
+    monkeypatch,
+):
+    project = _create_project(
+        db_session,
+        company_id=company_id,
+        name=f"Concurrent Journal {uuid.uuid4().hex[:8]}",
+    )
+    door_type = make_door_type(name="Concurrent Journal Door")
+    _create_door(
+        db_session,
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="CONCURRENT-01",
+        status=DoorStatus.INSTALLED,
+    )
+    create_resp = client_admin_real_uow.post(
+        "/api/v1/admin/journals",
+        json={"project_id": str(project.id), "title": "Concurrent acceptance"},
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    journal_id = create_resp.json()["id"]
+    ready_resp = client_admin_real_uow.post(
+        f"/api/v1/admin/journals/{journal_id}/mark-ready"
+    )
+    assert ready_resp.status_code == 200, ready_resp.text
+    token = ready_resp.json()["public_token"]
+
+    original_get_by_token = JournalRepository.get_by_token
+
+    def slow_get_by_token(self, *, token, for_update=False):
+        journal = original_get_by_token(
+            self,
+            token=token,
+            for_update=for_update,
+        )
+        if for_update:
+            time.sleep(0.2)
+        return journal
+
+    monkeypatch.setattr(JournalRepository, "get_by_token", slow_get_by_token)
+
+    start = threading.Barrier(2)
+    app = create_app()
+    with TestClient(app) as first_client, TestClient(app) as second_client:
+        def sign_once(client, signer_name):
+            start.wait(timeout=10)
+            return client.post(
+                f"/api/v1/public/journals/{token}/sign",
+                json={
+                    "signer_name": signer_name,
+                    "signature_payload": {"strokes": [signer_name]},
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(sign_once, first_client, "First Client")
+            second = executor.submit(sign_once, second_client, "Second Client")
+            responses = [first.result(timeout=90), second.result(timeout=90)]
+
+    assert sorted(response.status_code for response in responses) == [200, 403]
+
+    db_session.expire_all()
+    signatures = (
+        db_session.query(JournalSignatureORM)
+        .filter(
+            JournalSignatureORM.company_id == company_id,
+            JournalSignatureORM.journal_id == uuid.UUID(journal_id),
+        )
+        .all()
+    )
+    journal = (
+        db_session.query(JournalORM)
+        .filter(
+            JournalORM.company_id == company_id,
+            JournalORM.id == uuid.UUID(journal_id),
+        )
+        .one()
+    )
+    assert len(signatures) == 1
+    assert journal.status == JournalStatus.ARCHIVED
+    assert journal.signer_name == signatures[0].signer_name
 
 
 def test_journal_admin_endpoints_forbidden_for_installer_role(client_installer):

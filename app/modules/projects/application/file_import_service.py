@@ -5,9 +5,11 @@ import csv
 import hashlib
 import io
 import json
+import posixpath
 import re
 import uuid
 import zipfile
+from email.header import decode_header, make_header
 from html import escape
 from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree as ET
@@ -61,6 +63,16 @@ def _clean_text(value) -> str | None:
         return None
     text = str(value).strip()
     return text if text else None
+
+
+def _normalize_upload_filename(value: str) -> str:
+    raw = _clean_text(value) or "upload"
+    try:
+        decoded = str(make_header(decode_header(raw)))
+    except (LookupError, UnicodeError):
+        decoded = raw
+    basename = decoded.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    return basename or "upload"
 
 
 def _first_value(row: dict[str, str], aliases: set[str]) -> str | None:
@@ -227,6 +239,12 @@ DOOR_TYPE_CODE_KEYS = _alias_set(
     "מודל",
     "סוג דלת",
 )
+DOOR_TYPE_NAME_KEYS = _alias_set(
+    "door_type_name",
+    "type_name",
+    "название типа двери",
+    "שם סוג דלת",
+)
 DOOR_TYPE_ID_KEYS = _alias_set("door_type_id")
 QTY_KEYS = _alias_set("qty", "quantity", "count", "amount", "количество", "כמות")
 PRICE_KEYS = _alias_set("price", "our_price", "cost", "цена", "стоимость", "מחיר")
@@ -248,6 +266,25 @@ ORDER_NUMBER_KEYS = _alias_set(
     "order_id",
     "po_number",
     "purchase_order",
+)
+
+SUPPLIER_DELIVERY_NOTE_KEYS = _alias_set(
+    "תעודת משלוח",
+    "מספר תעודת משלוח",
+)
+SUPPLIER_CONTRACT_ITEM_KEYS = _alias_set(
+    "סעיף חוזה",
+    "קוד סעיף חוזה",
+)
+SUPPLIER_CONTRACT_DESCRIPTION_KEYS = _alias_set(
+    "תאור הסעיף/פרק",
+    "תיאור הסעיף/פרק",
+    "תאור סעיף",
+    "תיאור סעיף",
+)
+SUPPLIER_PRODUCT_DESCRIPTION_KEYS = _alias_set(
+    "תאור מוצר",
+    "תיאור מוצר",
 )
 
 LOCATION_ALIAS_MAP = {
@@ -311,11 +348,39 @@ def _normalize_location_code(
     return None
 
 
+def _infer_location_code_from_position(value: str | None) -> str | None:
+    raw = _clean_text(value)
+    if raw is None:
+        return None
+    compact = _normalize_token(raw).replace("_", "")
+    markers = (
+        ("ממד", "mamad"),
+        ("מדרגות", "madregot"),
+        ("מחסן", "mahzan"),
+        ("אשפה", "heder_ashpa"),
+        ("מעלית", "lobby_maalit"),
+        ("דירה", "dira"),
+    )
+    for marker, location_code in markers:
+        if marker in compact:
+            return location_code
+    return None
+
+
 def _normalize_marking(value: str | None) -> str | None:
     raw = _clean_text(value)
     if raw is None:
         return None
     return raw[:120]
+
+
+def _normalize_door_type_code(value: str) -> str:
+    raw = value.strip()
+    code = re.sub(r"[^a-z0-9_-]+", "-", raw.lower()).strip("-")[:64]
+    if len(code) >= 2:
+        return code
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"type-{digest}"
 
 
 def _normalize_optional_value(value: str | None, *, max_len: int) -> str | None:
@@ -389,7 +454,7 @@ def _xlsx_col_to_index(cell_ref: str) -> int:
     return result
 
 
-def _parse_xlsx_rows(content: bytes) -> list[dict[str, str]]:
+def _parse_xlsx_rows_unchecked(content: bytes) -> list[dict[str, str]]:
     ns_main = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     ns_pkg = {"p": "http://schemas.openxmlformats.org/package/2006/relationships"}
 
@@ -419,8 +484,11 @@ def _parse_xlsx_rows(content: bytes) -> list[dict[str, str]]:
                 break
         if not sheet_target:
             return []
-        if not sheet_target.startswith("xl/"):
-            sheet_target = f"xl/{sheet_target.lstrip('/')}"
+        sheet_target = sheet_target.replace("\\", "/")
+        if sheet_target.startswith("/"):
+            sheet_target = sheet_target.lstrip("/")
+        elif not sheet_target.startswith("xl/"):
+            sheet_target = posixpath.normpath(posixpath.join("xl", sheet_target))
 
         sheet = ET.fromstring(zf.read(sheet_target))
         header_by_col: dict[int, str] = {}
@@ -458,6 +526,16 @@ def _parse_xlsx_rows(content: bytes) -> list[dict[str, str]]:
             if any(v for v in row.values()):
                 rows.append(row)
         return rows
+
+
+def _parse_xlsx_rows(content: bytes) -> list[dict[str, str]]:
+    try:
+        return _parse_xlsx_rows_unchecked(content)
+    except (ET.ParseError, KeyError, ValueError, zipfile.BadZipFile) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="invalid or unsupported xlsx workbook",
+        ) from exc
 
 
 def _xlsx_cell_ref(row_number: int, col_number: int) -> str:
@@ -535,6 +613,16 @@ def _build_inline_xlsx(*, sheet_name: str, rows: list[list[str]]) -> bytes:
 
 
 def _template_headers_for_profile(profile_code: str) -> list[str]:
+    if profile_code == "supplier_delivery_he_v1":
+        return [
+            "תעודת משלוח",
+            "בניין",
+            "קומה",
+            "דירה",
+            "סעיף חוזה",
+            "תאור הסעיף/פרק",
+            "תאור מוצר",
+        ]
     if profile_code == "factory_he_v1":
         return [
             "\u05de\u05e1\u05e4\u05e8 \u05d4\u05d6\u05de\u05e0\u05d4",
@@ -597,6 +685,7 @@ VALID_MAPPING_PROFILES = {
     "factory_he_v1",
     "factory_ru_v1",
     "generic_en_v1",
+    "supplier_delivery_he_v1",
 }
 
 
@@ -616,26 +705,65 @@ def _profile_preferred_delimiter(profile: str) -> str | None:
 
 
 def _default_strict_required_fields(profile: str) -> bool:
-    return profile in {"factory_he_v1", "factory_ru_v1"}
+    return profile in {
+        "factory_he_v1",
+        "factory_ru_v1",
+        "supplier_delivery_he_v1",
+    }
 
 
 def _build_alias_groups(profile: str) -> dict[str, set[str]]:
-    # Profiles currently share the same alias vocabulary but differ in delimiter preference.
-    # Keeping explicit function allows gradual profile-specific evolution without API break.
-    del profile
-    return {
+    groups = {
         "house": HOUSE_KEYS,
         "floor": FLOOR_KEYS,
         "apartment": APARTMENT_KEYS,
         "marking": MARKING_KEYS,
         "location": LOCATION_KEYS,
         "door_type_code": DOOR_TYPE_CODE_KEYS,
+        "door_type_name": DOOR_TYPE_NAME_KEYS,
         "door_type_id": DOOR_TYPE_ID_KEYS,
         "qty": QTY_KEYS,
         "price": PRICE_KEYS,
         "unit_label": UNIT_LABEL_KEYS,
         "order_number": ORDER_NUMBER_KEYS,
     }
+    if profile in {"auto_v1", "supplier_delivery_he_v1"}:
+        groups["order_number"] = groups["order_number"] | SUPPLIER_DELIVERY_NOTE_KEYS
+        groups["marking"] = groups["marking"] | SUPPLIER_PRODUCT_DESCRIPTION_KEYS
+        groups["door_type_code"] = (
+            groups["door_type_code"] | SUPPLIER_CONTRACT_ITEM_KEYS
+        )
+        groups["door_type_name"] = (
+            groups["door_type_name"] | SUPPLIER_CONTRACT_DESCRIPTION_KEYS
+        )
+    return groups
+
+
+def _detect_mapping_profile(
+    requested_profile: str,
+    parsed_rows: list[dict[str, str]],
+) -> str:
+    if requested_profile != "auto_v1" or not parsed_rows:
+        return requested_profile
+
+    source_tokens = {
+        _normalize_token(str(column))
+        for row in parsed_rows
+        for column in row.keys()
+        if _normalize_token(str(column))
+    }
+    supplier_groups = (
+        HOUSE_KEYS,
+        FLOOR_KEYS,
+        APARTMENT_KEYS,
+        SUPPLIER_DELIVERY_NOTE_KEYS,
+        SUPPLIER_CONTRACT_ITEM_KEYS,
+        SUPPLIER_CONTRACT_DESCRIPTION_KEYS,
+        SUPPLIER_PRODUCT_DESCRIPTION_KEYS,
+    )
+    if all(source_tokens.intersection(group) for group in supplier_groups):
+        return "supplier_delivery_he_v1"
+    return requested_profile
 
 
 def _factory_profile_door_type_code_fallback(
@@ -818,16 +946,16 @@ def _parse_rows_by_filename(
     raise HTTPException(status_code=422, detail=f"unsupported file format: .{ext or 'unknown'}")
 
 
-REQUIRED_IMPORT_FIELDS: list[tuple[str, str, set[str]]] = [
-    ("house_number", "בניין", HOUSE_KEYS),
-    ("floor_label", "קומה", FLOOR_KEYS),
-    ("apartment_number", "דירה", APARTMENT_KEYS),
-    ("door_marking", "דגם כנף", MARKING_KEYS),
+REQUIRED_IMPORT_FIELDS: list[tuple[str, str, str]] = [
+    ("house_number", "בניין", "house"),
+    ("floor_label", "קומה", "floor"),
+    ("apartment_number", "דירה", "apartment"),
+    ("door_marking", "דגם כנף", "marking"),
 ]
 
 
 REQUIRED_IMPORT_FIELDS.append(
-    ("order_number", "\u05de\u05e1\u05e4\u05e8 \u05d4\u05d6\u05de\u05e0\u05d4", ORDER_NUMBER_KEYS)
+    ("order_number", "\u05de\u05e1\u05e4\u05e8 \u05d4\u05d6\u05de\u05e0\u05d4", "order_number")
 )
 
 
@@ -861,7 +989,8 @@ def _collect_columns_diagnostics(
 
     required_fields: list[dict] = []
     missing_required_fields: list[str] = []
-    for field_key, display_name, aliases in REQUIRED_IMPORT_FIELDS:
+    for field_key, display_name, alias_group_key in REQUIRED_IMPORT_FIELDS:
+        aliases = alias_groups[alias_group_key]
         matched = [col for col in source_columns if _normalize_token(col) in aliases]
         if not matched:
             missing_required_fields.append(field_key)
@@ -956,6 +1085,7 @@ def _collect_preview_groups(
         door_marking = _clean_text(row.get("door_marking"))
         location_code = _clean_text(row.get("location_code"))
         door_type_id = row.get("door_type_id")
+        door_type_label = _clean_text(row.get("door_type_label"))
         key = (
             order_number or "",
             house_number or "",
@@ -974,6 +1104,7 @@ def _collect_preview_groups(
                 "door_count": 0,
                 "location_codes": set(),
                 "door_type_ids": set(),
+                "door_type_labels": set(),
             }
             grouped[key] = bucket
         bucket["door_count"] += 1
@@ -981,6 +1112,8 @@ def _collect_preview_groups(
             bucket["location_codes"].add(location_code)
         if door_type_id:
             bucket["door_type_ids"].add(str(door_type_id))
+        if door_type_label:
+            bucket["door_type_labels"].add(door_type_label)
 
     rows = sorted(
         grouped.values(),
@@ -1004,6 +1137,7 @@ def _collect_preview_groups(
                 "door_count": int(item.get("door_count") or 0),
                 "location_codes": sorted(item.get("location_codes") or []),
                 "door_type_ids": sorted(item.get("door_type_ids") or []),
+                "door_type_labels": sorted(item.get("door_type_labels") or []),
             }
         )
     return preview
@@ -1208,19 +1342,24 @@ class ProjectFileImportService:
         if project is None:
             raise NotFound("Project not found", details={"project_id": str(project_id)})
 
+        filename = _normalize_upload_filename(filename)
+
         try:
             content = base64.b64decode(content_base64, validate=True)
         except Exception as e:
             raise HTTPException(status_code=422, detail="invalid base64 content") from e
 
-        profile_code = _normalize_mapping_profile(mapping_profile)
-        strict_required = (
-            _default_strict_required_fields(profile_code)
+        requested_profile_code = _normalize_mapping_profile(mapping_profile)
+        profile_code = requested_profile_code
+        requested_strict_required = (
+            _default_strict_required_fields(requested_profile_code)
             if strict_required_fields is None
             else bool(strict_required_fields)
         )
-        alias_groups = _build_alias_groups(profile_code)
-        effective_delimiter = delimiter or _profile_preferred_delimiter(profile_code)
+        alias_groups = _build_alias_groups(requested_profile_code)
+        effective_delimiter = delimiter or _profile_preferred_delimiter(
+            requested_profile_code
+        )
         import_mode = "analyze" if analyze_only else "import"
         log_event(
             logger,
@@ -1229,26 +1368,45 @@ class ProjectFileImportService:
             project_id=project_id,
             filename=filename,
             import_mode=import_mode,
-            mapping_profile=profile_code,
-            strict_required_fields=strict_required,
+            mapping_profile=requested_profile_code,
+            strict_required_fields=requested_strict_required,
             create_missing_door_types=create_missing_door_types,
-            allow_partial_import=allow_partial_import,
-        )
-        fingerprint = _import_fingerprint(
-            content=content,
-            filename=filename,
-            default_door_type_id=default_door_type_id,
-            default_our_price=default_our_price,
-            delimiter=effective_delimiter,
-            mapping_profile=profile_code,
-            strict_required_fields=strict_required,
-            create_missing_door_types=create_missing_door_types,
-            analyze_only=analyze_only,
             allow_partial_import=allow_partial_import,
         )
 
         analysis_tx = None
         try:
+            parsed_rows = _parse_rows_by_filename(
+                filename=filename,
+                content=content,
+                delimiter=effective_delimiter,
+                alias_groups=alias_groups,
+            )
+            if not parsed_rows:
+                raise HTTPException(status_code=422, detail="no rows found in file")
+
+            profile_code = _detect_mapping_profile(
+                requested_profile_code,
+                parsed_rows,
+            )
+            alias_groups = _build_alias_groups(profile_code)
+            strict_required = (
+                _default_strict_required_fields(profile_code)
+                if strict_required_fields is None
+                else bool(strict_required_fields)
+            )
+            fingerprint = _import_fingerprint(
+                content=content,
+                filename=filename,
+                default_door_type_id=default_door_type_id,
+                default_our_price=default_our_price,
+                delimiter=effective_delimiter,
+                mapping_profile=profile_code,
+                strict_required_fields=strict_required,
+                create_missing_door_types=create_missing_door_types,
+                analyze_only=analyze_only,
+                allow_partial_import=allow_partial_import,
+            )
             existing_run = uow.project_import_runs.get_by_fingerprint(
                 company_id=company_id,
                 project_id=project_id,
@@ -1271,15 +1429,6 @@ class ProjectFileImportService:
 
             if analyze_only:
                 analysis_tx = uow.session.begin_nested()
-
-            parsed_rows = _parse_rows_by_filename(
-                filename=filename,
-                content=content,
-                delimiter=effective_delimiter,
-                alias_groups=alias_groups,
-            )
-            if not parsed_rows:
-                raise HTTPException(status_code=422, detail="no rows found in file")
             diagnostics = _collect_columns_diagnostics(
                 parsed_rows,
                 alias_groups=alias_groups,
@@ -1328,6 +1477,10 @@ class ProjectFileImportService:
                             marking_raw,
                             aliases_only=True,
                         )
+                    if location_code is None:
+                        location_code = _infer_location_code_from_position(
+                            apartment_number
+                        )
                     door_marking = _normalize_marking(marking_raw)
                     if strict_required:
                         missing_required_values = _required_row_missing_fields(
@@ -1354,6 +1507,8 @@ class ProjectFileImportService:
 
                     door_type_id_raw = _first_value(source, alias_groups["door_type_id"])
                     door_type_code = _first_value(source, alias_groups["door_type_code"])
+                    door_type_name = _first_value(source, alias_groups["door_type_name"])
+                    door_type_label = door_type_name or door_type_code
                     if not door_type_code:
                         door_type_code = _factory_profile_door_type_code_fallback(
                             profile_code=profile_code,
@@ -1366,10 +1521,7 @@ class ProjectFileImportService:
                     if door_type_id_raw:
                         door_type_id = uuid.UUID(door_type_id_raw)
                     elif door_type_code:
-                        code = re.sub(r"[^a-z0-9_-]+", "-", door_type_code.strip().lower())
-                        code = code.strip("-")[:64]
-                        if len(code) < 2:
-                            raise HTTPException(status_code=422, detail="door_type_code is invalid")
+                        code = _normalize_door_type_code(door_type_code)
 
                         dt = uow.door_types.get_by_code(
                             company_id=company_id,
@@ -1380,7 +1532,7 @@ class ProjectFileImportService:
                             dt = DoorTypeORM(
                                 company_id=company_id,
                                 code=code,
-                                name=door_type_code.strip()[:256],
+                                name=(door_type_name or door_type_code).strip()[:256],
                                 is_active=True,
                                 deleted_at=None,
                             )
@@ -1388,6 +1540,7 @@ class ProjectFileImportService:
                             uow.session.flush()
                         if dt is not None:
                             door_type_id = dt.id
+                            door_type_label = _clean_text(dt.name) or door_type_label
 
                     if door_type_id is None:
                         door_type_id = default_door_type_id
@@ -1425,6 +1578,7 @@ class ProjectFileImportService:
                                 "apartment_number": apartment_number,
                                 "location_code": location_code,
                                 "door_marking": door_marking,
+                                "door_type_label": door_type_label,
                             }
                         )
                 except Exception as e:

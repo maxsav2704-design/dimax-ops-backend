@@ -67,6 +67,8 @@ class ProjectInstallerService:
             "name": project.name,
             "address": project_address,
             "status": _status_value(project.status),
+            "lifecycle_status": _status_value(project.lifecycle_status),
+            "health_status": _status_value(project.health_status),
             "waze_url": build_waze_url(
                 address=project_address,
                 lat=getattr(project, "address_lat", None),

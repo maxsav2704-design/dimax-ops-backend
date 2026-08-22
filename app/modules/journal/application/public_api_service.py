@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from app.modules.journal.application.use_cases import JournalUseCases
+from app.modules.journal.application.signed_delivery_service import (
+    JournalSignedDeliveryService,
+)
 
 
 def _status_value(value) -> str:
@@ -15,6 +18,18 @@ class JournalPublicApiService:
             company_id=journal.company_id,
             journal_id=journal.id,
         )
+        addon_items = uow.journals.list_addon_items(
+            company_id=journal.company_id,
+            journal_id=journal.id,
+        )
+        project = uow.projects.get(
+            company_id=journal.company_id,
+            project_id=journal.project_id,
+        )
+        door_types = {
+            row.id: row.name
+            for row in uow.door_types.list_active(company_id=journal.company_id)
+        }
 
         return {
             "journal": {
@@ -32,10 +47,21 @@ class JournalPublicApiService:
                 "signer_name": journal.signer_name,
                 "snapshot_version": journal.snapshot_version,
             },
+            "project": {
+                "name": project.name if project else "",
+                "address": project.address if project else None,
+                "developer_company": (
+                    project.developer_company if project else None
+                ),
+                "contact_name": project.contact_name if project else None,
+            },
             "items": [
                 {
                     "unit_label": item.unit_label,
                     "door_type_id": str(item.door_type_id),
+                    "door_type_name": door_types.get(
+                        item.door_type_id, str(item.door_type_id)
+                    ),
                     "installed_at": (
                         item.installed_at.isoformat()
                         if item.installed_at
@@ -43,6 +69,16 @@ class JournalPublicApiService:
                     ),
                 }
                 for item in items
+            ],
+            "addon_items": [
+                {
+                    "name": item.addon_name,
+                    "quantity": str(item.qty_done),
+                    "unit": item.unit,
+                    "done_at": item.done_at.isoformat(),
+                    "comment": item.comment,
+                }
+                for item in addon_items
             ],
         }
 
@@ -55,8 +91,8 @@ class JournalPublicApiService:
         signature_payload: dict,
         ip: str | None,
         user_agent: str | None,
-    ) -> None:
-        JournalUseCases.public_sign(
+    ) -> dict:
+        journal = JournalUseCases.public_sign(
             uow,
             token=token,
             signer_name=signer_name,
@@ -64,3 +100,9 @@ class JournalPublicApiService:
             ip=ip,
             user_agent=user_agent,
         )
+        delivery = JournalSignedDeliveryService.enqueue(uow, journal=journal)
+        return {
+            "ok": True,
+            "pdf_ready": True,
+            "email_queued": delivery["queued"],
+        }

@@ -2318,3 +2318,111 @@ def test_bulk_reassignment_notifies_previous_installer_removed_from_you(
     assert [
         row for row in body["changes"] if row["change_type"] == SyncChangeType.DOOR.value
     ] == []
+
+
+def test_project_delete_removes_it_from_incremental_and_cold_sync(
+    client_admin_real_uow,
+    client_installer,
+    db_session,
+    company_id,
+    installer_user,
+    make_door_type,
+):
+    installer = InstallerORM(
+        company_id=company_id,
+        full_name="Deleted Project Installer",
+        phone="+10000000050",
+        email=None,
+        address=None,
+        passport_id=None,
+        notes=None,
+        status="ACTIVE",
+        is_active=True,
+        user_id=installer_user.id,
+    )
+    project = ProjectORM(
+        company_id=company_id,
+        name="Deleted Sync Project",
+        address="8 Snapshot Street",
+        status=ProjectStatus.OK,
+    )
+    db_session.add_all([installer, project])
+    db_session.flush()
+
+    door_type = make_door_type(
+        code="deleted-project-sync-door",
+        name="Deleted Project Sync Door",
+    )
+    door = DoorORM(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="DELETE-100",
+        order_number="DELETE-ORDER",
+        our_price="100.00",
+        status=DoorStatus.NOT_INSTALLED,
+        installer_id=installer.id,
+        installed_at=None,
+        is_locked=False,
+    )
+    db_session.add(door)
+    db_session.flush()
+
+    baseline = SyncChangeLogORM(
+        created_at=datetime.now(timezone.utc),
+        company_id=company_id,
+        change_type=SyncChangeType.PROJECT_BASE,
+        entity_id=project.id,
+        project_id=project.id,
+        installer_id=installer.id,
+        payload={"id": str(project.id), "name": project.name},
+    )
+    db_session.add(baseline)
+    db_session.commit()
+
+    delete_response = client_admin_real_uow.delete(
+        f"/api/v1/admin/projects/{project.id}"
+    )
+    assert delete_response.status_code == 200, delete_response.text
+
+    incremental_response = client_installer.post(
+        "/api/v1/installer/sync",
+        json={
+            "since_cursor": baseline.cursor_id,
+            "ack_cursor": baseline.cursor_id,
+            "events": [],
+            "app_version": "mobile-test",
+            "device_id": "device-project-delete",
+        },
+    )
+    assert incremental_response.status_code == 200, incremental_response.text
+    incremental = incremental_response.json()
+    removed = [
+        change
+        for change in incremental["changes"]
+        if change["change_type"] == SyncChangeType.PROJECT_ASSIGNMENTS.value
+        and change["payload"].get("kind") == "removed_from_you"
+    ]
+    assert len(removed) == 1
+    assert removed[0]["payload"]["project_id"] == str(project.id)
+    assert removed[0]["payload"]["affected_door_ids"] == [str(door.id)]
+
+    cold_response = client_installer.post(
+        "/api/v1/installer/sync",
+        json={
+            "since_cursor": 0,
+            "ack_cursor": 0,
+            "events": [],
+            "app_version": "mobile-test",
+            "device_id": "device-project-delete-cold",
+        },
+    )
+    assert cold_response.status_code == 200, cold_response.text
+    cold = cold_response.json()
+    assert cold["reset_required"] is True
+    assert str(project.id) not in {
+        row["id"] for row in cold["snapshot"]["projects"]
+    }
+    assert str(door.id) not in {
+        row["id"] for row in cold["snapshot"]["doors"]
+    }

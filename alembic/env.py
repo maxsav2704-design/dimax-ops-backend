@@ -31,6 +31,7 @@ from app.modules.doors.infrastructure.models import DoorORM  # noqa: F401
 from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM  # noqa: F401
 from app.modules.issues.infrastructure.models import IssueORM  # noqa: F401
 from app.modules.journal.infrastructure.models import (  # noqa: F401
+    JournalAddonItemORM,
     JournalORM,
     JournalDoorItemORM,
     JournalSignatureORM,

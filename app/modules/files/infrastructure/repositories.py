@@ -22,6 +22,7 @@ class FileTokenRepository:
         return (
             self.session.query(FileDownloadTokenORM)
             .filter(FileDownloadTokenORM.token == token)
+            .with_for_update()
             .one_or_none()
         )
 

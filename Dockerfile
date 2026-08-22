@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPYCACHEPREFIX=/opt/dimax-pycache
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_ROOT_USER_ACTION=ignore
@@ -11,6 +12,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    fonts-dejavu-core \
     poppler-utils \
     tesseract-ocr \
     tesseract-ocr-heb \
@@ -19,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt /app/requirements.txt
 COPY constraints.txt /app/constraints.txt
-RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2 \
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2 \
     && pip install --no-cache-dir -c constraints.txt -r requirements.txt \
     && pip check
 
@@ -30,7 +32,11 @@ RUN groupadd --gid 10001 dimax \
 COPY --chown=10001:10001 . /app
 COPY --chown=10001:10001 --chmod=755 docker-entrypoint.sh /usr/local/bin/dimax-entrypoint
 
+RUN mkdir -p "$PYTHONPYCACHEPREFIX" \
+    && python -m compileall --invalidation-mode checked-hash -q /app/app /app/alembic \
+    && chown -R 10001:10001 "$PYTHONPYCACHEPREFIX"
+
 USER 10001:10001
 
 ENTRYPOINT ["/usr/local/bin/dimax-entrypoint"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

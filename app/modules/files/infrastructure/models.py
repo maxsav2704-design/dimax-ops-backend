@@ -3,7 +3,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +27,10 @@ class FileDownloadTokenORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixi
     __tablename__ = "file_download_tokens"
     __table_args__ = (
         UniqueConstraint("token", name="uq_file_download_tokens_token"),
+        CheckConstraint(
+            "uses_left >= 0",
+            name="ck_file_download_tokens_uses_left_non_negative",
+        ),
     )
 
     token: Mapped[str] = mapped_column(

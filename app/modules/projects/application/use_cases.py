@@ -310,7 +310,29 @@ class ProjectUseCases:
             raise NotFound(
                 "Project not found", details={"project_id": str(project_id)}
             )
+
+        removed_by_installer: dict[uuid.UUID, list[uuid.UUID]] = {}
+        for door in uow.doors.list_by_project(
+            company_id=company_id,
+            project_id=project_id,
+        ):
+            if door.installer_id is not None:
+                removed_by_installer.setdefault(door.installer_id, []).append(door.id)
+
         uow.projects.soft_delete(project)
+        for installer_id, door_ids in removed_by_installer.items():
+            uow.sync_change_log.add_change(
+                company_id=company_id,
+                change_type=SyncChangeType.PROJECT_ASSIGNMENTS,
+                entity_id=project_id,
+                project_id=project_id,
+                installer_id=installer_id,
+                payload={
+                    "kind": "removed_from_you",
+                    "project_id": str(project_id),
+                    "affected_door_ids": [str(door_id) for door_id in door_ids],
+                },
+            )
 
     @staticmethod
     def import_doors(

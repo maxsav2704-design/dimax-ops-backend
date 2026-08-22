@@ -14,6 +14,7 @@ from app.modules.journal.api.admin_send import router as admin_journals_send
 from app.modules.journal.api.admin_files import router as admin_journals_files
 from app.modules.journal.api.admin_share import router as admin_journals_share
 from app.modules.journal.api.public import router as public_journals
+from app.modules.journal.api.installer import router as installer_journals
 from app.modules.calendar.api.admin import router as admin_calendar
 from app.modules.calendar.api.installer import router as installer_calendar
 from app.modules.installers.api.admin import router as admin_installers
@@ -89,6 +90,7 @@ router.include_router(admin_journals_send, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_journals_files, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_journals_share, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(public_journals, responses=VALIDATION_ERROR_RESPONSE)
+router.include_router(installer_journals, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(public_files, responses=VALIDATION_ERROR_RESPONSE)
 router.include_router(admin_files, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(media_files, responses=SECURED_ROUTE_RESPONSES)

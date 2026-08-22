@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -11,6 +11,11 @@ from app.modules.addons.infrastructure.models import AddonTypeORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
+from app.modules.files.infrastructure.models import FileDownloadTokenORM
+from app.modules.journal.infrastructure.models import (
+    JournalORM,
+    JournalSignatureORM,
+)
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 
@@ -135,6 +140,68 @@ def test_database_rejects_zero_installer_snapshot(
         db_session.flush()
 
     assert _constraint_name(exc_info.value) == "ck_doors_installer_rate_positive"
+    db_session.rollback()
+
+
+def test_database_rejects_negative_file_token_usage(db_session, company_id):
+    db_session.add(
+        FileDownloadTokenORM(
+            company_id=company_id,
+            token=f"invalid-usage-{uuid.uuid4().hex}",
+            object_key="journals/invalid-token.pdf",
+            bucket="dimax",
+            mime_type="application/pdf",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            uses_left=-1,
+        )
+    )
+
+    with pytest.raises(IntegrityError) as exc_info:
+        db_session.flush()
+
+    assert (
+        _constraint_name(exc_info.value)
+        == "ck_file_download_tokens_uses_left_non_negative"
+    )
+    db_session.rollback()
+
+
+def test_database_rejects_second_signature_for_journal(db_session, company_id):
+    project = ProjectORM(
+        company_id=company_id,
+        name=f"Signature Constraints {uuid.uuid4().hex[:8]}",
+        address="Signature constraint address",
+        status=ProjectStatus.OK,
+    )
+    db_session.add(project)
+    db_session.flush()
+    journal = JournalORM(
+        company_id=company_id,
+        project_id=project.id,
+        title="One signature only",
+    )
+    db_session.add(journal)
+    db_session.flush()
+
+    def signature(signer_name: str) -> JournalSignatureORM:
+        return JournalSignatureORM(
+            company_id=company_id,
+            journal_id=journal.id,
+            signer_name=signer_name,
+            signature_payload={"strokes": [signer_name]},
+        )
+
+    db_session.add(signature("First signer"))
+    db_session.flush()
+    db_session.add(signature("Second signer"))
+
+    with pytest.raises(IntegrityError) as exc_info:
+        db_session.flush()
+
+    assert (
+        _constraint_name(exc_info.value)
+        == "uq_journal_signatures_one_per_journal"
+    )
     db_session.rollback()
 
 

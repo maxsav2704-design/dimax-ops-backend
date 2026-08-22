@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.installers.infrastructure.models import InstallerORM
+from app.modules.projects.infrastructure.models import ProjectORM
 from app.modules.sync.domain.enums import SyncChangeType
 from app.modules.sync.infrastructure.models import (
     InstallerSyncStateORM,
@@ -183,9 +184,12 @@ class SyncChangeLogRepository:
             x[0]
             for x in (
                 self.session.query(DoorORM.project_id)
+                .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
                 .filter(
                     DoorORM.company_id == company_id,
                     DoorORM.installer_id == installer_id,
+                    ProjectORM.company_id == company_id,
+                    ProjectORM.deleted_at.is_(None),
                 )
                 .distinct()
                 .all()

@@ -605,6 +605,15 @@ class ProjectAdminService:
                 "preferred_delimiter": ";",
             },
             {
+                "code": "supplier_delivery_he_v1",
+                "name": "Supplier Delivery Hebrew v1",
+                "description": (
+                    "Maps Hebrew delivery reports by shipment, building, floor, "
+                    "apartment, contract item, and product description."
+                ),
+                "preferred_delimiter": None,
+            },
+            {
                 "code": "factory_ru_v1",
                 "name": "Factory RU v1",
                 "description": "Optimized for Russian-labeled exports (preferred delimiter ';').",

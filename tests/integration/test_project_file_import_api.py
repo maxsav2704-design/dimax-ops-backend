@@ -29,7 +29,13 @@ def _xlsx_cell_ref(row_number: int, col_number: int) -> str:
     return f"{letters}{row_number}"
 
 
-def _xlsx_bytes(headers: list[str], rows: list[list[object]]) -> bytes:
+def _xlsx_bytes(
+    headers: list[str],
+    rows: list[list[object]],
+    *,
+    worksheet_target: str = "worksheets/sheet1.xml",
+    worksheet_archive_path: str = "xl/worksheets/sheet1.xml",
+) -> bytes:
     shared_values: list[str] = []
     shared_index: dict[str, int] = {}
 
@@ -79,7 +85,7 @@ def _xlsx_bytes(headers: list[str], rows: list[list[object]]) -> bytes:
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rId1" '
         'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-        'Target="worksheets/sheet1.xml"/>'
+        f'Target="{escape(worksheet_target, quote=True)}"/>'
         "</Relationships>"
     )
     root_rels_xml = (
@@ -97,7 +103,7 @@ def _xlsx_bytes(headers: list[str], rows: list[list[object]]) -> bytes:
         '<Default Extension="xml" ContentType="application/xml"/>'
         '<Override PartName="/xl/workbook.xml" '
         'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        f'<Override PartName="/{escape(worksheet_archive_path, quote=True)}" '
         'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
         '<Override PartName="/xl/sharedStrings.xml" '
         'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
@@ -110,7 +116,7 @@ def _xlsx_bytes(headers: list[str], rows: list[list[object]]) -> bytes:
         zf.writestr("_rels/.rels", root_rels_xml)
         zf.writestr("xl/workbook.xml", workbook_xml)
         zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
-        zf.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        zf.writestr(worksheet_archive_path, sheet_xml)
         zf.writestr("xl/sharedStrings.xml", shared_xml)
     return buffer.getvalue()
 
@@ -286,6 +292,75 @@ def test_project_import_file_xlsx_populates_structured_doors(client_admin_real_u
     assert sum(1 for d in doors if d["apartment_number"] == "302") == 2
 
 
+def test_project_import_xlsx_accepts_absolute_sheet_target_and_mime_filename(
+    client_admin_real_uow,
+):
+    project_id = _create_project(
+        client_admin_real_uow,
+        name="Import XLSX Absolute Target",
+    )
+    door_type_id = _create_door_type(
+        client_admin_real_uow,
+        code="absolute-target",
+        name="Absolute Target",
+    )
+    workbook = _xlsx_bytes(
+        ["house", "floor", "apartment", "marking"],
+        [["1", "2", "דירה 8", "D-8"]],
+        worksheet_target="/xl/worksheets/sheet2.xml",
+        worksheet_archive_path="xl/worksheets/sheet2.xml",
+    )
+
+    response = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-upload",
+        files={
+            "file": (
+                "=?utf-8?B?15HXoNeZ15nXnyAxLnhsc3g=?=",
+                workbook,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={
+            "default_door_type_id": door_type_id,
+            "analyze_only": "true",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "analyze"
+    assert body["parsed_rows"] == 1
+    assert body["would_import"] == 1
+    assert body["imported"] == 0
+
+
+def test_project_import_rejects_invalid_xlsx_as_validation_error(
+    client_admin_real_uow,
+):
+    project_id = _create_project(
+        client_admin_real_uow,
+        name="Import Invalid XLSX",
+    )
+
+    response = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-upload",
+        files={
+            "file": (
+                "broken.xlsx",
+                b"not-an-xlsx-archive",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"analyze_only": "true"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert (
+        response.json()["error"]["message"]
+        == "invalid or unsupported xlsx workbook"
+    )
+
+
 def test_project_import_template_xlsx_download(client_admin_real_uow):
     resp = client_admin_real_uow.get(
         "/api/v1/admin/projects/doors/import-template.xlsx?mapping_profile=factory_he_v1"
@@ -436,7 +511,13 @@ def test_project_import_mapping_profiles_endpoint(client_admin_real_uow):
     body = resp.json()
     assert body["default_code"] == "auto_v1"
     codes = {x["code"] for x in body["items"]}
-    assert {"auto_v1", "factory_he_v1", "factory_ru_v1", "generic_en_v1"} <= codes
+    assert {
+        "auto_v1",
+        "factory_he_v1",
+        "factory_ru_v1",
+        "generic_en_v1",
+        "supplier_delivery_he_v1",
+    } <= codes
 
 
 def test_project_import_file_rejects_unsupported_extension(client_admin_real_uow):
@@ -542,6 +623,73 @@ def test_project_import_file_upload_multipart_supports_exact_hebrew_factory_colu
     assert body["diagnostics"]["data_summary"]["unique_order_numbers"] == 1
     assert body["diagnostics"]["preview_groups"][0]["order_number"] == "AZ-905"
     assert body["diagnostics"]["preview_groups"][0]["door_marking"] == "D-905"
+
+
+def test_project_import_auto_detects_hebrew_supplier_delivery_report(
+    client_admin_real_uow,
+):
+    project_id = _create_project(
+        client_admin_real_uow,
+        name="Import Hebrew Supplier Delivery",
+    )
+    workbook = _xlsx_bytes(
+        [
+            "תעודת משלוח",
+            "בניין",
+            "קומה",
+            "דירה",
+            "סעיף חוזה",
+            "תאור הסעיף/פרק",
+            "תאור מוצר",
+        ],
+        [
+            ["SH24020672", "1", "1", "דירה 1", "1.1.01", "דלת כניסה", "משקוף ימין"],
+            ["SH24020672", "1", "1", "דירה 2", "1.1.01", "דלת כניסה", "משקוף שמאל"],
+            ["SH24020672", "", "", "", "1.99.10", "תוספת לצילינדר", "מוצר נלווה"],
+        ],
+        worksheet_target="/xl/worksheets/sheet2.xml",
+        worksheet_archive_path="xl/worksheets/sheet2.xml",
+    )
+
+    response = client_admin_real_uow.post(
+        f"/api/v1/admin/projects/{project_id}/doors/import-upload",
+        files={
+            "file": (
+                "=?utf-8?B?15HXoNeZ15nXnyAxLnhsc3g=?=",
+                workbook,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={
+            "mapping_profile": "auto_v1",
+            "create_missing_door_types": "true",
+            "analyze_only": "true",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "analyze"
+    assert body["parsed_rows"] == 3
+    assert body["prepared_rows"] == 2
+    assert body["would_import"] == 2
+    assert len(body["errors"]) == 1
+    assert "house_number" in body["errors"][0]["message"]
+    diagnostics = body["diagnostics"]
+    assert diagnostics["mapping_profile"] == "supplier_delivery_he_v1"
+    assert diagnostics["strict_required_fields"] is True
+    assert diagnostics["data_summary"]["unique_order_numbers"] == 1
+    assert diagnostics["data_summary"]["unique_apartments"] == 2
+    assert diagnostics["data_summary"]["unique_locations"] == 1
+    assert diagnostics["data_summary"]["unique_markings"] == 2
+    assert diagnostics["preview_groups"][0]["order_number"] == "SH24020672"
+    assert diagnostics["preview_groups"][0]["door_marking"] == "משקוף ימין"
+    assert diagnostics["preview_groups"][0]["location_codes"] == ["dira"]
+    assert diagnostics["preview_groups"][0]["door_type_labels"] == ["דלת כניסה"]
+
+    door_types = client_admin_real_uow.get("/api/v1/admin/door-types?q=1-1-01")
+    assert door_types.status_code == 200, door_types.text
+    assert all(item["code"] != "1-1-01" for item in door_types.json())
 
 
 def test_project_import_file_analyze_only_preflight_does_not_write(client_admin_real_uow):

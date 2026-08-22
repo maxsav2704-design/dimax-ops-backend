@@ -4,8 +4,6 @@ from threading import Lock
 from datetime import timedelta
 from io import BytesIO
 
-from minio.error import S3Error
-
 from app.core.config import settings
 from app.integrations.storage.minio_client import get_minio
 
@@ -16,6 +14,8 @@ _BUCKET_LOCK = Lock()
 class StorageService:
     @staticmethod
     def _ensure_bucket_exists(*, bucket_name: str) -> None:
+        from minio.error import S3Error
+
         if bucket_name in _BUCKET_READY:
             return
         with _BUCKET_LOCK:

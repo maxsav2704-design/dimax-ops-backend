@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -40,6 +42,12 @@ class JournalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    installer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("installers.id", ondelete="RESTRICT"),
+        nullable=True,
         index=True,
     )
 
@@ -131,6 +139,12 @@ class JournalDoorItemORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin)
 
 class JournalSignatureORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "journal_signatures"
+    __table_args__ = (
+        UniqueConstraint(
+            "journal_id",
+            name="uq_journal_signatures_one_per_journal",
+        ),
+    )
 
     journal_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -144,6 +158,36 @@ class JournalSignatureORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin
 
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class JournalAddonItemORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
+    __tablename__ = "journal_addon_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "journal_id",
+            "addon_fact_id",
+            name="uq_journal_addon_items_unique",
+        ),
+    )
+
+    journal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("journals.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    addon_fact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    addon_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    addon_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    unit: Mapped[str] = mapped_column(String(20), nullable=False)
+    qty_done: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    done_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class JournalFileORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):

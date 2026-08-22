@@ -13,7 +13,7 @@
 - `CORS_ALLOW_ORIGINS` does not contain localhost values.
 - `MINIO_SECURE=true` in production.
 - `EMAIL_ENABLED`, `WHATSAPP_ENABLED`, `WHATSAPP_FALLBACK_TO_EMAIL`, and `TWILIO_WEBHOOK_VALIDATE` are set explicitly.
-- If `EMAIL_ENABLED=true`, SMTP points to a real provider, TLS is enabled, and `SMTP_FROM` is a real address.
+- `EMAIL_ENABLED=true`; SMTP points to a real provider, TLS is enabled, and `SMTP_FROM` is a real address. Signed journal PDF delivery is a required production workflow.
 - If `WHATSAPP_ENABLED=true`, configure the complete Twilio set and signature validation, or explicitly enable email fallback with working SMTP.
 - Empty `OUTBOX_WEBHOOK_TOKEN` disables the generic provider webhook. Enabling it requires a random token of at least 32 characters.
 
@@ -74,6 +74,8 @@ Expected contract:
 - the legacy `product_library` upgrade/downgrade smoke is green and preserves
   product rows, price-list foreign keys, and canonical index names.
 - production image contract is green for the release commit.
+- Uvicorn access logging stays disabled, and the reverse proxy logs public
+  file/journal routes as templates without capability tokens or query values.
 
 ## Backup/Restore Drill
 
