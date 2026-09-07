@@ -3,12 +3,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import httpx
-
 from app.core.config import settings
 from app.modules.audit.application.service import AuditService
+from app.shared.infrastructure.observability import get_logger, log_event
 
 SYSTEM_ACTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+logger = get_logger(__name__)
 
 _METRIC_KEYS: tuple[str, ...] = (
     "users",
@@ -124,7 +124,28 @@ class CompanyLimitAlertsService:
             "ts": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
         }
+        response = None
         try:
-            httpx.post(webhook, json=body, timeout=5.0)
-        except Exception:
-            pass
+            import httpx
+
+            response = httpx.post(webhook, json=body, timeout=5.0)
+            response.raise_for_status()
+        except Exception as exc:
+            log_event(
+                logger,
+                "company.plan_limit.webhook_failed",
+                level="warning",
+                company_id=company_id,
+                action=action,
+                status_code=getattr(response, "status_code", None),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        log_event(
+            logger,
+            "company.plan_limit.webhook_delivered",
+            company_id=company_id,
+            action=action,
+            status_code=response.status_code,
+        )

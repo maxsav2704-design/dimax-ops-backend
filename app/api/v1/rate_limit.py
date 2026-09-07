@@ -7,7 +7,7 @@ from typing import Deque, Dict
 from fastapi import Request
 
 from app.core.config import settings
-from app.shared.domain.errors import Forbidden
+from app.shared.domain.errors import TooManyRequests
 
 _BUCKETS: Dict[str, Deque[float]] = {}
 
@@ -24,7 +24,7 @@ def _allow(key: str, *, window: int, max_req: int) -> None:
         dq.popleft()
 
     if len(dq) >= max_req:
-        raise Forbidden("Too many requests. Slow down.")
+        raise TooManyRequests("Too many requests. Slow down.")
 
     dq.append(now)
 

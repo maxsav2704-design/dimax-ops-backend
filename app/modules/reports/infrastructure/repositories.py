@@ -5,13 +5,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from statistics import median
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.addons.infrastructure.models import (
     AddonTypeORM,
     ProjectAddonFactORM,
     ProjectAddonPlanORM,
+    ProjectUrgencySurchargeORM,
 )
 from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.calendar.domain.enums import CalendarEventType
@@ -21,6 +22,7 @@ from app.modules.calendar.infrastructure.models import (
 )
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.earnings.infrastructure.models import ClientPriceSnapshotORM, CompletedWorkORM
 from app.modules.issues.domain.enums import (
     IssuePriority,
     IssueStatus,
@@ -139,9 +141,166 @@ class ReportsRepository:
     def __init__(self, session: Session):
         self.session = session
 
+    def _project_urgency_surcharge_totals(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> dict[str, Decimal | int]:
+        row = (
+            self.session.query(
+                func.count(ProjectUrgencySurchargeORM.id).label("rows_count"),
+                func.coalesce(
+                    func.sum(ProjectUrgencySurchargeORM.client_amount), 0
+                ).label("client_total"),
+                func.coalesce(
+                    func.sum(ProjectUrgencySurchargeORM.installer_amount), 0
+                ).label("installer_total"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                ProjectUrgencySurchargeORM.scope == "ORDER_NUMBER",
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("order_rows_count"),
+            )
+            .select_from(ProjectUrgencySurchargeORM)
+            .filter(
+                ProjectUrgencySurchargeORM.company_id == company_id,
+                ProjectUrgencySurchargeORM.project_id == project_id,
+            )
+            .one()
+        )
+        client_total = _dec(row.client_total)
+        installer_total = _dec(row.installer_total)
+        return {
+            "urgency_surcharges_count": int(row.rows_count or 0),
+            "urgency_order_surcharges_count": int(row.order_rows_count or 0),
+            "urgency_client_total": client_total,
+            "urgency_installer_total": installer_total,
+            "urgency_profit_total": client_total - installer_total,
+        }
+
+    def _effective_completed_work_subquery(
+        self,
+        *,
+        company_id: uuid.UUID,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        work_kind: str = "DOOR",
+    ):
+        reversed_ids = (
+            select(CompletedWorkORM.correction_ref_id)
+            .where(
+                CompletedWorkORM.company_id == company_id,
+                CompletedWorkORM.entry_type == "REVERSAL",
+                CompletedWorkORM.correction_ref_id.is_not(None),
+            )
+        )
+        filters = [
+            CompletedWorkORM.company_id == company_id,
+            CompletedWorkORM.work_kind == work_kind,
+        ]
+        if date_from is not None:
+            filters.append(CompletedWorkORM.completed_at >= date_from)
+        if date_to is not None:
+            filters.append(CompletedWorkORM.completed_at < date_to)
+
+        return (
+            self.session.query(
+                CompletedWorkORM.id.label("completed_work_id"),
+                func.coalesce(
+                    CompletedWorkORM.correction_ref_id,
+                    CompletedWorkORM.id,
+                ).label("snapshot_work_id"),
+                CompletedWorkORM.project_id.label("project_id"),
+                CompletedWorkORM.door_id.label("door_id"),
+                CompletedWorkORM.addon_fact_id.label("addon_fact_id"),
+                CompletedWorkORM.installer_id.label("installer_id"),
+                CompletedWorkORM.completed_at.label("completed_at"),
+                CompletedWorkORM.amount_snapshot.label("payroll_total"),
+            )
+            .filter(
+                *filters,
+                or_(
+                    and_(
+                        CompletedWorkORM.entry_type == "ORIGINAL",
+                        not_(CompletedWorkORM.id.in_(reversed_ids)),
+                    ),
+                    CompletedWorkORM.entry_type == "CORRECTION",
+                ),
+            )
+            .subquery()
+        )
+
+    def _effective_addon_work_by_fact_subquery(
+        self,
+        *,
+        company_id: uuid.UUID,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ):
+        effective_work = self._effective_completed_work_subquery(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+            work_kind="ADDON",
+        )
+        return (
+            self.session.query(
+                effective_work.c.addon_fact_id.label("addon_fact_id"),
+                func.coalesce(func.sum(effective_work.c.payroll_total), 0).label(
+                    "payroll_total"
+                ),
+            )
+            .filter(effective_work.c.addon_fact_id.isnot(None))
+            .group_by(effective_work.c.addon_fact_id)
+            .subquery()
+        )
+
+    def _completed_work_door_ids_subquery(self, *, company_id: uuid.UUID):
+        return (
+            select(CompletedWorkORM.door_id)
+            .where(
+                CompletedWorkORM.company_id == company_id,
+                CompletedWorkORM.work_kind == "DOOR",
+                CompletedWorkORM.door_id.is_not(None),
+            )
+            .distinct()
+        )
+
+    @staticmethod
+    def _merge_metric_rows(
+        *rows: list[dict],
+        key_field: str,
+        numeric_fields: tuple[str, ...],
+        int_fields: tuple[str, ...] = (),
+    ) -> list[dict]:
+        merged: dict[object, dict] = {}
+        for batch in rows:
+            for row in batch:
+                key = row[key_field]
+                current = merged.setdefault(key, {})
+                for field, value in row.items():
+                    if field == key_field:
+                        current[field] = value
+                        continue
+                    if field in numeric_fields:
+                        current[field] = _dec(current.get(field, 0)) + _dec(value)
+                    elif field in int_fields:
+                        current[field] = int(current.get(field, 0) or 0) + int(value or 0)
+                    else:
+                        current.setdefault(field, value)
+        return list(merged.values())
+
     @staticmethod
     def _allowed_audit_catalog_entities() -> set[str]:
-        return {"door_type", "reason", "company", "project", "installer_rate"}
+        return {"door_type", "reason", "company", "project", "installer_rate", "sync_state"}
 
     @staticmethod
     def _allowed_audit_catalog_actions() -> set[str]:
@@ -160,6 +319,7 @@ class ReportsRepository:
             "INSTALLER_RATE_CREATE",
             "INSTALLER_RATE_UPDATE",
             "INSTALLER_RATE_DELETE",
+            "SYNC_STATE_RESET",
         }
 
     @staticmethod
@@ -263,12 +423,6 @@ class ReportsRepository:
         if date_to is not None:
             installed_filter.append(DoorORM.installed_at < date_to)
 
-        installed_doors = (
-            self.session.query(func.count(DoorORM.id))
-            .filter(DoorORM.company_id == company_id, *installed_filter)
-            .scalar()
-        ) or 0
-
         not_installed_doors = (
             self.session.query(func.count(DoorORM.id))
             .filter(
@@ -277,6 +431,58 @@ class ReportsRepository:
             )
             .scalar()
         ) or 0
+
+        effective_work = self._effective_completed_work_subquery(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        completed_work_door_ids = self._completed_work_door_ids_subquery(
+            company_id=company_id
+        )
+
+        ledger_row = (
+            self.session.query(
+                func.coalesce(func.count(effective_work.c.completed_work_id), 0).label("installed_doors"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        )
+                    ),
+                    0,
+                ).label("revenue"),
+                func.coalesce(func.sum(effective_work.c.payroll_total), 0).label("payroll"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        ) - effective_work.c.payroll_total
+                    ),
+                    0,
+                ).label("profit"),
+            )
+            .select_from(effective_work)
+            .outerjoin(
+                DoorORM,
+                and_(
+                    DoorORM.company_id == company_id,
+                    DoorORM.id == effective_work.c.door_id,
+                ),
+            )
+            .outerjoin(
+                ClientPriceSnapshotORM,
+                and_(
+                    ClientPriceSnapshotORM.company_id == company_id,
+                    ClientPriceSnapshotORM.completed_work_id == effective_work.c.snapshot_work_id,
+                ),
+            )
+            .one()
+        )
 
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
@@ -289,16 +495,12 @@ class ReportsRepository:
             0,
         )
 
-        q_money = (
+        fallback_row = (
             self.session.query(
+                func.count(DoorORM.id).label("installed_doors"),
                 func.coalesce(func.sum(DoorORM.our_price), 0).label("revenue"),
                 func.coalesce(func.sum(effective_installer_rate), 0).label("payroll"),
-                func.coalesce(
-                    func.sum(
-                        DoorORM.our_price - effective_installer_rate
-                    ),
-                    0,
-                ).label("profit"),
+                func.coalesce(func.sum(DoorORM.our_price - effective_installer_rate), 0).label("profit"),
                 func.coalesce(
                     func.sum(
                         case(
@@ -317,14 +519,21 @@ class ReportsRepository:
             )
             .select_from(DoorORM)
             .outerjoin(InstallerRateORM, rate_join)
-            .filter(DoorORM.company_id == company_id, *installed_filter)
+            .filter(
+                DoorORM.company_id == company_id,
+                *installed_filter,
+                not_(DoorORM.id.in_(completed_work_door_ids)),
+            )
+            .one()
         )
 
-        row = q_money.one()
-        revenue_total = _dec(row.revenue)
-        payroll_total = _dec(row.payroll)
-        profit_total = _dec(row.profit)
-        missing_rates = int(row.missing_rates or 0)
+        installed_doors = int(ledger_row.installed_doors or 0) + int(
+            fallback_row.installed_doors or 0
+        )
+        revenue_total = _dec(ledger_row.revenue) + _dec(fallback_row.revenue)
+        payroll_total = _dec(ledger_row.payroll) + _dec(fallback_row.payroll)
+        profit_total = _dec(ledger_row.profit) + _dec(fallback_row.profit)
+        missing_rates = int(fallback_row.missing_rates or 0)
 
         addon_filter = [ProjectAddonFactORM.company_id == company_id]
         if date_from is not None:
@@ -337,6 +546,16 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
 
         addon_row = (
             self.session.query(
@@ -348,19 +567,14 @@ class ReportsRepository:
                     0,
                 ).label("addon_revenue"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("addon_payroll"),
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
                     ),
                     0,
                 ).label("addon_profit"),
@@ -376,6 +590,10 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(*addon_filter)
             .one()
         )
@@ -940,6 +1158,69 @@ class ReportsRepository:
         if date_to is not None:
             installed_filter.append(DoorORM.installed_at < date_to)
 
+        effective_work = self._effective_completed_work_subquery(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        completed_work_door_ids = self._completed_work_door_ids_subquery(
+            company_id=company_id
+        )
+
+        ledger_rows = (
+            self.session.query(
+                effective_work.c.installer_id.label("installer_id"),
+                InstallerORM.full_name.label("installer_name"),
+                func.count(effective_work.c.completed_work_id).label("installed_doors"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        )
+                    ),
+                    0,
+                ).label("revenue_total"),
+                func.coalesce(func.sum(effective_work.c.payroll_total), 0).label("payroll_total"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        ) - effective_work.c.payroll_total
+                    ),
+                    0,
+                ).label("profit_total"),
+            )
+            .select_from(effective_work)
+            .join(
+                InstallerORM,
+                and_(
+                    InstallerORM.company_id == company_id,
+                    InstallerORM.id == effective_work.c.installer_id,
+                ),
+            )
+            .outerjoin(
+                DoorORM,
+                and_(
+                    DoorORM.company_id == company_id,
+                    DoorORM.id == effective_work.c.door_id,
+                ),
+            )
+            .outerjoin(
+                ClientPriceSnapshotORM,
+                and_(
+                    ClientPriceSnapshotORM.company_id == company_id,
+                    ClientPriceSnapshotORM.completed_work_id == effective_work.c.snapshot_work_id,
+                ),
+            )
+            .filter(effective_work.c.installer_id.isnot(None))
+            .group_by(effective_work.c.installer_id, InstallerORM.full_name)
+            .all()
+        )
+
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
             InstallerRateORM.installer_id == DoorORM.installer_id,
@@ -950,51 +1231,29 @@ class ReportsRepository:
             InstallerRateORM.price,
             0,
         )
-        installed_doors_expr = func.count(DoorORM.id)
-        revenue_total_expr = func.coalesce(func.sum(DoorORM.our_price), 0)
-        payroll_total_expr = func.coalesce(func.sum(effective_installer_rate), 0)
-        profit_total_expr = func.coalesce(
-            func.sum(DoorORM.our_price - effective_installer_rate),
-            0,
-        )
-        missing_rates_expr = func.coalesce(
-            func.sum(
-                case(
-                    (
-                        and_(
-                            DoorORM.installer_rate_snapshot.is_(None),
-                            InstallerRateORM.id.is_(None),
-                        ),
-                        1,
-                    ),
-                    else_=0,
-                )
-            ),
-            0,
-        )
-        sort_map = {
-            "installed_doors": installed_doors_expr,
-            "payroll_total": payroll_total_expr,
-            "revenue_total": revenue_total_expr,
-            "profit_total": profit_total_expr,
-            "installer_name": InstallerORM.full_name,
-        }
-        sort_expr = sort_map.get(sort_by, installed_doors_expr)
-        sort_clause = sort_expr.asc() if sort_dir == "asc" else sort_expr.desc()
-        order_clauses = [sort_clause]
-        if sort_by != "installer_name":
-            order_clauses.append(InstallerORM.full_name.asc())
-        order_clauses.append(InstallerORM.id.asc())
-
-        rows = (
+        fallback_rows = (
             self.session.query(
                 InstallerORM.id.label("installer_id"),
                 InstallerORM.full_name.label("installer_name"),
-                installed_doors_expr.label("installed_doors"),
-                revenue_total_expr.label("revenue_total"),
-                payroll_total_expr.label("payroll_total"),
-                profit_total_expr.label("profit_total"),
-                missing_rates_expr.label("missing_rates"),
+                func.count(DoorORM.id).label("installed_doors"),
+                func.coalesce(func.sum(DoorORM.our_price), 0).label("revenue_total"),
+                func.coalesce(func.sum(effective_installer_rate), 0).label("payroll_total"),
+                func.coalesce(func.sum(DoorORM.our_price - effective_installer_rate), 0).label("profit_total"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    DoorORM.installer_rate_snapshot.is_(None),
+                                    InstallerRateORM.id.is_(None),
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("missing_rates_installed_doors"),
             )
             .select_from(DoorORM)
             .join(
@@ -1009,26 +1268,54 @@ class ReportsRepository:
                 DoorORM.company_id == company_id,
                 DoorORM.installer_id.isnot(None),
                 *installed_filter,
+                not_(DoorORM.id.in_(completed_work_door_ids)),
             )
             .group_by(InstallerORM.id, InstallerORM.full_name)
-            .order_by(*order_clauses)
-            .limit(limit)
-            .offset(offset)
             .all()
         )
 
-        return [
-            {
-                "installer_id": row.installer_id,
-                "installer_name": row.installer_name,
-                "installed_doors": int(row.installed_doors or 0),
-                "payroll_total": _dec(row.payroll_total),
-                "revenue_total": _dec(row.revenue_total),
-                "profit_total": _dec(row.profit_total),
-                "missing_rates_installed_doors": int(row.missing_rates or 0),
-            }
-            for row in rows
-        ]
+        merged = self._merge_metric_rows(
+            [
+                {
+                    "installer_id": row.installer_id,
+                    "installer_name": row.installer_name,
+                    "installed_doors": int(row.installed_doors or 0),
+                    "payroll_total": _dec(row.payroll_total),
+                    "revenue_total": _dec(row.revenue_total),
+                    "profit_total": _dec(row.profit_total),
+                    "missing_rates_installed_doors": 0,
+                }
+                for row in ledger_rows
+            ],
+            [
+                {
+                    "installer_id": row.installer_id,
+                    "installer_name": row.installer_name,
+                    "installed_doors": int(row.installed_doors or 0),
+                    "payroll_total": _dec(row.payroll_total),
+                    "revenue_total": _dec(row.revenue_total),
+                    "profit_total": _dec(row.profit_total),
+                    "missing_rates_installed_doors": int(row.missing_rates_installed_doors or 0),
+                }
+                for row in fallback_rows
+            ],
+            key_field="installer_id",
+            numeric_fields=("payroll_total", "revenue_total", "profit_total"),
+            int_fields=("installed_doors", "missing_rates_installed_doors"),
+        )
+
+        reverse = sort_dir != "asc"
+        if sort_by == "installer_name":
+            merged.sort(key=lambda x: (str(x.get("installer_name") or "").lower(), x["installer_id"]))
+            if reverse:
+                merged.reverse()
+        else:
+            merged.sort(
+                key=lambda x: (x.get(sort_by) or 0, str(x.get("installer_name") or "").lower(), x["installer_id"]),
+                reverse=reverse,
+            )
+
+        return merged[offset : offset + limit]
 
     def installer_profitability_matrix(
         self,
@@ -1110,6 +1397,14 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
         addon_sub = (
             self.session.query(
                 ProjectAddonFactORM.installer_id.label("installer_id"),
@@ -1122,19 +1417,14 @@ class ReportsRepository:
                     0,
                 ).label("addon_revenue_total"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("addon_payroll_total"),
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
                     ),
                     0,
                 ).label("addon_profit_total"),
@@ -1145,11 +1435,48 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(
                 ProjectAddonFactORM.company_id == company_id,
                 ProjectAddonFactORM.installer_id.isnot(None),
             )
             .group_by(ProjectAddonFactORM.installer_id)
+            .subquery()
+        )
+        active_project_pairs = (
+            self.session.query(
+                DoorORM.installer_id.label("installer_id"),
+                DoorORM.project_id.label("project_id"),
+            )
+            .select_from(DoorORM)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.installer_id.isnot(None),
+                DoorORM.status == DoorStatus.INSTALLED,
+            )
+            .union(
+                self.session.query(
+                    ProjectAddonFactORM.installer_id.label("installer_id"),
+                    ProjectAddonFactORM.project_id.label("project_id"),
+                )
+                .select_from(ProjectAddonFactORM)
+                .filter(
+                    ProjectAddonFactORM.company_id == company_id,
+                    ProjectAddonFactORM.installer_id.isnot(None),
+                )
+            )
+            .subquery()
+        )
+        active_project_sub = (
+            self.session.query(
+                active_project_pairs.c.installer_id.label("installer_id"),
+                func.count(active_project_pairs.c.project_id).label("active_projects"),
+            )
+            .filter(active_project_pairs.c.project_id.isnot(None))
+            .group_by(active_project_pairs.c.installer_id)
             .subquery()
         )
 
@@ -1178,7 +1505,9 @@ class ReportsRepository:
                 InstallerORM.id.label("installer_id"),
                 InstallerORM.full_name.label("installer_name"),
                 installed_doors_expr.label("installed_doors"),
-                func.coalesce(door_sub.c.active_projects, 0).label("active_projects"),
+                func.coalesce(active_project_sub.c.active_projects, 0).label(
+                    "active_projects"
+                ),
                 open_issues_expr.label("open_issues"),
                 func.coalesce(addon_sub.c.addons_done_qty, 0).label("addons_done_qty"),
                 revenue_expr.label("revenue_total"),
@@ -1200,6 +1529,10 @@ class ReportsRepository:
             .outerjoin(door_sub, door_sub.c.installer_id == InstallerORM.id)
             .outerjoin(issue_sub, issue_sub.c.installer_id == InstallerORM.id)
             .outerjoin(addon_sub, addon_sub.c.installer_id == InstallerORM.id)
+            .outerjoin(
+                active_project_sub,
+                active_project_sub.c.installer_id == InstallerORM.id,
+            )
             .filter(
                 InstallerORM.company_id == company_id,
                 or_(
@@ -1352,6 +1685,14 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
         addon_sub = (
             self.session.query(
                 ProjectAddonFactORM.installer_id.label("installer_id"),
@@ -1365,19 +1706,14 @@ class ReportsRepository:
                     0,
                 ).label("addon_revenue_total"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("addon_payroll_total"),
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
                     ),
                     0,
                 ).label("addon_profit_total"),
@@ -1388,11 +1724,28 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(
                 ProjectAddonFactORM.company_id == company_id,
                 ProjectAddonFactORM.installer_id.isnot(None),
             )
             .group_by(ProjectAddonFactORM.installer_id, ProjectAddonFactORM.project_id)
+            .subquery()
+        )
+        work_pair_sub = (
+            self.session.query(
+                door_sub.c.installer_id.label("installer_id"),
+                door_sub.c.project_id.label("project_id"),
+            )
+            .union(
+                self.session.query(
+                    addon_sub.c.installer_id.label("installer_id"),
+                    addon_sub.c.project_id.label("project_id"),
+                )
+            )
             .subquery()
         )
 
@@ -1440,33 +1793,40 @@ class ReportsRepository:
                 ).label("missing_addon_plans_facts"),
                 door_sub.c.last_installed_at.label("last_installed_at"),
             )
-            .select_from(door_sub)
+            .select_from(work_pair_sub)
             .join(
                 InstallerORM,
                 and_(
                     InstallerORM.company_id == company_id,
-                    InstallerORM.id == door_sub.c.installer_id,
+                    InstallerORM.id == work_pair_sub.c.installer_id,
                 ),
             )
             .join(
                 ProjectORM,
                 and_(
                     ProjectORM.company_id == company_id,
-                    ProjectORM.id == door_sub.c.project_id,
+                    ProjectORM.id == work_pair_sub.c.project_id,
+                ),
+            )
+            .outerjoin(
+                door_sub,
+                and_(
+                    door_sub.c.installer_id == work_pair_sub.c.installer_id,
+                    door_sub.c.project_id == work_pair_sub.c.project_id,
                 ),
             )
             .outerjoin(
                 issue_sub,
                 and_(
-                    issue_sub.c.installer_id == door_sub.c.installer_id,
-                    issue_sub.c.project_id == door_sub.c.project_id,
+                    issue_sub.c.installer_id == work_pair_sub.c.installer_id,
+                    issue_sub.c.project_id == work_pair_sub.c.project_id,
                 ),
             )
             .outerjoin(
                 addon_sub,
                 and_(
-                    addon_sub.c.installer_id == door_sub.c.installer_id,
-                    addon_sub.c.project_id == door_sub.c.project_id,
+                    addon_sub.c.installer_id == work_pair_sub.c.installer_id,
+                    addon_sub.c.project_id == work_pair_sub.c.project_id,
                 ),
             )
         )
@@ -1690,6 +2050,14 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
         addon_row = (
             self.session.query(
                 func.coalesce(func.sum(ProjectAddonFactORM.qty_done), 0).label("addons_done_qty"),
@@ -1701,19 +2069,14 @@ class ReportsRepository:
                     0,
                 ).label("addon_revenue_total"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("addon_payroll_total"),
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
                     ),
                     0,
                 ).label("addon_profit_total"),
@@ -1724,6 +2087,10 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(
                 ProjectAddonFactORM.company_id == company_id,
                 ProjectAddonFactORM.installer_id == installer_id,
@@ -1747,10 +2114,9 @@ class ReportsRepository:
             .subquery()
         )
 
-        project_rows = (
+        door_project_sub = (
             self.session.query(
-                ProjectORM.id.label("project_id"),
-                ProjectORM.name.label("project_name"),
+                DoorORM.project_id.label("project_id"),
                 func.count(DoorORM.id).label("installed_doors"),
                 func.coalesce(func.sum(DoorORM.our_price), 0).label("revenue_total"),
                 func.coalesce(func.sum(effective_installer_rate), 0).label("payroll_total"),
@@ -1758,21 +2124,112 @@ class ReportsRepository:
                     func.sum(DoorORM.our_price - effective_installer_rate),
                     0,
                 ).label("profit_total"),
-                func.coalesce(project_issue_sub.c.open_issues, 0).label("open_issues"),
                 func.max(DoorORM.installed_at).label("last_installed_at"),
             )
             .select_from(DoorORM)
-            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .outerjoin(InstallerRateORM, rate_join)
-            .outerjoin(project_issue_sub, project_issue_sub.c.project_id == DoorORM.project_id)
             .filter(*installed_door_filters)
-            .group_by(
-                ProjectORM.id,
-                ProjectORM.name,
-                project_issue_sub.c.open_issues,
+            .group_by(DoorORM.project_id)
+            .subquery()
+        )
+
+        addon_project_sub = (
+            self.session.query(
+                ProjectAddonFactORM.project_id.label("project_id"),
+                func.coalesce(func.sum(ProjectAddonFactORM.qty_done), 0).label("addons_done_qty"),
+                func.coalesce(
+                    func.sum(
+                        ProjectAddonFactORM.qty_done
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                    ),
+                    0,
+                ).label("addon_revenue_total"),
+                func.coalesce(func.sum(addon_payroll_expr), 0).label("addon_payroll_total"),
+                func.coalesce(
+                    func.sum(
+                        ProjectAddonFactORM.qty_done
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
+                    ),
+                    0,
+                ).label("addon_profit_total"),
+            )
+            .select_from(ProjectAddonFactORM)
+            .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
+            .filter(
+                ProjectAddonFactORM.company_id == company_id,
+                ProjectAddonFactORM.installer_id == installer_id,
+            )
+            .group_by(ProjectAddonFactORM.project_id)
+            .subquery()
+        )
+
+        project_pair_sub = (
+            self.session.query(door_project_sub.c.project_id.label("project_id"))
+            .union(
+                self.session.query(addon_project_sub.c.project_id.label("project_id"))
+            )
+            .subquery()
+        )
+
+        active_projects = (
+            self.session.query(func.count(project_pair_sub.c.project_id))
+            .filter(project_pair_sub.c.project_id.isnot(None))
+            .scalar()
+            or 0
+        )
+
+        project_revenue_expr = func.coalesce(
+            door_project_sub.c.revenue_total, 0
+        ) + func.coalesce(addon_project_sub.c.addon_revenue_total, 0)
+        project_payroll_expr = func.coalesce(
+            door_project_sub.c.payroll_total, 0
+        ) + func.coalesce(addon_project_sub.c.addon_payroll_total, 0)
+        project_profit_expr = func.coalesce(
+            door_project_sub.c.profit_total, 0
+        ) + func.coalesce(addon_project_sub.c.addon_profit_total, 0)
+        project_installed_doors_expr = func.coalesce(
+            door_project_sub.c.installed_doors, 0
+        )
+
+        project_rows = (
+            self.session.query(
+                ProjectORM.id.label("project_id"),
+                ProjectORM.name.label("project_name"),
+                project_installed_doors_expr.label("installed_doors"),
+                project_revenue_expr.label("revenue_total"),
+                project_payroll_expr.label("payroll_total"),
+                project_profit_expr.label("profit_total"),
+                func.coalesce(project_issue_sub.c.open_issues, 0).label("open_issues"),
+                door_project_sub.c.last_installed_at.label("last_installed_at"),
+            )
+            .select_from(project_pair_sub)
+            .join(
+                ProjectORM,
+                and_(
+                    ProjectORM.company_id == company_id,
+                    ProjectORM.id == project_pair_sub.c.project_id,
+                ),
+            )
+            .outerjoin(
+                door_project_sub,
+                door_project_sub.c.project_id == project_pair_sub.c.project_id,
+            )
+            .outerjoin(
+                addon_project_sub,
+                addon_project_sub.c.project_id == project_pair_sub.c.project_id,
+            )
+            .outerjoin(
+                project_issue_sub,
+                project_issue_sub.c.project_id == project_pair_sub.c.project_id,
             )
             .order_by(
-                func.count(DoorORM.id).desc(),
+                project_installed_doors_expr.desc(),
+                project_profit_expr.desc(),
                 ProjectORM.name.asc(),
             )
             .limit(5)
@@ -1815,7 +2272,7 @@ class ReportsRepository:
 
         return {
             "installed_doors": int(summary_row.installed_doors or 0),
-            "active_projects": int(summary_row.active_projects or 0),
+            "active_projects": int(active_projects),
             "order_numbers": int(summary_row.order_numbers or 0),
             "open_issues": int(open_issues),
             "addons_done_qty": _dec(addon_row.addons_done_qty),
@@ -1880,6 +2337,7 @@ class ReportsRepository:
             .scalar()
             or 0
         )
+
         total_doors_expr = func.count(DoorORM.id)
         installed_doors_expr = func.coalesce(
             func.sum(
@@ -1900,92 +2358,135 @@ class ReportsRepository:
             0,
         )
         planned_revenue_total_expr = func.coalesce(func.sum(DoorORM.our_price), 0)
-        installed_revenue_total_expr = func.coalesce(
-            func.sum(
-                case(
-                    (DoorORM.status == DoorStatus.INSTALLED, DoorORM.our_price),
-                    else_=0,
-                )
-            ),
-            0,
-        )
-        payroll_total_expr = func.coalesce(
-            func.sum(
-                case(
-                    (
-                        DoorORM.status == DoorStatus.INSTALLED,
-                        func.coalesce(DoorORM.installer_rate_snapshot, 0),
-                    ),
-                    else_=0,
-                )
-            ),
-            0,
-        )
-        profit_total_expr = func.coalesce(
-            func.sum(
-                case(
-                    (
-                        DoorORM.status == DoorStatus.INSTALLED,
-                        DoorORM.our_price - func.coalesce(DoorORM.installer_rate_snapshot, 0),
-                    ),
-                    else_=0,
-                )
-            ),
-            0,
-        )
-        missing_rates_installed_expr = func.coalesce(
-            func.sum(
-                case(
-                    (
-                        and_(
-                            DoorORM.status == DoorStatus.INSTALLED,
-                            DoorORM.installer_rate_snapshot.is_(None),
-                        ),
-                        1,
-                    ),
-                    else_=0,
-                )
-            ),
-            0,
-        )
-        sort_map = {
-            "order_number": DoorORM.order_number,
-            "total_doors": total_doors_expr,
-            "installed_doors": installed_doors_expr,
-            "not_installed_doors": not_installed_doors_expr,
-            "planned_revenue_total": planned_revenue_total_expr,
-            "installed_revenue_total": installed_revenue_total_expr,
-            "payroll_total": payroll_total_expr,
-            "profit_total": profit_total_expr,
-            "missing_rates_installed_doors": missing_rates_installed_expr,
-        }
-        sort_expr = sort_map.get(sort_by, total_doors_expr)
-        sort_clause = sort_expr.asc() if sort_dir == "asc" else sort_expr.desc()
 
-        rows = (
+        base_rows = (
             self.session.query(
                 DoorORM.order_number.label("order_number"),
                 total_doors_expr.label("total_doors"),
                 installed_doors_expr.label("installed_doors"),
                 not_installed_doors_expr.label("not_installed_doors"),
                 planned_revenue_total_expr.label("planned_revenue_total"),
-                installed_revenue_total_expr.label("installed_revenue_total"),
-                payroll_total_expr.label("payroll_total"),
-                profit_total_expr.label("profit_total"),
-                missing_rates_installed_expr.label("missing_rates_installed_doors"),
             )
             .filter(*filters)
             .group_by(DoorORM.order_number)
-            .order_by(
-                sort_clause,
-                DoorORM.order_number.asc(),
-            )
-            .limit(limit)
-            .offset(offset)
             .all()
         )
 
-        order_numbers = [str(row.order_number) for row in rows if row.order_number is not None]
+        effective_work = self._effective_completed_work_subquery(company_id=company_id)
+        completed_work_door_ids = self._completed_work_door_ids_subquery(
+            company_id=company_id
+        )
+
+        ledger_query = (
+            self.session.query(
+                DoorORM.order_number.label("order_number"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        )
+                    ),
+                    0,
+                ).label("installed_revenue_total"),
+                func.coalesce(func.sum(effective_work.c.payroll_total), 0).label("payroll_total"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        ) - effective_work.c.payroll_total
+                    ),
+                    0,
+                ).label("profit_total"),
+            )
+            .select_from(effective_work)
+            .join(
+                DoorORM,
+                and_(
+                    DoorORM.company_id == company_id,
+                    DoorORM.id == effective_work.c.door_id,
+                    DoorORM.order_number.isnot(None),
+                    func.length(func.trim(DoorORM.order_number)) > 0,
+                ),
+            )
+            .outerjoin(
+                ClientPriceSnapshotORM,
+                and_(
+                    ClientPriceSnapshotORM.company_id == company_id,
+                    ClientPriceSnapshotORM.completed_work_id == effective_work.c.snapshot_work_id,
+                ),
+            )
+        )
+        if project_id is not None:
+            ledger_query = ledger_query.filter(DoorORM.project_id == project_id)
+        if q:
+            ledger_query = ledger_query.filter(DoorORM.order_number.ilike(f"%{q.strip()}%"))
+        ledger_rows = ledger_query.group_by(DoorORM.order_number).all()
+
+        fallback_rows = (
+            self.session.query(
+                DoorORM.order_number.label("order_number"),
+                func.coalesce(func.sum(DoorORM.our_price), 0).label("installed_revenue_total"),
+                func.coalesce(func.sum(func.coalesce(DoorORM.installer_rate_snapshot, 0)), 0).label("payroll_total"),
+                func.coalesce(
+                    func.sum(DoorORM.our_price - func.coalesce(DoorORM.installer_rate_snapshot, 0)),
+                    0,
+                ).label("profit_total"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    DoorORM.status == DoorStatus.INSTALLED,
+                                    DoorORM.installer_rate_snapshot.is_(None),
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("missing_rates_installed_doors"),
+            )
+            .filter(
+                *filters,
+                DoorORM.status == DoorStatus.INSTALLED,
+                not_(DoorORM.id.in_(completed_work_door_ids)),
+            )
+            .group_by(DoorORM.order_number)
+            .all()
+        )
+
+        actuals_by_order: dict[str, dict] = {}
+        for row in ledger_rows:
+            actuals_by_order[str(row.order_number)] = {
+                "installed_revenue_total": _dec(row.installed_revenue_total),
+                "payroll_total": _dec(row.payroll_total),
+                "profit_total": _dec(row.profit_total),
+                "missing_rates_installed_doors": 0,
+            }
+        for row in fallback_rows:
+            key = str(row.order_number)
+            current = actuals_by_order.setdefault(
+                key,
+                {
+                    "installed_revenue_total": Decimal("0"),
+                    "payroll_total": Decimal("0"),
+                    "profit_total": Decimal("0"),
+                    "missing_rates_installed_doors": 0,
+                },
+            )
+            current["installed_revenue_total"] += _dec(row.installed_revenue_total)
+            current["payroll_total"] += _dec(row.payroll_total)
+            current["profit_total"] += _dec(row.profit_total)
+            current["missing_rates_installed_doors"] += int(
+                row.missing_rates_installed_doors or 0
+            )
+
+        order_numbers = [str(row.order_number) for row in base_rows if row.order_number is not None]
         open_issues_by_order: dict[str, int] = {}
         if order_numbers:
             issue_filters = [IssueORM.company_id == company_id, IssueORM.status == IssueStatus.OPEN]
@@ -2015,7 +2516,7 @@ class ReportsRepository:
             }
 
         items: list[dict] = []
-        for row in rows:
+        for row in base_rows:
             order_number = str(row.order_number)
             total_doors = int(row.total_doors or 0)
             installed_doors = int(row.installed_doors or 0)
@@ -2023,6 +2524,15 @@ class ReportsRepository:
                 round((installed_doors / total_doors) * 100.0, 2)
                 if total_doors > 0
                 else 0.0
+            )
+            actuals = actuals_by_order.get(
+                order_number,
+                {
+                    "installed_revenue_total": Decimal("0"),
+                    "payroll_total": Decimal("0"),
+                    "profit_total": Decimal("0"),
+                    "missing_rates_installed_doors": 0,
+                },
             )
             items.append(
                 {
@@ -2032,15 +2542,23 @@ class ReportsRepository:
                     "not_installed_doors": int(row.not_installed_doors or 0),
                     "open_issues": int(open_issues_by_order.get(order_number, 0)),
                     "planned_revenue_total": _dec(row.planned_revenue_total),
-                    "installed_revenue_total": _dec(row.installed_revenue_total),
-                    "payroll_total": _dec(row.payroll_total),
-                    "profit_total": _dec(row.profit_total),
-                    "missing_rates_installed_doors": int(
-                        row.missing_rates_installed_doors or 0
-                    ),
+                    "installed_revenue_total": actuals["installed_revenue_total"],
+                    "payroll_total": actuals["payroll_total"],
+                    "profit_total": actuals["profit_total"],
+                    "missing_rates_installed_doors": int(actuals["missing_rates_installed_doors"]),
                     "completion_pct": completion_pct,
                 }
             )
+
+        reverse = sort_dir != "asc"
+        items.sort(
+            key=lambda x: (
+                x["order_number"] if sort_by == "order_number" else x.get(sort_by, 0),
+                x["order_number"],
+            ),
+            reverse=reverse,
+        )
+        items = items[offset : offset + limit]
         return {
             "total": total,
             "limit": limit,
@@ -2065,6 +2583,59 @@ class ReportsRepository:
         if date_to is not None:
             installed_filter.append(DoorORM.installed_at < date_to)
 
+        effective_work = self._effective_completed_work_subquery(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        completed_work_door_ids = self._completed_work_door_ids_subquery(
+            company_id=company_id
+        )
+
+        ledger_row = (
+            self.session.query(
+                func.coalesce(func.count(effective_work.c.completed_work_id), 0).label("installed_doors"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        )
+                    ),
+                    0,
+                ).label("revenue"),
+                func.coalesce(func.sum(effective_work.c.payroll_total), 0).label("payroll"),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            ClientPriceSnapshotORM.final_client_rate,
+                            DoorORM.our_price,
+                            0,
+                        ) - effective_work.c.payroll_total
+                    ),
+                    0,
+                ).label("profit"),
+            )
+            .select_from(effective_work)
+            .outerjoin(
+                DoorORM,
+                and_(
+                    DoorORM.company_id == company_id,
+                    DoorORM.id == effective_work.c.door_id,
+                ),
+            )
+            .outerjoin(
+                ClientPriceSnapshotORM,
+                and_(
+                    ClientPriceSnapshotORM.company_id == company_id,
+                    ClientPriceSnapshotORM.completed_work_id == effective_work.c.snapshot_work_id,
+                ),
+            )
+            .filter(effective_work.c.project_id == project_id)
+            .one()
+        )
+
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
             InstallerRateORM.installer_id == DoorORM.installer_id,
@@ -2076,7 +2647,7 @@ class ReportsRepository:
             0,
         )
 
-        row = (
+        fallback_row = (
             self.session.query(
                 func.count(DoorORM.id).label("installed_doors"),
                 func.coalesce(func.sum(DoorORM.our_price), 0).label("revenue"),
@@ -2105,13 +2676,18 @@ class ReportsRepository:
             )
             .select_from(DoorORM)
             .outerjoin(InstallerRateORM, rate_join)
-            .filter(DoorORM.company_id == company_id, *installed_filter)
+            .filter(
+                DoorORM.company_id == company_id,
+                *installed_filter,
+                not_(DoorORM.id.in_(completed_work_door_ids)),
+            )
             .one()
         )
 
-        door_revenue = _dec(row.revenue)
-        door_payroll = _dec(row.payroll)
-        door_profit = _dec(row.profit)
+        installed_doors = int(ledger_row.installed_doors or 0) + int(fallback_row.installed_doors or 0)
+        door_revenue = _dec(ledger_row.revenue) + _dec(fallback_row.revenue)
+        door_payroll = _dec(ledger_row.payroll) + _dec(fallback_row.payroll)
+        door_profit = _dec(ledger_row.profit) + _dec(fallback_row.profit)
 
         addon_filter = [
             ProjectAddonFactORM.company_id == company_id,
@@ -2127,6 +2703,16 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
 
         addon_row = (
             self.session.query(
@@ -2138,19 +2724,14 @@ class ReportsRepository:
                     0,
                 ).label("addon_revenue"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("addon_payroll"),
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
                     ),
                     0,
                 ).label("addon_profit"),
@@ -2166,6 +2747,10 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(*addon_filter)
             .one()
         )
@@ -2175,11 +2760,11 @@ class ReportsRepository:
         profit_total = door_profit + _dec(addon_row.addon_profit)
 
         return {
-            "installed_doors": int(row.installed_doors or 0),
+            "installed_doors": installed_doors,
             "revenue_total": revenue_total,
             "payroll_total": payroll_total,
             "profit_total": profit_total,
-            "missing_rates_installed_doors": int(row.missing_rates or 0),
+            "missing_rates_installed_doors": int(fallback_row.missing_rates or 0),
         }
 
     def project_plan_fact(
@@ -2331,6 +2916,14 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id
+        )
+        addon_actual_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
         fact_row = (
             self.session.query(
                 func.coalesce(func.sum(ProjectAddonFactORM.qty_done), 0).label("actual_qty"),
@@ -2342,19 +2935,14 @@ class ReportsRepository:
                     0,
                 ).label("actual_revenue"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_actual_payroll_expr),
                     0,
                 ).label("actual_payroll"),
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_actual_payroll_expr
                     ),
                     0,
                 ).label("actual_profit"),
@@ -2365,6 +2953,10 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(
                 ProjectAddonFactORM.company_id == company_id,
                 ProjectAddonFactORM.project_id == project_id,
@@ -2395,6 +2987,10 @@ class ReportsRepository:
         actual_payroll_total = _dec(door_row.actual_payroll) + _dec(fact_row.actual_payroll)
         planned_profit_total = _dec(door_row.planned_profit) + _dec(plan_row.planned_profit)
         actual_profit_total = _dec(door_row.actual_profit) + _dec(fact_row.actual_profit)
+        urgency_totals = self._project_urgency_surcharge_totals(
+            company_id=company_id,
+            project_id=project_id,
+        )
 
         return {
             "total_doors": total_doors,
@@ -2413,6 +3009,7 @@ class ReportsRepository:
             "profit_gap_total": planned_profit_total - actual_profit_total,
             "planned_addons_qty": _dec(plan_row.planned_qty),
             "actual_addons_qty": _dec(fact_row.actual_qty),
+            **urgency_totals,
             "missing_planned_rates_doors": int(door_row.missing_planned_rates or 0),
             "missing_actual_rates_doors": int(door_row.missing_actual_rates or 0),
             "missing_addon_plans_facts": int(fact_row.missing_addon_plans_facts or 0),
@@ -2497,6 +3094,14 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
         addon_row = (
             self.session.query(
                 func.coalesce(
@@ -2509,16 +3114,18 @@ class ReportsRepository:
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
                     ),
                     0,
                 ).label("addon_profit_total"),
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(
                 ProjectAddonFactORM.company_id == company_id,
                 ProjectAddonFactORM.project_id == project_id,
@@ -2794,6 +3401,14 @@ class ReportsRepository:
             ProjectAddonPlanORM.project_id == ProjectAddonFactORM.project_id,
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
         addon_sub = (
             self.session.query(
                 ProjectAddonFactORM.project_id.label("project_id"),
@@ -2805,19 +3420,14 @@ class ReportsRepository:
                     0,
                 ).label("addon_revenue_total"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("addon_payroll_total"),
                 func.coalesce(
                     func.sum(
                         ProjectAddonFactORM.qty_done
-                        * (
-                            func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                        )
+                        * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                        - addon_payroll_expr
                     ),
                     0,
                 ).label("addon_profit_total"),
@@ -2828,6 +3438,10 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(ProjectAddonFactORM.company_id == company_id)
             .group_by(ProjectAddonFactORM.project_id)
             .subquery()
@@ -3072,13 +3686,19 @@ class ReportsRepository:
             ProjectAddonPlanORM.addon_type_id == ProjectAddonFactORM.addon_type_id,
         )
         addon_name_expr = func.coalesce(AddonTypeORM.name, "Unknown add-on")
+        effective_addon_work = self._effective_addon_work_by_fact_subquery(
+            company_id=company_id
+        )
+        addon_payroll_expr = func.coalesce(
+            effective_addon_work.c.payroll_total,
+            ProjectAddonFactORM.qty_done
+            * func.coalesce(ProjectAddonPlanORM.installer_price, 0),
+        )
         addon_profit_expr = func.coalesce(
             func.sum(
                 ProjectAddonFactORM.qty_done
-                * (
-                    func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                    - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                )
+                * func.coalesce(ProjectAddonPlanORM.client_price, 0)
+                - addon_payroll_expr
             ),
             0,
         )
@@ -3092,10 +3712,7 @@ class ReportsRepository:
                     0,
                 ).label("addon_revenue_total"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("addon_payroll_total"),
                 addon_profit_expr.label("addon_profit_total"),
@@ -3106,6 +3723,10 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .filter(ProjectAddonFactORM.company_id == company_id)
             .one()
         )
@@ -3122,10 +3743,7 @@ class ReportsRepository:
                     0,
                 ).label("revenue_total"),
                 func.coalesce(
-                    func.sum(
-                        ProjectAddonFactORM.qty_done
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
-                    ),
+                    func.sum(addon_payroll_expr),
                     0,
                 ).label("payroll_total"),
                 addon_profit_expr.label("profit_total"),
@@ -3136,6 +3754,10 @@ class ReportsRepository:
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
+            .outerjoin(
+                effective_addon_work,
+                effective_addon_work.c.addon_fact_id == ProjectAddonFactORM.id,
+            )
             .outerjoin(
                 AddonTypeORM,
                 and_(

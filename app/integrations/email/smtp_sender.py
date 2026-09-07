@@ -12,6 +12,7 @@ class SmtpEmailSender:
         self,
         *,
         to_email: str,
+        cc_emails: list[str] | None = None,
         subject: str,
         body_text: str,
         attachment_path: str | None = None,
@@ -20,6 +21,8 @@ class SmtpEmailSender:
         msg = EmailMessage()
         msg["From"] = settings.SMTP_FROM
         msg["To"] = to_email
+        if cc_emails:
+            msg["Cc"] = ", ".join(cc_emails)
         msg["Subject"] = subject
         msg.set_content(body_text)
 

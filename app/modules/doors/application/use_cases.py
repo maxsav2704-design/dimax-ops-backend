@@ -4,16 +4,21 @@ from datetime import datetime, timezone
 
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.modules.audit.infrastructure.models import AuditLogORM
+from app.modules.doors.application.completion import (
+    create_completed_work_for_door,
+    reverse_completed_work_for_door,
+    resolve_installer_rate_snapshot,
+)
 from app.modules.doors.application.commands import (
     AdminOverrideDoor,
     MarkDoorInstalled,
     MarkDoorNotInstalled,
 )
+from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.issues.domain.enums import IssueStatus
 from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.projects.application.status_service import ProjectStatusService
-from app.modules.sync.domain.enums import SyncChangeType
 
 
 def utcnow():
@@ -28,33 +33,25 @@ def _ensure_reason_exists(uow, *, company_id, reason_id) -> None:
         raise ValidationError("reason is inactive")
 
 
-def _resolve_installer_rate_snapshot(
-    uow,
-    *,
-    company_id,
-    installer_id,
-    door_type_id,
-    at=None,
-):
-    if installer_id is None:
-        return None
-    rate = uow.installer_rates.get_by_keys(
-        company_id=company_id,
-        installer_id=installer_id,
-        door_type_id=door_type_id,
-        at=at,
-    )
-    if rate is None:
-        return None
-    return rate.price
+def _bump_door_version(door) -> None:
+    door.version = int(getattr(door, "version", 0) or 0) + 1
+
+
+def _door_action_result(door) -> dict:
+    return {
+        "id": door.id,
+        "status": door.status.value if hasattr(door.status, "value") else str(door.status),
+        "version": int(getattr(door, "version", 0) or 0),
+    }
 
 
 class DoorUseCases:
     @staticmethod
-    def mark_installed(uow, cmd: MarkDoorInstalled) -> None:
+    def mark_installed(uow, cmd: MarkDoorInstalled) -> dict:
         door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
+        from_status = door.status
 
         # lock-инвариант
         if door.is_locked:
@@ -64,20 +61,31 @@ class DoorUseCases:
             )
 
         # ставим installed
-        door.status = DoorStatus.INSTALLED
-        door.installed_at = utcnow()
-        door.is_locked = True
-        door.reason_id = None
-        door.comment = None
-        door.installer_rate_snapshot = _resolve_installer_rate_snapshot(
+        installed_at = utcnow()
+        installer_rate_snapshot = resolve_installer_rate_snapshot(
             uow,
             company_id=cmd.company_id,
             installer_id=door.installer_id,
             door_type_id=door.door_type_id,
-            at=door.installed_at,
+            at=installed_at,
+            current_snapshot=door.installer_rate_snapshot,
         )
 
+        door.status = DoorStatus.INSTALLED
+        door.installed_at = installed_at
+        door.is_locked = True
+        door.reason_id = None
+        door.comment = None
+        door.installer_rate_snapshot = installer_rate_snapshot
+        _bump_door_version(door)
+
         uow.doors.save(door)
+        create_completed_work_for_door(
+            uow,
+            company_id=cmd.company_id,
+            installer_id=door.installer_id,
+            door=door,
+        )
 
         # закрываем issue если было
         issue = uow.issues.get_by_door(
@@ -93,34 +101,24 @@ class DoorUseCases:
             project_id=door.project_id,
         )
 
-        uow.sync_change_log.add_change(
+        record_door_transition(
+            uow,
             company_id=cmd.company_id,
-            change_type=SyncChangeType.DOOR,
-            entity_id=door.id,
-            project_id=door.project_id,
-            installer_id=door.installer_id,
-            payload={
-                "id": str(door.id),
-                "project_id": str(door.project_id),
-                "door_type_id": str(door.door_type_id),
-                "unit_label": door.unit_label,
-                "order_number": door.order_number,
-                "house_number": door.house_number,
-                "floor_label": door.floor_label,
-                "apartment_number": door.apartment_number,
-                "location_code": door.location_code,
-                "door_marking": door.door_marking,
-                "status": str(door.status),
-                "comment": door.comment,
-                "updated_at": utcnow().isoformat(),
-            },
+            actor_user_id=cmd.actor_user_id,
+            door=door,
+            from_status=from_status,
+            source=getattr(cmd, "source", "ADMIN_OVERRIDE"),
+            reason=getattr(cmd, "override_reason", None)
+            or getattr(cmd, "comment", None),
         )
+        return _door_action_result(door)
 
     @staticmethod
-    def mark_not_installed(uow, cmd: MarkDoorNotInstalled) -> None:
+    def mark_not_installed(uow, cmd: MarkDoorNotInstalled) -> dict:
         door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
+        from_status = door.status
 
         if door.is_locked:
             raise Conflict(
@@ -141,6 +139,7 @@ class DoorUseCases:
         door.comment = cmd.comment
         door.installed_at = None
         door.installer_rate_snapshot = None
+        _bump_door_version(door)
 
         uow.doors.save(door)
 
@@ -168,28 +167,17 @@ class DoorUseCases:
             project_id=door.project_id,
         )
 
-        uow.sync_change_log.add_change(
+        record_door_transition(
+            uow,
             company_id=cmd.company_id,
-            change_type=SyncChangeType.DOOR,
-            entity_id=door.id,
-            project_id=door.project_id,
-            installer_id=door.installer_id,
-            payload={
-                "id": str(door.id),
-                "project_id": str(door.project_id),
-                "door_type_id": str(door.door_type_id),
-                "unit_label": door.unit_label,
-                "order_number": door.order_number,
-                "house_number": door.house_number,
-                "floor_label": door.floor_label,
-                "apartment_number": door.apartment_number,
-                "location_code": door.location_code,
-                "door_marking": door.door_marking,
-                "status": str(door.status),
-                "comment": door.comment,
-                "updated_at": utcnow().isoformat(),
-            },
+            actor_user_id=cmd.actor_user_id,
+            door=door,
+            from_status=from_status,
+            source=getattr(cmd, "source", "ADMIN_OVERRIDE"),
+            reason=getattr(cmd, "override_reason", None)
+            or getattr(cmd, "comment", None),
         )
+        return _door_action_result(door)
 
     @staticmethod
     def admin_override(uow, cmd: AdminOverrideDoor, *, actor_role: str) -> None:
@@ -199,6 +187,7 @@ class DoorUseCases:
         door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
+        from_status = door.status
 
         before = {
             "status": door.status.value,
@@ -216,17 +205,27 @@ class DoorUseCases:
         }
 
         if cmd.new_status == "INSTALLED":
-            door.status = DoorStatus.INSTALLED
-            door.installed_at = utcnow()
-            door.is_locked = True
-            door.reason_id = None
-            door.comment = None
-            door.installer_rate_snapshot = _resolve_installer_rate_snapshot(
+            installed_at = utcnow()
+            installer_rate_snapshot = resolve_installer_rate_snapshot(
                 uow,
                 company_id=cmd.company_id,
                 installer_id=door.installer_id,
                 door_type_id=door.door_type_id,
-                at=door.installed_at,
+                at=installed_at,
+                current_snapshot=door.installer_rate_snapshot,
+            )
+
+            door.status = DoorStatus.INSTALLED
+            door.installed_at = installed_at
+            door.is_locked = True
+            door.reason_id = None
+            door.comment = None
+            door.installer_rate_snapshot = installer_rate_snapshot
+            create_completed_work_for_door(
+                uow,
+                company_id=cmd.company_id,
+                installer_id=door.installer_id,
+                door=door,
             )
 
             issue = uow.issues.get_by_door(
@@ -245,6 +244,14 @@ class DoorUseCases:
                 uow,
                 company_id=cmd.company_id,
                 reason_id=cmd.reason_id,
+            )
+
+            reverse_completed_work_for_door(
+                uow,
+                company_id=cmd.company_id,
+                door=door,
+                reason=cmd.override_reason
+                or "Admin override: door marked NOT_INSTALLED",
             )
 
             door.status = DoorStatus.NOT_INSTALLED
@@ -275,6 +282,7 @@ class DoorUseCases:
                 "new_status must be INSTALLED or NOT_INSTALLED"
             )
 
+        _bump_door_version(door)
         uow.doors.save(door)
 
         after = {
@@ -311,25 +319,13 @@ class DoorUseCases:
             project_id=door.project_id,
         )
 
-        uow.sync_change_log.add_change(
+        record_door_transition(
+            uow,
             company_id=cmd.company_id,
-            change_type=SyncChangeType.DOOR,
-            entity_id=door.id,
-            project_id=door.project_id,
-            installer_id=door.installer_id,
-            payload={
-                "id": str(door.id),
-                "project_id": str(door.project_id),
-                "door_type_id": str(door.door_type_id),
-                "unit_label": door.unit_label,
-                "order_number": door.order_number,
-                "house_number": door.house_number,
-                "floor_label": door.floor_label,
-                "apartment_number": door.apartment_number,
-                "location_code": door.location_code,
-                "door_marking": door.door_marking,
-                "status": str(door.status),
-                "comment": door.comment,
-                "updated_at": utcnow().isoformat(),
-            },
+            actor_user_id=cmd.actor_user_id,
+            door=door,
+            from_status=from_status,
+            source=getattr(cmd, "source", "ADMIN_OVERRIDE"),
+            reason=getattr(cmd, "override_reason", None)
+            or getattr(cmd, "comment", None),
         )

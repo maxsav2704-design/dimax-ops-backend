@@ -81,17 +81,36 @@ class PublicJournalDTO(BaseModel):
 class PublicJournalItemDTO(BaseModel):
     unit_label: str
     door_type_id: UUID
+    door_type_name: str
     installed_at: str | None
+
+
+class PublicJournalAddonItemDTO(BaseModel):
+    name: str
+    quantity: str
+    unit: str
+    done_at: str
+    comment: str | None
+
+
+class PublicJournalProjectDTO(BaseModel):
+    name: str
+    address: str | None
+    developer_company: str | None
+    contact_name: str | None
 
 
 class PublicJournalGetResponse(BaseModel):
     journal: PublicJournalDTO
+    project: PublicJournalProjectDTO
     items: list[PublicJournalItemDTO]
+    addon_items: list[PublicJournalAddonItemDTO]
 
 
 class JournalMarkReadyResponse(BaseModel):
     public_token: str
     public_url: str
+    signing_url: str
 
 
 class JournalExportPdfResponse(BaseModel):
@@ -101,3 +120,9 @@ class JournalExportPdfResponse(BaseModel):
 
 class OkResponse(BaseModel):
     ok: bool = True
+
+
+class PublicSignResponse(BaseModel):
+    ok: bool = True
+    pdf_ready: bool
+    email_queued: bool

@@ -230,6 +230,7 @@ def test_installer_calendar_lists_only_assigned_events(
             "ends_at",
             "location",
             "waze_url",
+            "waze_deep_link",
             "description",
             "project_id",
             "installer_ids",
@@ -237,6 +238,7 @@ def test_installer_calendar_lists_only_assigned_events(
     )
     assert items[0]["id"] == my_event_id
     assert "waze_url" in items[0]
+    assert "waze_deep_link" in items[0]
 
 
 def test_calendar_event_uses_project_address_for_waze_navigation(
@@ -274,6 +276,7 @@ def test_calendar_event_uses_project_address_for_waze_navigation(
     assert len(items) == 1
     assert items[0]["location"] == project.address
     assert items[0]["waze_url"] is not None
+    assert items[0]["waze_deep_link"] is not None
     assert "navigate=yes" in items[0]["waze_url"]
 
 
@@ -282,7 +285,7 @@ def test_calendar_admin_forbidden_for_installer_role(client_installer):
     q = f"starts_at={_iso(now)}&ends_at={_iso(now + timedelta(hours=1))}"
     resp = client_installer.get(f"/api/v1/admin/calendar/events?{q}")
     assert resp.status_code == 403, resp.text
-    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
 def test_calendar_validation_and_not_found(client_admin_real_uow):

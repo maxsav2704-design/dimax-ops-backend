@@ -62,6 +62,7 @@ class CalendarApiService:
                     ends_at=e.ends_at,
                     location=e.location,
                     waze_url=build_waze_url(address=navigation_address),
+                    waze_deep_link=build_waze_url(address=navigation_address),
                     description=e.description,
                     project_id=e.project_id,
                     installer_ids=assignees,

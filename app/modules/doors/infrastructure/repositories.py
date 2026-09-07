@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.projects.infrastructure.models import ProjectORM
+
+
+def _enum_value(value: object) -> str:
+    return value.value if hasattr(value, "value") else str(value)
 
 
 class DoorRepository:
@@ -91,9 +96,12 @@ class DoorRepository:
     ) -> list[uuid.UUID]:
         rows = (
             self.session.query(distinct(DoorORM.project_id))
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(
                 DoorORM.company_id == company_id,
                 DoorORM.installer_id == installer_id,
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
             )
             .all()
         )
@@ -109,8 +117,13 @@ class DoorRepository:
             return []
         rows = (
             self.session.query(distinct(DoorORM.project_id))
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(DoorORM.company_id == company_id)
             .filter(DoorORM.installer_id.in_(installer_ids))
+            .filter(
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
+            )
             .all()
         )
         return [r[0] for r in rows]
@@ -123,9 +136,12 @@ class DoorRepository:
     ) -> list[dict]:
         rows = (
             self.session.query(DoorORM)
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(
                 DoorORM.company_id == company_id,
                 DoorORM.installer_id == installer_id,
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
             )
             .order_by(DoorORM.project_id.asc())
             .all()
@@ -142,8 +158,11 @@ class DoorRepository:
                 "apartment_number": r.apartment_number,
                 "location_code": r.location_code,
                 "door_marking": r.door_marking,
-                "status": str(r.status),
+                "status": _enum_value(r.status),
+                "reason_id": str(r.reason_id) if r.reason_id else None,
                 "comment": r.comment,
+                "is_locked": bool(r.is_locked),
+                "version": int(getattr(r, "version", 0) or 0),
                 "updated_at": (
                     r.updated_at.isoformat() if r.updated_at else None
                 ),
@@ -158,9 +177,15 @@ class DoorRepository:
         installer_id: uuid.UUID,
         since: datetime | None,
     ) -> list[dict]:
-        q = self.session.query(DoorORM).filter(
-            DoorORM.company_id == company_id,
-            DoorORM.installer_id == installer_id,
+        q = (
+            self.session.query(DoorORM)
+            .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.installer_id == installer_id,
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
+            )
         )
         if since is not None:
             q = q.filter(DoorORM.updated_at > since)
@@ -178,8 +203,11 @@ class DoorRepository:
                 "apartment_number": r.apartment_number,
                 "location_code": r.location_code,
                 "door_marking": r.door_marking,
-                "status": str(r.status),
+                "status": _enum_value(r.status),
+                "reason_id": str(r.reason_id) if r.reason_id else None,
                 "comment": r.comment,
+                "is_locked": bool(r.is_locked),
+                "version": int(getattr(r, "version", 0) or 0),
                 "updated_at": r.updated_at,
             }
             for r in rows

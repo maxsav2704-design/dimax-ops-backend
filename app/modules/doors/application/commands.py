@@ -9,6 +9,7 @@ class MarkDoorInstalled:
     company_id: uuid.UUID
     actor_user_id: uuid.UUID
     door_id: uuid.UUID
+    source: str = "API"
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class MarkDoorNotInstalled:
     door_id: uuid.UUID
     reason_id: uuid.UUID
     comment: str | None = None
+    source: str = "API"
 
 
 @dataclass(frozen=True)

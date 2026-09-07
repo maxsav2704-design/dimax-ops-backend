@@ -11,16 +11,32 @@ from app.shared.domain.errors import (
     DomainError,
     Forbidden,
     NotFound,
+    TooManyRequests,
+    Unauthorized,
     ValidationError,
 )
 
 
-def _error_content(*, code: str, message: str, details=None) -> dict:
+def _public_validation_errors(exc: RequestValidationError) -> list[dict]:
+    public_errors: list[dict] = []
+    for error in exc.errors():
+        public_errors.append(
+            {
+                "type": str(error.get("type") or "validation_error"),
+                "loc": list(error.get("loc") or ()),
+                "msg": str(error.get("msg") or "Invalid value"),
+            }
+        )
+    return public_errors
+
+
+def _error_content(*, code: str, message: str, field=None, meta=None) -> dict:
     return {
         "error": {
             "code": code,
             "message": message,
-            "details": details,
+            "field": field,
+            "meta": meta,
         }
     }
 
@@ -36,6 +52,8 @@ def _http_status_to_error_code(status_code: int) -> str | None:
         return "NOT_FOUND"
     if status_code == 409:
         return "CONFLICT"
+    if status_code == 429:
+        return "TOO_MANY_REQUESTS"
     if status_code == 422:
         return "VALIDATION_ERROR"
     return None
@@ -47,10 +65,14 @@ def install_error_handlers(app: FastAPI) -> None:
         status = 400
         if isinstance(exc, NotFound):
             status = 404
+        elif isinstance(exc, Unauthorized):
+            status = 401
         elif isinstance(exc, Forbidden):
             status = 403
         elif isinstance(exc, Conflict):
             status = 409
+        elif isinstance(exc, TooManyRequests):
+            status = 429
         elif isinstance(exc, ValidationError):
             status = 422
 
@@ -59,7 +81,8 @@ def install_error_handlers(app: FastAPI) -> None:
             content=_error_content(
                 code=exc.code,
                 message=exc.message,
-                details=exc.details,
+                field=exc.field,
+                meta=exc.meta,
             ),
         )
 
@@ -68,12 +91,19 @@ def install_error_handlers(app: FastAPI) -> None:
         request: Request,
         exc: RequestValidationError,
     ):
+        field = None
+        errors = jsonable_encoder(_public_validation_errors(exc))
+        if isinstance(errors, list) and errors:
+            loc = errors[0].get("loc") or []
+            if isinstance(loc, (list, tuple)) and loc:
+                field = str(loc[-1])
         return JSONResponse(
             status_code=422,
             content=_error_content(
                 code="VALIDATION_ERROR",
                 message="Request validation failed",
-                details=jsonable_encoder(exc.errors()),
+                field=field,
+                meta=errors,
             ),
         )
 
@@ -83,13 +113,26 @@ def install_error_handlers(app: FastAPI) -> None:
         exc: StarletteHTTPException,
     ):
         error_code = _http_status_to_error_code(exc.status_code)
+        detail = exc.detail
+        if isinstance(detail, dict):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=_error_content(
+                    code=str(detail.get("code") or error_code or "ERROR"),
+                    message=str(detail.get("message") or detail.get("detail") or exc.status_code),
+                    field=detail.get("field"),
+                    meta=detail.get("meta"),
+                ),
+                headers=exc.headers,
+            )
         if error_code is not None:
             return JSONResponse(
                 status_code=exc.status_code,
                 content=_error_content(
                     code=error_code,
                     message=str(exc.detail),
-                    details=None,
+                    field=None,
+                    meta=None,
                 ),
                 headers=exc.headers,
             )

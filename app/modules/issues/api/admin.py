@@ -12,6 +12,8 @@ from app.modules.issues.api.schemas import (
     AdminIssueWorkflowUpdateBody,
     AdminIssuesListResponse,
     AdminIssueStatusUpdateBody,
+    IssueCommentsResponse,
+    IssueMediaResponse,
 )
 from app.modules.issues.application.admin_api_service import (
     IssuesAdminApiService,
@@ -82,6 +84,36 @@ def get_issue(
             company_id=current_user.company_id,
             issue_id=issue_id,
         )
+
+
+@router.get("/{issue_id}/comments", response_model=IssueCommentsResponse)
+def list_issue_comments(
+    issue_id: uuid.UUID,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow),
+    current_user: CurrentUser = Depends(require_admin),
+) -> IssueCommentsResponse:
+    with uow:
+        IssuesAdminApiService.get_issue(
+            uow,
+            company_id=current_user.company_id,
+            issue_id=issue_id,
+        )
+        return IssueCommentsResponse(items=[])
+
+
+@router.get("/{issue_id}/media", response_model=IssueMediaResponse)
+def list_issue_media(
+    issue_id: uuid.UUID,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow),
+    current_user: CurrentUser = Depends(require_admin),
+) -> IssueMediaResponse:
+    with uow:
+        IssuesAdminApiService.get_issue(
+            uow,
+            company_id=current_user.company_id,
+            issue_id=issue_id,
+        )
+        return IssueMediaResponse(items=[])
 
 
 @router.patch("/{issue_id}/status", response_model=AdminIssueDTO)

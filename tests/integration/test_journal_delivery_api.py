@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -12,6 +14,7 @@ from app.modules.files.infrastructure.models import (
     FileDownloadEventORM,
     FileDownloadTokenORM,
 )
+from app.modules.journal.infrastructure.models import JournalAddonItemORM
 from app.modules.outbox.domain.enums import OutboxChannel
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
@@ -60,6 +63,7 @@ def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectO
         company_id=company_id,
         name=name,
         address=f"{name} address",
+        contact_email=f"acceptance-{uuid.uuid4().hex[:8]}@example.com",
         status=ProjectStatus.OK,
     )
     db_session.add(row)
@@ -68,7 +72,12 @@ def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectO
     return row
 
 
-def _create_journal(client_admin_real_uow, *, project_id: uuid.UUID) -> str:
+def _create_journal(
+    client_admin_real_uow,
+    db_session,
+    *,
+    project_id: uuid.UUID,
+) -> str:
     resp = client_admin_real_uow.post(
         "/api/v1/admin/journals",
         json={
@@ -77,7 +86,23 @@ def _create_journal(client_admin_real_uow, *, project_id: uuid.UUID) -> str:
         },
     )
     assert resp.status_code == 200, resp.text
-    return resp.json()["id"]
+    journal_id = uuid.UUID(resp.json()["id"])
+    project = db_session.query(ProjectORM).filter(ProjectORM.id == project_id).one()
+    db_session.add(
+        JournalAddonItemORM(
+            company_id=project.company_id,
+            journal_id=journal_id,
+            addon_fact_id=uuid.uuid4(),
+            addon_type_id=uuid.uuid4(),
+            addon_name="Delivery test completed work",
+            unit="pcs",
+            qty_done=Decimal("1.00"),
+            done_at=datetime.now(timezone.utc),
+            comment=None,
+        )
+    )
+    db_session.commit()
+    return str(journal_id)
 
 
 def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
@@ -90,7 +115,9 @@ def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
         company_id=company_id,
         name=f"Send Project {uuid.uuid4().hex[:8]}",
     )
-    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    journal_id = _create_journal(
+        client_admin_real_uow, db_session, project_id=project.id
+    )
 
     mark_ready_resp = client_admin_real_uow.post(
         f"/api/v1/admin/journals/{journal_id}/mark-ready"
@@ -185,7 +212,9 @@ def test_journal_send_uses_backend_template_preview_when_requested(
         company_id=company_id,
         name=f"Template Project {uuid.uuid4().hex[:8]}",
     )
-    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    journal_id = _create_journal(
+        client_admin_real_uow, db_session, project_id=project.id
+    )
 
     create_template_resp = client_admin_real_uow.post(
         "/api/v1/admin/settings/communication-templates",
@@ -248,7 +277,9 @@ def test_whatsapp_failure_enqueues_email_fallback_when_enabled(
         company_id=company_id,
         name=f"Fallback Project {uuid.uuid4().hex[:8]}",
     )
-    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    journal_id = _create_journal(
+        client_admin_real_uow, db_session, project_id=project.id
+    )
 
     mark_ready_resp = client_admin_real_uow.post(
         f"/api/v1/admin/journals/{journal_id}/mark-ready"
@@ -305,7 +336,9 @@ def test_journal_share_pdf_creates_download_token(
         company_id=company_id,
         name=f"Share Project {uuid.uuid4().hex[:8]}",
     )
-    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    journal_id = _create_journal(
+        client_admin_real_uow, db_session, project_id=project.id
+    )
 
     share_resp = client_admin_real_uow.post(
         f"/api/v1/admin/journals/{journal_id}/pdf/share",
@@ -350,7 +383,9 @@ def test_journal_pdf_download_streams_file_and_audits_download(
         company_id=company_id,
         name=f"PDF Project {uuid.uuid4().hex[:8]}",
     )
-    journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
+    journal_id = _create_journal(
+        client_admin_real_uow, db_session, project_id=project.id
+    )
 
     pdf_resp = client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}/pdf")
     assert pdf_resp.status_code == 200, pdf_resp.text
@@ -384,18 +419,18 @@ def test_journal_delivery_endpoints_forbidden_for_installer_role(client_installe
         },
     )
     assert send_resp.status_code == 403, send_resp.text
-    assert send_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert send_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     share_resp = client_installer.post(
         f"/api/v1/admin/journals/{journal_id}/pdf/share",
         json={"ttl_sec": 300, "uses": 2},
     )
     assert share_resp.status_code == 403, share_resp.text
-    assert share_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert share_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     pdf_resp = client_installer.get(f"/api/v1/admin/journals/{journal_id}/pdf")
     assert pdf_resp.status_code == 403, pdf_resp.text
-    assert pdf_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert pdf_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
 def test_journal_delivery_validation_and_not_found(client_admin_real_uow):

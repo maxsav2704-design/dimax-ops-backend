@@ -375,4 +375,4 @@ def test_catalog_bulk_and_audit_report_forbidden_for_installer(client_installer)
         else:
             resp = client_installer.post(path, json=payload)
         assert resp.status_code == 403, f"{path}: {resp.text}"
-        assert resp.json()["error"]["code"] == "FORBIDDEN"
+        assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"

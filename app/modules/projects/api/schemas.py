@@ -1,35 +1,71 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.modules.projects.domain.enums import (
+    ProjectHealthStatus,
+    ProjectLifecycleStatus,
+)
+
 
 class ProjectCreateBody(BaseModel):
     name: str = Field(min_length=2, max_length=200)
-    address: str = Field(min_length=2, max_length=400)
+    code: str | None = Field(default=None, min_length=2, max_length=40)
+    address: str = Field(default="", max_length=400)
+    planned_start_date: date | None = None
+    planned_end_date: date | None = None
+    lifecycle_status: ProjectLifecycleStatus = ProjectLifecycleStatus.ACTIVE
     developer_company: str | None = Field(default=None, max_length=200)
     contact_name: str | None = Field(default=None, max_length=200)
     contact_phone: str | None = Field(default=None, max_length=40)
     contact_email: str | None = Field(default=None, max_length=255)
+    developer_phone_alt: str | None = Field(default=None, max_length=40)
+    developer_whatsapp: str | None = Field(default=None, max_length=40)
+    developer_notes: str | None = Field(default=None, max_length=1000)
+    address_street: str | None = Field(default=None, max_length=200)
+    address_building: str | None = Field(default=None, max_length=80)
+    address_city: str | None = Field(default=None, max_length=120)
+    address_entrance: str | None = Field(default=None, max_length=120)
+    address_lat: Decimal | None = Field(default=None)
+    address_lng: Decimal | None = Field(default=None)
+    address_waze_url: str | None = Field(default=None, max_length=500)
 
 
 class ProjectUpdateBody(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     address: str | None = Field(default=None, max_length=400)
+    code: str | None = Field(default=None, max_length=40)
+    planned_start_date: date | None = None
+    planned_end_date: date | None = None
+    lifecycle_status: ProjectLifecycleStatus | None = None
     developer_company: str | None = Field(default=None, max_length=200)
     contact_name: str | None = Field(default=None, max_length=200)
     contact_phone: str | None = Field(default=None, max_length=40)
     contact_email: str | None = Field(default=None, max_length=255)
+    developer_phone_alt: str | None = Field(default=None, max_length=40)
+    developer_whatsapp: str | None = Field(default=None, max_length=40)
+    developer_notes: str | None = Field(default=None, max_length=1000)
+    address_street: str | None = Field(default=None, max_length=200)
+    address_building: str | None = Field(default=None, max_length=80)
+    address_city: str | None = Field(default=None, max_length=120)
+    address_entrance: str | None = Field(default=None, max_length=120)
+    address_lat: Decimal | None = Field(default=None)
+    address_lng: Decimal | None = Field(default=None)
+    address_waze_url: str | None = Field(default=None, max_length=500)
 
 
 class ProjectListItem(BaseModel):
     id: UUID
     name: str
+    code: str | None = None
     address: str
     status: str
+    lifecycle_status: ProjectLifecycleStatus = ProjectLifecycleStatus.ACTIVE
+    health_status: ProjectHealthStatus = ProjectHealthStatus.NORMAL
 
 
 class ProjectListResponse(BaseModel):
@@ -38,6 +74,21 @@ class ProjectListResponse(BaseModel):
 
 class ProjectCreateResponse(BaseModel):
     id: UUID
+
+
+class ProjectAddressSuggestionDTO(BaseModel):
+    key: str
+    label: str
+    street: str
+    building: str
+    city: str
+    entrance: str
+    lat: str
+    lng: str
+
+
+class ProjectAddressSuggestionsResponse(BaseModel):
+    items: list[ProjectAddressSuggestionDTO]
 
 
 class DoorImportRow(BaseModel):
@@ -68,11 +119,15 @@ class ImportDoorsFromFileBody(BaseModel):
     delimiter: str | None = Field(default=None, max_length=3)
     mapping_profile: str = Field(
         default="auto_v1",
-        pattern=r"^(auto_v1|factory_he_v1|factory_ru_v1|generic_en_v1)$",
+        pattern=(
+            r"^(auto_v1|factory_he_v1|factory_ru_v1|generic_en_v1|"
+            r"supplier_delivery_he_v1)$"
+        ),
     )
     strict_required_fields: bool | None = None
     create_missing_door_types: bool = False
     analyze_only: bool = False
+    allow_partial_import: bool = False
 
 
 class ImportDoorsFromFileErrorDTO(BaseModel):
@@ -92,6 +147,7 @@ class ImportDataSummaryDTO(BaseModel):
     prepared_rows: int = 0
     rows_with_errors: int = 0
     duplicate_rows_skipped: int = 0
+    zero_price_doors: int = 0
     unique_order_numbers: int = 0
     unique_houses: int = 0
     unique_floors: int = 0
@@ -108,6 +164,8 @@ class ImportPreviewGroupDTO(BaseModel):
     door_marking: str | None = None
     door_count: int = 0
     location_codes: list[str] = Field(default_factory=list)
+    door_type_ids: list[UUID] = Field(default_factory=list)
+    door_type_labels: list[str] = Field(default_factory=list)
 
 
 class ImportColumnsDiagnosticsDTO(BaseModel):
@@ -273,6 +331,30 @@ class AssignInstallerBody(BaseModel):
     installer_id: UUID
 
 
+class BulkAssignInstallerBody(BaseModel):
+    door_ids: list[UUID] = Field(min_length=1, max_length=500)
+    installer_id: UUID
+
+
+class BulkAssignInstallerResponse(BaseModel):
+    assigned: int
+    skipped: int
+    assigned_door_ids: list[UUID]
+
+
+class ManualDoorCreateBody(BaseModel):
+    product_id: UUID
+    door_code: str = Field(min_length=1, max_length=120)
+    unit: str = Field(min_length=1, max_length=120)
+    floor: str | None = Field(default=None, max_length=40)
+    location_code: str | None = Field(default=None, max_length=80)
+    order_number: str | None = Field(default=None, max_length=80)
+    install_type: str | None = Field(default=None, max_length=120)
+    is_critical: bool = False
+    assigned_installer_id: UUID | None = None
+    planned_install_date: date | None = None
+
+
 class DoorDTO(BaseModel):
     id: UUID
     unit_label: str
@@ -328,15 +410,58 @@ class IssueDTO(BaseModel):
     details: str | None
 
 
+class ProjectAddressDetailsDTO(BaseModel):
+    street: str | None = None
+    building: str | None = None
+    city: str | None = None
+    entrance: str | None = None
+    lat: Decimal | None = None
+    lng: Decimal | None = None
+    waze_url: str | None = None
+    waze_deep_link: str | None = None
+
+
+class ProjectDeveloperDetailsDTO(BaseModel):
+    name: str | None = None
+    contact_name: str | None = None
+    phone: str | None = None
+    phone_alt: str | None = None
+    whatsapp: str | None = None
+    email: str | None = None
+    notes: str | None = None
+    whatsapp_deep_link: str | None = None
+    call_deep_link: str | None = None
+
+
 class ProjectDetailsResponse(BaseModel):
     id: UUID
     name: str
+    code: str | None = None
     address: str
+    address_details: ProjectAddressDetailsDTO | None = None
+    planned_start_date: date | None = None
+    planned_end_date: date | None = None
     status: str
+    lifecycle_status: ProjectLifecycleStatus = ProjectLifecycleStatus.ACTIVE
+    health_status: ProjectHealthStatus = ProjectHealthStatus.NORMAL
+    developer: ProjectDeveloperDetailsDTO | None = None
     developer_company: str | None
     contact_name: str | None
     contact_phone: str | None
     contact_email: str | None
+    developer_phone_alt: str | None = None
+    developer_whatsapp: str | None = None
+    developer_notes: str | None = None
+    address_street: str | None = None
+    address_building: str | None = None
+    address_city: str | None = None
+    address_entrance: str | None = None
+    address_lat: Decimal | None = None
+    address_lng: Decimal | None = None
+    address_waze_url: str | None = None
+    waze_deep_link: str | None = None
+    whatsapp_deep_link: str | None = None
+    call_deep_link: str | None = None
     doors: list[DoorDTO]
     issues_open: list[IssueDTO]
 

@@ -1,7 +1,19 @@
 from __future__ import annotations
 
 import uuid
-from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint
+from datetime import date
+
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    Enum,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,21 +33,63 @@ class ProjectORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin, SoftDel
         UniqueConstraint(
             "company_id", "name", "address", name="uq_projects_company_name_address"
         ),
+        Index(
+            "ix_projects_company_code_active",
+            "company_id",
+            "code",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_projects_lifecycle_status", "lifecycle_status"),
+        Index("ix_projects_health_status", "health_status"),
+        CheckConstraint(
+            "lifecycle_status IN ('PLANNED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED')",
+            name="ck_projects_lifecycle_status",
+        ),
+        CheckConstraint(
+            "health_status IN ('NORMAL', 'AT_RISK', 'BLOCKED')",
+            name="ck_projects_health_status",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     address: Mapped[str] = mapped_column(String(400), nullable=False)
+    planned_start_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    planned_end_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
 
     developer_company: Mapped[str | None] = mapped_column(String(200), nullable=True)  # застройщик/клиент
     contact_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    developer_phone_alt: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    developer_whatsapp: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    developer_notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    address_street: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    address_building: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    address_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    address_entrance: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    address_lat: Mapped[float | None] = mapped_column(Numeric(10, 7), nullable=True)
+    address_lng: Mapped[float | None] = mapped_column(Numeric(10, 7), nullable=True)
+    address_waze_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     status: Mapped[ProjectStatus] = mapped_column(
         Enum(ProjectStatus, name="project_status"),
         nullable=False,
         default=ProjectStatus.OK,
         index=True,
+    )
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="ACTIVE",
+        server_default=text("'ACTIVE'"),
+    )
+    health_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="NORMAL",
+        server_default=text("'NORMAL'"),
     )
 
     # Связи
@@ -46,7 +100,7 @@ class ProjectORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin, SoftDel
     )
 
 
-class ProjectImportRunORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
+class ProjectImportRunORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "project_import_runs"
     __table_args__ = (
         UniqueConstraint(
@@ -58,6 +112,12 @@ class ProjectImportRunORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin
         ),
     )
 
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="CASCADE"),

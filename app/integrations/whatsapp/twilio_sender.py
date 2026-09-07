@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import requests
-
 from app.core.config import settings
 
 
@@ -14,6 +12,8 @@ class TwilioWhatsAppSender:
         media_url: str | None = None,
         status_callback_url: str | None = None,
     ) -> str:
+        import requests
+
         url = (
             f"https://api.twilio.com/2010-04-01/Accounts/"
             f"{settings.TWILIO_ACCOUNT_SID}/Messages.json"

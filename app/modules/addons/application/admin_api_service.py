@@ -67,6 +67,7 @@ class AddonsAdminApiService:
         qty_planned,
         client_price,
         installer_price,
+        notes: str | None = None,
     ) -> ProjectPlanResponse:
         AddonsUseCases.admin_set_project_plan(
             uow,
@@ -76,19 +77,31 @@ class AddonsAdminApiService:
             qty_planned=qty_planned,
             client_price=client_price,
             installer_price=installer_price,
+            notes=notes,
         )
         uow.session.flush()
         rows = uow.addon_plans.list_by_project(
             company_id=company_id, project_id=project_id
         )
+        type_map = {
+            item.id: item
+            for item in uow.addon_types.list_active(company_id=company_id)
+        }
         return ProjectPlanResponse(
             project_id=project_id,
             items=[
                 ProjectPlanItemDTO(
+                    id=x.id,
                     addon_type_id=x.addon_type_id,
+                    addon_name=(
+                        type_map[x.addon_type_id].name
+                        if x.addon_type_id in type_map
+                        else None
+                    ),
                     qty_planned=x.qty_planned,
                     client_price=x.client_price,
                     installer_price=x.installer_price,
+                    notes=x.notes,
                 )
                 for x in rows
             ],

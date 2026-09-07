@@ -93,6 +93,7 @@ def run_once(limit: int = 20) -> int:
                     try:
                         email_sender.send(
                             to_email=payload["to_email"],
+                            cc_emails=payload.get("cc_emails"),
                             subject=payload["subject"],
                             body_text=payload["body_text"],
                             attachment_path=attachment_path,

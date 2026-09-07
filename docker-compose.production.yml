@@ -1,0 +1,95 @@
+x-backend-service: &backend-service
+  image: ${DIMAX_BACKEND_IMAGE:?DIMAX_BACKEND_IMAGE must use a release SHA tag or sha256 digest}
+  env_file:
+    - ${DIMAX_BACKEND_ENV_FILE:-.env.production.local}
+  init: true
+  user: "10001:10001"
+  environment:
+    HOME: /tmp
+    APP_ENV: production
+    SEED_ADMIN_EMAIL: ""
+    SEED_ADMIN_PASSWORD: ""
+  restart: unless-stopped
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  migrate:
+    <<: *backend-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: alembic upgrade head
+    restart: "no"
+    profiles:
+      - tools
+
+  bootstrap:
+    <<: *backend-service
+    command: python -m app.seed
+    environment:
+      HOME: /tmp
+      APP_ENV: production
+    restart: "no"
+    profiles:
+      - tools
+
+  api:
+    <<: *backend-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - ${DIMAX_WEB_CONCURRENCY:-2}
+      - --no-access-log
+    ports:
+      - ${DIMAX_API_BIND:-127.0.0.1:8000}:8000
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 30s
+
+  sync-health:
+    <<: *backend-service
+    command: python -m app.scripts.run_sync_health_job
+    depends_on:
+      api:
+        condition: service_healthy
+
+  outbox-worker:
+    <<: *backend-service
+    command: python -m app.workers.outbox_worker
+    depends_on:
+      api:
+        condition: service_healthy
+
+  maintenance-worker:
+    <<: *backend-service
+    command: python -m app.workers.maintenance_worker
+    depends_on:
+      api:
+        condition: service_healthy
+
+  sync-gc-worker:
+    <<: *backend-service
+    command: python -m app.workers.sync_gc_worker
+    depends_on:
+      api:
+        condition: service_healthy

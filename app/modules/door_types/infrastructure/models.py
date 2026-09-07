@@ -22,3 +22,4 @@ class DoorTypeORM(
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_critical_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

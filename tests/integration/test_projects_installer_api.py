@@ -65,6 +65,7 @@ def _make_project(*, company_id: uuid.UUID, name: str, address: str) -> ProjectO
         company_id=company_id,
         name=name,
         address=address,
+        code=f"PRJ-{uuid.uuid4().hex[:6].upper()}",
         status=ProjectStatus.OK,
     )
 
@@ -124,6 +125,8 @@ def test_installer_projects_list_shows_only_assigned_projects(
         name="Installer Project A",
         address="Address A",
     )
+    project_a.contact_phone = "+972501234500"
+    project_a.developer_whatsapp = "+972509999111"
     project_b = _make_project(
         company_id=company_id,
         name="Installer Project B",
@@ -175,6 +178,7 @@ def test_installer_projects_list_shows_only_assigned_projects(
     assert resp.status_code == 200, resp.text
 
     items = resp.json()["items"]
+    pagination = resp.json()["pagination"]
     item_ids = [row["id"] for row in items]
 
     assert str(project_a.id) in item_ids
@@ -182,9 +186,31 @@ def test_installer_projects_list_shows_only_assigned_projects(
     assert str(project_foreign.id) not in item_ids
     assert item_ids.count(str(project_a.id)) == 1
     row_a = next(x for x in items if x["id"] == str(project_a.id))
-    _assert_exact_keys(row_a, {"id", "name", "address", "status", "waze_url"})
+    _assert_exact_keys(
+        row_a,
+        {
+            "id",
+            "name",
+            "address",
+            "status",
+            "lifecycle_status",
+            "health_status",
+            "waze_url",
+            "whatsapp_url",
+            "call_url",
+        },
+    )
+    assert row_a["lifecycle_status"] == "ACTIVE"
+    assert row_a["health_status"] == "NORMAL"
     assert row_a["waze_url"] is not None
     assert "navigate=yes" in row_a["waze_url"]
+    assert row_a["whatsapp_url"] is not None
+    assert "wa.me/972509999111" in row_a["whatsapp_url"]
+    assert row_a["call_url"] == "tel:+972501234500"
+    assert pagination["page"] == 1
+    assert pagination["per_page"] == 25
+    assert pagination["total"] == 2
+    assert pagination["total_pages"] == 1
 
 
 def test_installer_project_details_returns_scoped_data(
@@ -215,6 +241,19 @@ def test_installer_project_details_returns_scoped_data(
         name="Installer Details Project",
         address="Details address",
     )
+    project.address_street = "Harbor"
+    project.address_building = "11"
+    project.address_city = "Ashdod"
+    project.address_entrance = "A"
+    project.address_lat = Decimal("31.801")
+    project.address_lng = Decimal("34.643")
+    project.address_waze_url = "https://www.waze.com/ul?q=Manual+Installer+Link"
+    project.developer_company = "Builder Ltd"
+    project.contact_name = "Yael Cohen"
+    project.contact_phone = "+972501234567"
+    project.developer_phone_alt = "+972502224466"
+    project.developer_whatsapp = "+972509876543"
+    project.developer_notes = "Gate code 7788"
     db_session.add(project)
     db_session.flush()
 
@@ -304,7 +343,10 @@ def test_installer_project_details_returns_scoped_data(
     db_session.add_all([addon_plan, addon_fact_my, addon_fact_other])
     db_session.commit()
 
-    resp = client.get(f"/api/v1/installer/projects/{project.id}")
+    resp = client.get(
+        f"/api/v1/installer/projects/{project.id}",
+        headers={"Accept-Language": "he"},
+    )
     assert resp.status_code == 200, resp.text
 
     body = resp.json()
@@ -314,8 +356,20 @@ def test_installer_project_details_returns_scoped_data(
             "id",
             "name",
             "address",
+            "address_details",
             "waze_url",
+            "whatsapp_url",
+            "call_url",
+            "developer",
+            "contact_name",
+            "contact_phone",
+            "developer_phone_alt",
+            "developer_whatsapp",
+            "developer_company",
+            "developer_notes",
             "status",
+            "lifecycle_status",
+            "health_status",
             "doors",
             "issues_open",
             "door_types_catalog",
@@ -326,8 +380,41 @@ def test_installer_project_details_returns_scoped_data(
     )
     assert body["id"] == str(project.id)
     assert body["name"] == "Installer Details Project"
+    assert body["lifecycle_status"] == "ACTIVE"
+    assert body["health_status"] == "NORMAL"
+    assert body["address_details"] == {
+        "street": "Harbor",
+        "building": "11",
+        "city": "Ashdod",
+        "entrance": "A",
+        "lat": "31.801",
+        "lng": "34.643",
+        "waze_url": "https://www.waze.com/ul?q=Manual+Installer+Link",
+        "waze_deep_link": "https://waze.com/ul?ll=31.801,34.643&navigate=yes",
+    }
     assert body["waze_url"] is not None
-    assert "navigate=yes" in body["waze_url"]
+    assert body["waze_url"] == "https://waze.com/ul?ll=31.801,34.643&navigate=yes"
+    assert body["whatsapp_url"] is not None
+    assert "wa.me/972509876543" in body["whatsapp_url"]
+    assert "%D7%A9%D7%9C%D7%95%D7%9D%2C+%D7%91%D7%A7%D7%A9%D7%A8+%D7%9C%D7%A4%D7%A8%D7%95%D7%99%D7%A7%D7%98+Installer+Details+Project" in body["whatsapp_url"]
+    assert body["call_url"] == "tel:+972501234567"
+    assert body["contact_name"] == "Yael Cohen"
+    assert body["contact_phone"] == "+972501234567"
+    assert body["developer_phone_alt"] == "+972502224466"
+    assert body["developer_whatsapp"] == "+972509876543"
+    assert body["developer"] == {
+        "name": "Builder Ltd",
+        "contact_name": "Yael Cohen",
+        "phone": "+972501234567",
+        "phone_alt": "+972502224466",
+        "whatsapp": "+972509876543",
+        "notes": "Gate code 7788",
+        "whatsapp_deep_link": body["whatsapp_url"],
+        "call_deep_link": "tel:+972501234567",
+    }
+    assert body["developer_company"] == "Builder Ltd"
+    assert body["developer_notes"] == "Gate code 7788"
+    assert "contact_email" not in body
 
     doors = body["doors"]
     assert [d["unit_label"] for d in doors] == ["A-01", "A-02"]
@@ -337,7 +424,6 @@ def test_installer_project_details_returns_scoped_data(
             "id",
             "unit_label",
             "door_type_id",
-            "our_price",
             "order_number",
             "house_number",
             "floor_label",
@@ -348,6 +434,7 @@ def test_installer_project_details_returns_scoped_data(
             "reason_id",
             "comment",
             "is_locked",
+            "version",
         },
     )
 
@@ -370,7 +457,7 @@ def test_installer_project_details_returns_scoped_data(
     assert len(addons["plan"]) == 1
     _assert_exact_keys(
         addons["plan"][0],
-        {"addon_type_id", "qty_planned", "client_price", "installer_price"},
+        {"addon_type_id", "qty_planned"},
     )
     assert addons["plan"][0]["addon_type_id"] == str(addon_type.id)
     assert len(addons["facts"]) == 1
@@ -379,6 +466,74 @@ def test_installer_project_details_returns_scoped_data(
         {"id", "addon_type_id", "qty_done", "done_at", "comment", "source"},
     )
     assert addons["facts"][0]["id"] == str(addon_fact_my.id)
+
+
+def test_installer_project_response_has_no_financial_fields(
+    client_installer_projects,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id = client_installer_projects
+
+    door_type = make_door_type(name="Leakage Guard Door")
+    project = _make_project(
+        company_id=company_id,
+        name="Leakage Guard Project",
+        address="Leakage address",
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    door = _make_door(
+        company_id=company_id,
+        project_id=project.id,
+        door_type_id=door_type.id,
+        unit_label="L-01",
+        installer_id=installer_id,
+    )
+    db_session.add(door)
+
+    addon_type = AddonTypeORM(
+        company_id=company_id,
+        name="Seal leakage guard",
+        unit="pcs",
+        default_client_price=Decimal("30.00"),
+        default_installer_price=Decimal("12.00"),
+        is_active=True,
+        deleted_at=None,
+    )
+    db_session.add(addon_type)
+    db_session.flush()
+
+    addon_plan = ProjectAddonPlanORM(
+        company_id=company_id,
+        project_id=project.id,
+        addon_type_id=addon_type.id,
+        qty_planned=Decimal("2.00"),
+        client_price=Decimal("50.00"),
+        installer_price=Decimal("20.00"),
+    )
+    db_session.add(addon_plan)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/installer/projects/{project.id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    for row in body.get("doors", []):
+        assert "our_price" not in row
+        assert "client_price" not in row
+        assert "installer_price" not in row
+        assert "surcharge_pct" not in row
+        assert "margin" not in row
+        assert "rate_snapshot" not in row
+
+    for row in body.get("addons", {}).get("plan", []):
+        assert "client_price" not in row
+        assert "installer_price" not in row
+        assert "surcharge_pct" not in row
+        assert "margin" not in row
 
 
 def test_installer_project_details_forbidden_if_not_assigned(
@@ -445,3 +600,58 @@ def test_installer_project_details_validation_returns_422_for_bad_uuid(
 
     resp = client.get("/api/v1/installer/projects/not-a-uuid")
     assert resp.status_code == 422, resp.text
+
+
+def test_installer_workspace_returns_frontend_contract(
+    client_installer_projects,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id = client_installer_projects
+
+    door_type = make_door_type(name="Workspace Contract Door")
+    project = _make_project(
+        company_id=company_id,
+        name="Workspace Contract Project",
+        address="Workspace address",
+    )
+    db_session.add(project)
+    db_session.flush()
+    db_session.add(
+        _make_door(
+            company_id=company_id,
+            project_id=project.id,
+            door_type_id=door_type.id,
+            unit_label="W-01",
+            installer_id=installer_id,
+        )
+    )
+    db_session.commit()
+
+    resp = client.get("/api/v1/installer/workspace")
+    assert resp.status_code == 200, resp.text
+
+    body = resp.json()
+    _assert_exact_keys(
+        body,
+        {
+            "projects",
+            "events",
+            "task_events",
+            "issues",
+            "earnings_summary",
+            "sync_queue",
+            "today_tasks",
+            "priority_tasks",
+            "problem_projects",
+            "earnings_today",
+        },
+    )
+    assert any(row["id"] == str(project.id) for row in body["projects"])
+    assert isinstance(body["events"], list)
+    assert isinstance(body["task_events"], list)
+    assert isinstance(body["issues"], list)
+    assert body["earnings_summary"]["currency"] == "ILS"
+    assert body["sync_queue"]["items"] == []
+    assert body["sync_queue"]["pagination"]["per_page"] == 100

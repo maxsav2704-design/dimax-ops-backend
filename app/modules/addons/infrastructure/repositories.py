@@ -9,6 +9,7 @@ from app.modules.addons.infrastructure.models import (
     AddonTypeORM,
     ProjectAddonFactORM,
     ProjectAddonPlanORM,
+    ProjectUrgencySurchargeORM,
 )
 
 
@@ -61,6 +62,7 @@ class ProjectAddonPlanRepository:
         qty_planned: Decimal,
         client_price: Decimal,
         installer_price: Decimal,
+        notes: str | None = None,
     ) -> ProjectAddonPlanORM:
         row = (
             self.session.query(ProjectAddonPlanORM)
@@ -79,11 +81,13 @@ class ProjectAddonPlanRepository:
                 qty_planned=qty_planned,
                 client_price=client_price,
                 installer_price=installer_price,
+                notes=notes,
             )
         else:
             row.qty_planned = qty_planned
             row.client_price = client_price
             row.installer_price = installer_price
+            row.notes = notes
         self.session.add(row)
         return row
 
@@ -101,7 +105,6 @@ class ProjectAddonPlanRepository:
             )
             .all()
         )
-
     def delete(
         self,
         *,
@@ -117,6 +120,23 @@ class ProjectAddonPlanRepository:
                 ProjectAddonPlanORM.addon_type_id == addon_type_id,
             )
             .delete(synchronize_session=False)
+        )
+
+    def get_by_project_type(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+        addon_type_id: uuid.UUID,
+    ) -> ProjectAddonPlanORM | None:
+        return (
+            self.session.query(ProjectAddonPlanORM)
+            .filter(
+                ProjectAddonPlanORM.company_id == company_id,
+                ProjectAddonPlanORM.project_id == project_id,
+                ProjectAddonPlanORM.addon_type_id == addon_type_id,
+            )
+            .one_or_none()
         )
 
 
@@ -192,5 +212,51 @@ class ProjectAddonFactRepository:
                 ProjectAddonFactORM.installer_id == installer_id,
             )
             .order_by(ProjectAddonFactORM.done_at.desc())
+            .all()
+        )
+
+    def list_by_project_type(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+        addon_type_id: uuid.UUID,
+    ) -> list[ProjectAddonFactORM]:
+        return (
+            self.session.query(ProjectAddonFactORM)
+            .filter(
+                ProjectAddonFactORM.company_id == company_id,
+                ProjectAddonFactORM.project_id == project_id,
+                ProjectAddonFactORM.addon_type_id == addon_type_id,
+            )
+            .order_by(ProjectAddonFactORM.done_at.desc())
+            .all()
+        )
+
+
+class ProjectUrgencySurchargeRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def create(self, row: ProjectUrgencySurchargeORM) -> ProjectUrgencySurchargeORM:
+        self.session.add(row)
+        return row
+
+    def list_by_project(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> list[ProjectUrgencySurchargeORM]:
+        return (
+            self.session.query(ProjectUrgencySurchargeORM)
+            .filter(
+                ProjectUrgencySurchargeORM.company_id == company_id,
+                ProjectUrgencySurchargeORM.project_id == project_id,
+            )
+            .order_by(
+                ProjectUrgencySurchargeORM.effective_date.asc().nulls_last(),
+                ProjectUrgencySurchargeORM.created_at.asc(),
+            )
             .all()
         )

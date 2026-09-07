@@ -14,10 +14,12 @@ from app.modules.journal.api.admin_send import router as admin_journals_send
 from app.modules.journal.api.admin_files import router as admin_journals_files
 from app.modules.journal.api.admin_share import router as admin_journals_share
 from app.modules.journal.api.public import router as public_journals
+from app.modules.journal.api.installer import router as installer_journals
 from app.modules.calendar.api.admin import router as admin_calendar
 from app.modules.calendar.api.installer import router as installer_calendar
 from app.modules.installers.api.admin import router as admin_installers
 from app.modules.installers.api.admin_rates import router as admin_installer_rates
+from app.modules.library.api.admin import router as admin_library
 from app.modules.dashboard.api.admin_dashboard import router as admin_dashboard
 from app.modules.reports.api.admin import router as admin_reports
 from app.modules.addons.api.admin import router as admin_addons
@@ -27,11 +29,17 @@ from app.modules.sync.api.admin_sync_health import router as admin_sync_health
 from app.modules.sync.api.installer_sync import router as installer_sync
 from app.modules.files.api.public import router as public_files
 from app.modules.files.api.admin import router as admin_files
+from app.modules.files.api.media import router as media_files
+from app.modules.documents.api.admin import router as admin_documents
 from app.modules.outbox.api.admin import router as admin_outbox
 from app.modules.door_types.api.admin import router as admin_door_types
 from app.modules.reasons.api.admin import router as admin_reasons
 from app.modules.settings.api.admin import router as admin_settings
 from app.modules.issues.api.admin import router as admin_issues
+from app.modules.issues.api.installer import router as installer_issues
+from app.modules.earnings.api.admin import router as admin_earnings
+from app.modules.earnings.api.installer import router as installer_earnings
+from app.modules.workspace.api.installer import router as installer_workspace
 from app.modules.companies.api.platform import router as platform_companies
 from app.webhooks.twilio import router as twilio_webhooks
 from app.webhooks.outbox import router as outbox_webhooks
@@ -82,8 +90,11 @@ router.include_router(admin_journals_send, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_journals_files, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_journals_share, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(public_journals, responses=VALIDATION_ERROR_RESPONSE)
+router.include_router(installer_journals, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(public_files, responses=VALIDATION_ERROR_RESPONSE)
 router.include_router(admin_files, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(media_files, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_documents, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_outbox, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(twilio_webhooks)
 router.include_router(outbox_webhooks)
@@ -91,6 +102,7 @@ router.include_router(admin_calendar, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(installer_calendar, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_installers, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_installer_rates, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_library, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_dashboard, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_reports, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_addons, responses=SECURED_ROUTE_RESPONSES)
@@ -104,4 +116,8 @@ router.include_router(admin_door_types, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_reasons, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_settings, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_issues, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(installer_issues, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_earnings, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(installer_earnings, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(installer_workspace, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(platform_companies, responses=SECURED_ROUTE_RESPONSES)

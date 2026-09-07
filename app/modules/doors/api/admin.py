@@ -13,6 +13,7 @@ from app.modules.doors.application.commands import (
 from app.modules.doors.application.use_cases import DoorUseCases
 from app.modules.doors.api.schemas import (
     AdminOverrideBody,
+    DoorActionResponse,
     MarkNotInstalledBody,
     OkResponse,
 )
@@ -25,14 +26,14 @@ def _uuid(val: str) -> UUID:
     return UUID(val)
 
 
-@router.post("/{door_id}/install", response_model=OkResponse)
+@router.post("/{door_id}/install", response_model=DoorActionResponse)
 def admin_mark_installed(
     door_id: str,
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
 ):
     with uow:
-        DoorUseCases.mark_installed(
+        result = DoorUseCases.mark_installed(
             uow,
             MarkDoorInstalled(
                 company_id=user.company_id,
@@ -40,10 +41,10 @@ def admin_mark_installed(
                 door_id=_uuid(door_id),
             ),
         )
-    return OkResponse()
+    return DoorActionResponse(**result)
 
 
-@router.post("/{door_id}/not-installed", response_model=OkResponse)
+@router.post("/{door_id}/not-installed", response_model=DoorActionResponse)
 def admin_mark_not_installed(
     door_id: str,
     body: MarkNotInstalledBody,
@@ -51,7 +52,7 @@ def admin_mark_not_installed(
     uow=Depends(get_uow),
 ):
     with uow:
-        DoorUseCases.mark_not_installed(
+        result = DoorUseCases.mark_not_installed(
             uow,
             MarkDoorNotInstalled(
                 company_id=user.company_id,
@@ -61,7 +62,7 @@ def admin_mark_not_installed(
                 comment=body.comment,
             ),
         )
-    return OkResponse()
+    return DoorActionResponse(**result)
 
 
 @router.post("/{door_id}/override", response_model=OkResponse)

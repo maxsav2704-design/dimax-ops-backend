@@ -4,18 +4,28 @@ import base64
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 
-from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.api.v1.deps import (
+    CurrentUser,
+    ensure_admin_can_manage_imports,
+    get_uow,
+    require_admin,
+)
 from app.modules.projects.api.schemas import (
     AssignInstallerBody,
+    BulkAssignInstallerBody,
+    BulkAssignInstallerResponse,
     FailedImportRunsQueueResponse,
     ImportDoorsFromFileBody,
     ImportMappingProfilesResponse,
     ImportDoorsFromFileResponse,
     ImportDoorsResponse,
     ImportDoorsBody,
+    DoorDTO,
+    ManualDoorCreateBody,
     OkResponse,
+    ProjectAddressSuggestionsResponse,
     ProjectCreateResponse,
     ProjectCreateBody,
     ProjectDetailsResponse,
@@ -56,6 +66,15 @@ def list_projects(
         )
 
 
+@router.get("/address-suggestions", response_model=ProjectAddressSuggestionsResponse)
+def list_project_address_suggestions(
+    q: str = Query(min_length=3),
+    limit: int = Query(default=5, ge=1, le=10),
+    user: CurrentUser = Depends(require_admin),
+):
+    return ProjectAdminService.address_suggestions(company_id=user.company_id, q=q, limit=limit)
+
+
 @router.post("", response_model=ProjectCreateResponse)
 def create_project(
     body: ProjectCreateBody,
@@ -67,12 +86,26 @@ def create_project(
             uow,
             company_id=user.company_id,
             actor_user_id=user.id,
+            code=body.code,
             name=body.name,
             address=body.address,
+            planned_start_date=body.planned_start_date,
+            planned_end_date=body.planned_end_date,
+            lifecycle_status=body.lifecycle_status,
             developer_company=body.developer_company,
             contact_name=body.contact_name,
             contact_phone=body.contact_phone,
             contact_email=body.contact_email,
+            developer_phone_alt=body.developer_phone_alt,
+            developer_whatsapp=body.developer_whatsapp,
+            developer_notes=body.developer_notes,
+            address_street=body.address_street,
+            address_building=body.address_building,
+            address_city=body.address_city,
+            address_entrance=body.address_entrance,
+            address_lat=body.address_lat,
+            address_lng=body.address_lng,
+            address_waze_url=body.address_waze_url,
         )
 
 
@@ -116,6 +149,7 @@ def import_doors(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.import_doors(
             uow,
             company_id=user.company_id,
@@ -136,6 +170,7 @@ def import_doors_from_file(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.import_doors_from_file(
             uow,
             company_id=user.company_id,
@@ -150,6 +185,7 @@ def import_doors_from_file(
             strict_required_fields=body.strict_required_fields,
             create_missing_door_types=body.create_missing_door_types,
             analyze_only=body.analyze_only,
+            allow_partial_import=body.allow_partial_import,
         )
 
 
@@ -159,8 +195,34 @@ def import_doors_from_file(
 )
 def list_import_mapping_profiles(
     user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
 ):
-    return ProjectAdminService.list_import_mapping_profiles(company_id=user.company_id)
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        return ProjectAdminService.list_import_mapping_profiles(company_id=user.company_id)
+
+
+@router.get("/doors/import-template.xlsx")
+def download_import_template_xlsx(
+    mapping_profile: str = Query(default="auto_v1"),
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        content = ProjectAdminService.build_import_template_xlsx(
+            mapping_profile=mapping_profile,
+        )
+    safe_profile = mapping_profile.strip().lower() or "auto_v1"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="dimax-door-import-template-{safe_profile}.xlsx"'
+            )
+        },
+    )
 
 
 @router.get(
@@ -176,6 +238,7 @@ def project_import_history(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.import_runs_history(
             uow,
             company_id=user.company_id,
@@ -197,6 +260,7 @@ def project_import_run_details(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.import_run_details(
             uow,
             company_id=user.company_id,
@@ -216,6 +280,7 @@ def retry_project_import_run(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.retry_import_run(
             uow,
             company_id=user.company_id,
@@ -235,6 +300,7 @@ def review_latest_imports(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.review_latest_imports(
             uow,
             company_id=user.company_id,
@@ -253,6 +319,7 @@ def bulk_reconcile_latest_imports(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.bulk_reconcile_latest_imports(
             uow,
             company_id=user.company_id,
@@ -274,6 +341,7 @@ def failed_import_runs_queue(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.failed_import_runs_queue(
             uow,
             company_id=user.company_id,
@@ -293,6 +361,7 @@ def retry_failed_import_runs(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.retry_failed_runs_bulk(
             uow,
             company_id=user.company_id,
@@ -315,6 +384,7 @@ async def import_doors_from_upload(
     strict_required_fields: bool | None = Form(default=None),
     create_missing_door_types: bool = Form(default=False),
     analyze_only: bool = Form(default=False),
+    allow_partial_import: bool = Form(default=False),
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
 ):
@@ -330,6 +400,7 @@ async def import_doors_from_upload(
         raise HTTPException(status_code=422, detail="file is too large (max 20MB)")
 
     with uow:
+        ensure_admin_can_manage_imports(uow, user)
         return ProjectAdminService.import_doors_from_file(
             uow,
             company_id=user.company_id,
@@ -344,6 +415,24 @@ async def import_doors_from_upload(
             strict_required_fields=strict_required_fields,
             create_missing_door_types=create_missing_door_types,
             analyze_only=analyze_only,
+            allow_partial_import=allow_partial_import,
+        )
+
+
+@router.post("/{project_id}/doors", response_model=DoorDTO, status_code=201)
+def create_manual_door(
+    project_id: UUID,
+    body: ManualDoorCreateBody,
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+) -> DoorDTO:
+    with uow:
+        return ProjectAdminService.create_manual_door(
+            uow,
+            company_id=user.company_id,
+            actor_user_id=user.id,
+            project_id=project_id,
+            payload=body.model_dump(),
         )
 
 
@@ -351,6 +440,7 @@ async def import_doors_from_upload(
 def project_details(
     project_id: UUID,
     order_number: str | None = Query(default=None, max_length=80),
+    request: Request = None,
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
 ):
@@ -360,6 +450,7 @@ def project_details(
             company_id=user.company_id,
             project_id=project_id,
             order_number=order_number,
+            locale=request.headers.get("accept-language", "en") if request else "en",
         )
 
 
@@ -394,3 +485,18 @@ def assign_installer_to_door(
             installer_id=body.installer_id,
         )
     return OkResponse()
+
+
+@router.post("/doors/bulk-assign-installer", response_model=BulkAssignInstallerResponse)
+def bulk_assign_installer_to_doors(
+    body: BulkAssignInstallerBody,
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        return ProjectAdminService.bulk_assign_installer_to_doors(
+            uow,
+            company_id=user.company_id,
+            door_ids=body.door_ids,
+            installer_id=body.installer_id,
+        )

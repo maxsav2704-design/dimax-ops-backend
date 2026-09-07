@@ -203,6 +203,16 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     assert _response_ref(
         spec,
         path="/api/v1/admin/projects/{project_id}/addons/plan",
+        method="get",
+    ) == "#/components/schemas/ProjectAddonPlanListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/projects/{project_id}/addons/plan",
+        method="post",
+    ) == "#/components/schemas/ProjectAddonPlanListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/projects/{project_id}/addons/plan",
         method="put",
     ) == "#/components/schemas/ProjectAddonsResponse"
     assert _response_ref(
@@ -210,6 +220,16 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         path="/api/v1/admin/projects/{project_id}/addons/plan/{addon_type_id}",
         method="delete",
     ) == "#/components/schemas/OkResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/projects/{project_id}/urgency-surcharges",
+        method="get",
+    ) == "#/components/schemas/UrgencySurchargeListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/projects/{project_id}/urgency-surcharges",
+        method="post",
+    ) == "#/components/schemas/UrgencySurchargeListResponse"
     assert _response_ref(
         spec,
         path="/api/v1/admin/projects",
@@ -220,6 +240,12 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         path="/api/v1/admin/projects/{project_id}/doors/import",
         method="post",
     ) == "#/components/schemas/ImportDoorsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/projects/{project_id}/doors",
+        method="post",
+        status="201",
+    ) == "#/components/schemas/DoorDTO"
     assert _response_ref(
         spec,
         path="/api/v1/admin/projects/{project_id}/doors/import-file",
@@ -277,6 +303,16 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     ) == "#/components/schemas/AdminIssueDTO"
     assert _response_ref(
         spec,
+        path="/api/v1/admin/issues/{issue_id}/comments",
+        method="get",
+    ) == "#/components/schemas/IssueCommentsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/issues/{issue_id}/media",
+        method="get",
+    ) == "#/components/schemas/IssueMediaResponse"
+    assert _response_ref(
+        spec,
         path="/api/v1/admin/issues/{issue_id}/status",
         method="patch",
     ) == "#/components/schemas/AdminIssueDTO"
@@ -328,6 +364,23 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         path="/api/v1/admin/installer-rates/timeline",
         method="get",
     ) == "#/components/schemas/InstallerRateTimelineResponse"
+
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/library",
+        method="get",
+    ) == "#/components/schemas/ProductLibraryListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/library",
+        method="post",
+        status="201",
+    ) == "#/components/schemas/ProductLibraryItemDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/library/{item_id}",
+        method="patch",
+    ) == "#/components/schemas/ProductLibraryItemDTO"
 
     _assert_no_content_response(
         spec,
@@ -492,6 +545,11 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     ) == "#/components/schemas/SyncHealthSummaryDTO"
     assert _response_ref(
         spec,
+        path="/api/v1/admin/sync/problems",
+        method="get",
+    ) == "#/components/schemas/SyncProblemsResponseDTO"
+    assert _response_ref(
+        spec,
         path="/api/v1/admin/sync/reset/{installer_id}",
         method="post",
     ) == "#/components/schemas/SyncResetLegacyResponse"
@@ -572,6 +630,18 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         content_type="text/csv",
     )
     assert order_numbers_export_schema.get("type") == "string"
+    assert _response_ref(
+        spec,
+        path="/api/v1/admin/earnings/ledger",
+        method="get",
+    ) == "#/components/schemas/AdminEarningsLedgerResponseDTO"
+    earnings_ledger_export_schema = _response_schema(
+        spec,
+        path="/api/v1/admin/earnings/ledger/export",
+        method="get",
+        content_type="text/csv",
+    )
+    assert earnings_ledger_export_schema.get("type") == "string"
     assert _response_ref(
         spec,
         path="/api/v1/admin/reports/dashboard",
@@ -700,6 +770,11 @@ def test_openapi_contract_for_key_endpoints(client_raw):
     ) == "#/components/schemas/FileDownloadEventsResponse"
     assert _response_ref(
         spec,
+        path="/api/v1/media/{media_id}/url",
+        method="get",
+    ) == "#/components/schemas/MediaUrlResponse"
+    assert _response_ref(
+        spec,
         path="/api/v1/public/journals/{token}",
         method="get",
     ) == "#/components/schemas/PublicJournalGetResponse"
@@ -707,7 +782,37 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         spec,
         path="/api/v1/public/journals/{token}/sign",
         method="post",
-    ) == "#/components/schemas/OkResponse"
+    ) == "#/components/schemas/PublicSignResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals",
+        method="get",
+    ) == "#/components/schemas/InstallerJournalListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/prepare",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalDetailsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}",
+        method="get",
+    ) == "#/components/schemas/InstallerJournalDetailsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}/refresh",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalDetailsResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}/mark-ready",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalMarkReadyResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/journals/{journal_id}/pdf-link",
+        method="post",
+    ) == "#/components/schemas/InstallerJournalPdfLinkResponse"
 
     public_file_schema = _response_schema(
         spec,
@@ -795,6 +900,16 @@ def test_openapi_contract_for_key_endpoints(client_raw):
         path="/api/v1/installer/calendar/events",
         method="get",
     ) == "#/components/schemas/EventListResponse"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/issues/{issue_id}",
+        method="patch",
+    ) == "#/components/schemas/InstallerIssueReportDTO"
+    assert _response_ref(
+        spec,
+        path="/api/v1/installer/issues/{issue_id}/media",
+        method="get",
+    ) == "#/components/schemas/IssueMediaResponse"
     assert "401" in installer_projects_statuses
     assert "403" in installer_projects_statuses
     assert _response_ref(

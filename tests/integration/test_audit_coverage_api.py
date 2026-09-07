@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from app.modules.audit.infrastructure.models import AuditLogORM
+from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 
@@ -13,6 +16,7 @@ def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectO
         company_id=company_id,
         name=name,
         address=f"{name} address",
+        contact_email="developer.audit@example.com",
         status=ProjectStatus.OK,
     )
     db_session.add(row)
@@ -294,12 +298,28 @@ def test_journal_send_writes_audit_log(
     db_session,
     company_id,
     admin_user,
+    make_door_type,
 ):
     project = _create_project(
         db_session,
         company_id=company_id,
         name=f"Audit Project {uuid.uuid4().hex[:8]}",
     )
+    door_type = make_door_type(name="Audit Journal Door")
+    db_session.add(
+        DoorORM(
+            company_id=company_id,
+            project_id=project.id,
+            door_type_id=door_type.id,
+            unit_label="AUDIT-101",
+            door_code="AUDIT-101",
+            our_price=Decimal("100.00"),
+            status=DoorStatus.INSTALLED,
+            installed_at=datetime.now(timezone.utc),
+            is_locked=True,
+        )
+    )
+    db_session.commit()
     journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
 
     mark_ready_resp = client_admin_real_uow.post(

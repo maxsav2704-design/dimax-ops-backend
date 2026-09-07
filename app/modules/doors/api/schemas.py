@@ -10,6 +10,23 @@ class MarkNotInstalledBody(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
 
 
+class InstallerDoorStatusUpdateBody(BaseModel):
+    status: str = Field(pattern="^(IN_PROGRESS|INSTALLED)$")
+
+
+class InstallerDoorStatusUpdateResponse(BaseModel):
+    id: UUID
+    status: str
+    version: int
+
+
+class DoorActionResponse(BaseModel):
+    ok: bool = True
+    id: UUID
+    status: str
+    version: int
+
+
 class AdminOverrideBody(BaseModel):
     new_status: str = Field(pattern="^(INSTALLED|NOT_INSTALLED)$")
     reason_id: UUID | None = None

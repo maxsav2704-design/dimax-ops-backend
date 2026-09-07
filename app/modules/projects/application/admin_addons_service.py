@@ -7,10 +7,14 @@ from app.modules.addons.application.use_cases import AddonsUseCases
 from app.modules.projects.api.admin_addons_schemas import (
     AddonTypeMini,
     AddonsSummaryItem,
+    CreateUrgencySurchargeBody,
     FactItemDTO,
     OkResponse,
     PlanItemDTO,
+    ProjectAddonPlanListResponse,
     ProjectAddonsResponse,
+    UrgencySurchargeDTO,
+    UrgencySurchargeListResponse,
 )
 from app.shared.domain.errors import NotFound
 
@@ -36,6 +40,7 @@ class ProjectAdminAddonsService:
         )
 
         plan_map = {x.addon_type_id: x for x in plan}
+        type_map = {x.id: x for x in types}
 
         done_qty: dict[uuid.UUID, Decimal] = {}
         for f in facts:
@@ -87,10 +92,17 @@ class ProjectAdminAddonsService:
             ],
             plan=[
                 PlanItemDTO(
+                    id=x.id,
                     addon_type_id=x.addon_type_id,
+                    addon_name=(
+                        type_map[x.addon_type_id].name
+                        if x.addon_type_id in type_map
+                        else None
+                    ),
                     qty_planned=x.qty_planned,
                     client_price=x.client_price,
                     installer_price=x.installer_price,
+                    notes=x.notes,
                 )
                 for x in plan
             ],
@@ -117,6 +129,80 @@ class ProjectAdminAddonsService:
         project_id: uuid.UUID,
     ) -> ProjectAddonsResponse:
         return ProjectAdminAddonsService._build_project_addons_response(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+        )
+
+    @staticmethod
+    def _build_project_plan_response(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> ProjectAddonPlanListResponse:
+        p = uow.projects.get(company_id=company_id, project_id=project_id)
+        if not p:
+            raise NotFound("Project not found")
+
+        types = uow.addon_types.list_active(company_id=company_id)
+        type_map = {x.id: x for x in types}
+        rows = uow.addon_plans.list_by_project(
+            company_id=company_id,
+            project_id=project_id,
+        )
+        return ProjectAddonPlanListResponse(
+            items=[
+                PlanItemDTO(
+                    id=row.id,
+                    addon_type_id=row.addon_type_id,
+                    addon_name=(
+                        type_map[row.addon_type_id].name
+                        if row.addon_type_id in type_map
+                        else None
+                    ),
+                    qty_planned=row.qty_planned,
+                    client_price=row.client_price,
+                    installer_price=row.installer_price,
+                    notes=row.notes,
+                )
+                for row in rows
+            ]
+        )
+
+    @staticmethod
+    def list_project_plan(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> ProjectAddonPlanListResponse:
+        return ProjectAdminAddonsService._build_project_plan_response(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+        )
+
+    @staticmethod
+    def upsert_plan_item(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+        item: dict,
+    ) -> ProjectAddonPlanListResponse:
+        AddonsUseCases.admin_set_project_plan(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+            addon_type_id=item["addon_type_id"],
+            qty_planned=item["qty_planned"],
+            client_price=item["client_price"],
+            installer_price=item["installer_price"],
+            notes=item.get("notes"),
+        )
+        uow.session.flush()
+        return ProjectAdminAddonsService._build_project_plan_response(
             uow,
             company_id=company_id,
             project_id=project_id,
@@ -157,3 +243,61 @@ class ProjectAdminAddonsService:
             addon_type_id=addon_type_id,
         )
         return OkResponse()
+
+    @staticmethod
+    def _urgency_dto(row) -> UrgencySurchargeDTO:
+        return UrgencySurchargeDTO(
+            id=row.id,
+            scope=row.scope,
+            order_number=row.order_number,
+            reason=row.reason,
+            client_amount=row.client_amount,
+            installer_amount=row.installer_amount,
+            effective_date=row.effective_date,
+            notes=row.notes,
+        )
+
+    @staticmethod
+    def list_urgency_surcharges(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+    ) -> UrgencySurchargeListResponse:
+        p = uow.projects.get(company_id=company_id, project_id=project_id)
+        if not p:
+            raise NotFound("Project not found")
+        rows = uow.project_urgency_surcharges.list_by_project(
+            company_id=company_id,
+            project_id=project_id,
+        )
+        return UrgencySurchargeListResponse(
+            items=[ProjectAdminAddonsService._urgency_dto(row) for row in rows]
+        )
+
+    @staticmethod
+    def create_urgency_surcharge(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+        body: CreateUrgencySurchargeBody,
+    ) -> UrgencySurchargeListResponse:
+        AddonsUseCases.admin_create_urgency_surcharge(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+            scope=body.scope,
+            order_number=body.order_number,
+            reason=body.reason,
+            client_amount=body.client_amount,
+            installer_amount=body.installer_amount,
+            effective_date=body.effective_date,
+            notes=body.notes,
+        )
+        uow.session.flush()
+        return ProjectAdminAddonsService.list_urgency_surcharges(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+        )

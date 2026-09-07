@@ -6,8 +6,14 @@ from decimal import Decimal, InvalidOperation
 
 from app.modules.audit.application.service import AuditService
 from app.modules.companies.application.alerts_service import CompanyLimitAlertsService
+from app.modules.companies.application.limits_service import CompanyLimitsService
 from app.modules.companies.domain.errors import CompanyPlanLimitExceeded
+from app.modules.door_types.infrastructure.models import DoorTypeORM
+from app.modules.doors.application.sync_payload import build_door_sync_payload
+from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.projects.api.schemas import (
+    DoorDTO,
     FailedImportRunsQueueResponse,
     ProjectLatestImportReviewResponse,
     ProjectBulkImportReconcileResponse,
@@ -22,9 +28,19 @@ from app.modules.projects.api.schemas import (
 from app.modules.projects.application.file_import_service import (
     ProjectFileImportService,
 )
+from app.modules.projects.application.sync_payload import build_project_sync_payload
 from app.modules.projects.application.use_cases import ProjectUseCases
 from app.modules.projects.infrastructure.models import ProjectImportRunORM
-from app.shared.domain.errors import NotFound, ValidationError
+from app.shared.application.navigation import (
+    build_call_url,
+    build_project_address,
+    format_coordinate,
+    build_waze_url,
+    build_whatsapp_url,
+    resolve_locale,
+)
+from app.modules.sync.domain.enums import SyncChangeType
+from app.shared.domain.errors import Conflict, NotFound, ValidationError
 from app.shared.infrastructure.observability import get_logger, log_event
 
 
@@ -42,6 +58,13 @@ def _empty_to_none(value: str | None) -> str | None:
     return text if text else None
 
 
+def _door_type_code_from_install_type(value: str) -> str:
+    code = re.sub(r"[^A-Za-z0-9]+", "_", value.strip().upper()).strip("_")
+    if not code:
+        code = "MANUAL"
+    return f"LIB_{code}"[:64]
+
+
 def _order_number_matches(value: str | None, query: str | None) -> bool:
     q = _empty_to_none(query)
     if q is None:
@@ -50,6 +73,51 @@ def _order_number_matches(value: str | None, query: str | None) -> bool:
     if target is None:
         return False
     return q.casefold() in target.casefold()
+
+
+def _project_address(project) -> str:
+    return (
+        build_project_address(
+            address=getattr(project, "address", None),
+            street=getattr(project, "address_street", None),
+            building=getattr(project, "address_building", None),
+            city=getattr(project, "address_city", None),
+            entrance=getattr(project, "address_entrance", None),
+        )
+        or ""
+    )
+
+
+def _project_whatsapp_message(project, locale: str = "en") -> str | None:
+    code = str(getattr(project, "code", "") or "").strip()
+    name = str(getattr(project, "name", "") or "").strip()
+    if not name and not code:
+        return None
+    project_ref = f"{name} ({code})" if name and code else name or code
+    normalized_locale = resolve_locale(locale)
+    if normalized_locale == "ru":
+        return f"Добрый день, по проекту {project_ref}"
+    if normalized_locale == "he":
+        return f"שלום, בקשר לפרויקט {project_ref}"
+    return f"Hello, regarding project {project_ref}"
+
+
+def _project_action_links(project, *, locale: str = "en") -> tuple[str | None, str | None, str | None]:
+    address = _project_address(project)
+    return (
+        build_waze_url(
+            address=address,
+            lat=getattr(project, "address_lat", None),
+            lng=getattr(project, "address_lng", None),
+            manual_url=getattr(project, "address_waze_url", None),
+        ),
+        build_whatsapp_url(
+            phone=getattr(project, "developer_whatsapp", None)
+            or getattr(project, "contact_phone", None),
+            message=_project_whatsapp_message(project, locale=locale),
+        ),
+        build_call_url(phone=getattr(project, "contact_phone", None)),
+    )
 
 
 def _floor_sort_key(value: str | None) -> tuple[int, int, str]:
@@ -96,6 +164,7 @@ def _audit_import_diagnostics(diagnostics: dict | None) -> dict | None:
             "duplicate_rows_skipped": _safe_int(
                 data_summary.get("duplicate_rows_skipped"), 0
             ),
+            "zero_price_doors": _safe_int(data_summary.get("zero_price_doors"), 0),
             "unique_order_numbers": _safe_int(
                 data_summary.get("unique_order_numbers"), 0
             ),
@@ -122,6 +191,9 @@ def _audit_import_diagnostics(diagnostics: dict | None) -> dict | None:
                 "door_count": _safe_int(item.get("door_count"), 0),
                 "location_codes": [
                     str(x)[:80] for x in (item.get("location_codes") or [])[:10]
+                ],
+                "door_type_ids": [
+                    str(x)[:64] for x in (item.get("door_type_ids") or [])[:10]
                 ],
             }
         )
@@ -434,6 +506,89 @@ def _first_error_from_payload(payload: dict | None) -> str | None:
 
 class ProjectAdminService:
     @staticmethod
+    def address_suggestions(*, company_id: uuid.UUID, q: str, limit: int) -> dict:
+        del company_id
+        value = str(q).strip()
+        if len(value) < 3:
+            return {"items": []}
+
+        city_catalog = [
+            {"lat": "31.8014", "lng": "34.6435", "aliases": ["ashdod", "אשדוד", "ашдод"]},
+            {"lat": "31.2518", "lng": "34.7915", "aliases": ["ashkelon", "אשקלון", "ашкелон"]},
+            {"lat": "31.7683", "lng": "35.2137", "aliases": ["jerusalem", "ירושלים", "иерусалим"]},
+            {"lat": "32.0853", "lng": "34.7818", "aliases": ["tel aviv", "tel-aviv", "תל אביב", "тель авив"]},
+            {"lat": "32.7940", "lng": "34.9896", "aliases": ["haifa", "חיפה", "хайфа"]},
+            {"lat": "31.9980", "lng": "34.7320", "aliases": ["rishon lezion", "ראשון לציון", "ришон лецион"]},
+            {"lat": "32.3215", "lng": "34.8532", "aliases": ["netanya", "נתניה", "нетания"]},
+            {"lat": "31.2520", "lng": "34.7913", "aliases": ["beer sheva", "be'er sheva", "באר שבע", "беэр шева"]},
+        ]
+
+        def lookup_city_coords(city: str) -> tuple[str, str]:
+            normalized = city.strip().lower()
+            for item in city_catalog:
+                if any(alias in normalized for alias in item["aliases"]):
+                    return item["lat"], item["lng"]
+            return "", ""
+
+        suggestions: list[dict] = []
+        seen: set[str] = set()
+
+        def push(street: str, building: str, city: str, entrance: str) -> None:
+            street = street.strip()
+            building = building.strip()
+            city = city.strip()
+            entrance = entrance.strip()
+            if not street and not city:
+                return
+            label = ", ".join(part for part in [street, building, city, entrance] if part)
+            if not label:
+                return
+            key = label.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            lat, lng = lookup_city_coords(city)
+            suggestions.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "street": street,
+                    "building": building,
+                    "city": city,
+                    "entrance": entrance,
+                    "lat": lat,
+                    "lng": lng,
+                }
+            )
+
+        parts = [part.strip() for part in value.split(",")]
+        if len(parts) >= 3:
+            push(parts[0], parts[1], parts[2], parts[3] if len(parts) > 3 else "")
+
+        import re
+
+        match = re.match(
+            r"^\s*([^,\d]+?)\s+(\d+[A-Za-zА-Яа-я]?)\s*[,\-]?\s*([^,\d]+?)(?:\s*[,\-]?\s*([A-Za-zА-Яа-я0-9]+))?\s*$",
+            value,
+            re.IGNORECASE,
+        )
+        if match:
+            street, building, city, entrance = match.groups()
+            push(street or "", building or "", city or "", entrance or "")
+
+        normalized = value.lower()
+        for city_item in city_catalog:
+            for alias in city_item["aliases"]:
+                if alias in normalized:
+                    city_label = alias.title() if alias.isascii() else alias
+                    push(value, "", city_label, "")
+                    break
+            if len(suggestions) >= limit:
+                break
+
+        return {"items": suggestions[:limit]}
+
+    @staticmethod
     def list_import_mapping_profiles(*, company_id: uuid.UUID) -> dict:
         del company_id
         items = [
@@ -448,6 +603,15 @@ class ProjectAdminService:
                 "name": "Factory Hebrew v1",
                 "description": "Optimized for Hebrew factory exports (preferred delimiter ';', includes מספר הזמנה).",
                 "preferred_delimiter": ";",
+            },
+            {
+                "code": "supplier_delivery_he_v1",
+                "name": "Supplier Delivery Hebrew v1",
+                "description": (
+                    "Maps Hebrew delivery reports by shipment, building, floor, "
+                    "apartment, contract item, and product description."
+                ),
+                "preferred_delimiter": None,
             },
             {
                 "code": "factory_ru_v1",
@@ -466,6 +630,12 @@ class ProjectAdminService:
             "default_code": "auto_v1",
             "items": items,
         }
+
+    @staticmethod
+    def build_import_template_xlsx(*, mapping_profile: str) -> bytes:
+        return ProjectFileImportService.build_import_template_xlsx(
+            mapping_profile=mapping_profile,
+        )
 
     @staticmethod
     def list_projects(
@@ -489,8 +659,11 @@ class ProjectAdminService:
                 {
                     "id": p.id,
                     "name": p.name,
-                    "address": p.address,
+                    "code": getattr(p, "code", None),
+                    "address": _project_address(p),
                     "status": _status_value(p.status),
+                    "lifecycle_status": p.lifecycle_status,
+                    "health_status": p.health_status,
                 }
                 for p in items
             ]
@@ -1003,23 +1176,51 @@ class ProjectAdminService:
         *,
         company_id: uuid.UUID,
         actor_user_id: uuid.UUID,
+        code: str | None,
         name: str,
         address: str,
+        planned_start_date,
+        planned_end_date,
+        lifecycle_status,
         developer_company: str | None,
         contact_name: str | None,
         contact_phone: str | None,
         contact_email: str | None,
+        developer_phone_alt: str | None,
+        developer_whatsapp: str | None,
+        developer_notes: str | None,
+        address_street: str | None,
+        address_building: str | None,
+        address_city: str | None,
+        address_entrance: str | None,
+        address_lat,
+        address_lng,
+        address_waze_url: str | None,
     ) -> ProjectCreateResponse:
         try:
             p = ProjectUseCases.create_project(
                 uow,
                 company_id=company_id,
+                code=code,
                 name=name,
                 address=address,
+                planned_start_date=planned_start_date,
+                planned_end_date=planned_end_date,
+                lifecycle_status=lifecycle_status,
                 developer_company=developer_company,
                 contact_name=contact_name,
                 contact_phone=contact_phone,
                 contact_email=contact_email,
+                developer_phone_alt=developer_phone_alt,
+                developer_whatsapp=developer_whatsapp,
+                developer_notes=developer_notes,
+                address_street=address_street,
+                address_building=address_building,
+                address_city=address_city,
+                address_entrance=address_entrance,
+                address_lat=address_lat,
+                address_lng=address_lng,
+                address_waze_url=address_waze_url,
             )
         except CompanyPlanLimitExceeded as e:
             AuditService.add_independent(
@@ -1109,6 +1310,176 @@ class ProjectAdminService:
         return ImportDoorsResponse(imported=imported)
 
     @staticmethod
+    def create_manual_door(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        project_id: uuid.UUID,
+        payload: dict,
+    ) -> DoorDTO:
+        project = uow.projects.get(company_id=company_id, project_id=project_id)
+        if project is None:
+            raise NotFound("Project not found", details={"project_id": str(project_id)})
+
+        product_id = payload.get("product_id")
+        product = uow.product_library.get(
+            company_id=company_id,
+            item_id=uuid.UUID(str(product_id)),
+        )
+        if product is None:
+            raise NotFound("Library product not found", details={"product_id": str(product_id)})
+        if product.status != "ACTIVE":
+            raise Conflict("Library product is archived", details={"product_id": str(product_id)})
+
+        door_code = _empty_to_none(payload.get("door_code"))
+        unit_label = _empty_to_none(payload.get("unit"))
+        if door_code is None or unit_label is None:
+            raise ValidationError("door_code and unit are required")
+
+        duplicate = (
+            uow.session.query(DoorORM.id)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.project_id == project_id,
+                DoorORM.door_code == door_code,
+            )
+            .first()
+        )
+        if duplicate is not None:
+            raise Conflict(
+                "Door code already exists in this project",
+                details={"door_code": door_code, "project_id": str(project_id)},
+            )
+
+        install_type = _empty_to_none(payload.get("install_type")) or product.install_type
+        door_type_code = _door_type_code_from_install_type(install_type)
+        door_type = uow.door_types.get_by_code(
+            company_id=company_id,
+            code=door_type_code,
+        )
+        if door_type is None:
+            door_type = DoorTypeORM(
+                company_id=company_id,
+                code=door_type_code,
+                name=install_type,
+                is_active=True,
+                is_critical_default=bool(payload.get("is_critical")),
+            )
+            uow.door_types.save(door_type)
+            uow.session.flush()
+        elif not door_type.is_active:
+            raise Conflict(
+                "Mapped door type is inactive",
+                details={"door_type_id": str(door_type.id), "code": door_type_code},
+            )
+
+        installer_id = payload.get("assigned_installer_id")
+        if installer_id is not None:
+            installer_id = uuid.UUID(str(installer_id))
+            installer = uow.installers.get(company_id=company_id, installer_id=installer_id)
+            if installer is None or installer.deleted_at is not None or not installer.is_active:
+                raise NotFound("Installer not found", details={"installer_id": str(installer_id)})
+
+        CompanyLimitsService.assert_can_add_doors_to_project(
+            uow,
+            company_id=company_id,
+            project_id=project_id,
+            adding_count=1,
+        )
+        door = DoorORM(
+            company_id=company_id,
+            project_id=project_id,
+            door_type_id=door_type.id,
+            unit_label=unit_label,
+            door_code=door_code,
+            order_number=_empty_to_none(payload.get("order_number")),
+            floor_label=_empty_to_none(payload.get("floor")),
+            apartment_number=unit_label,
+            location_code=_empty_to_none(payload.get("location_code")),
+            door_marking=door_code,
+            our_price=Decimal("0"),
+            installer_id=installer_id,
+            status=DoorStatus.NOT_INSTALLED,
+            reason_id=None,
+            comment=None,
+            installed_at=None,
+            is_locked=False,
+            is_critical=bool(payload.get("is_critical")),
+        )
+        uow.doors.save(door)
+        uow.session.flush()
+
+        if installer_id is not None:
+            uow.sync_change_log.add_change(
+                company_id=company_id,
+                change_type=SyncChangeType.PROJECT_BASE,
+                entity_id=project_id,
+                project_id=project_id,
+                installer_id=installer_id,
+                payload=build_project_sync_payload(project),
+            )
+            uow.sync_change_log.add_change(
+                company_id=company_id,
+                change_type=SyncChangeType.PROJECT_ASSIGNMENTS,
+                entity_id=project_id,
+                project_id=project_id,
+                installer_id=installer_id,
+                payload={
+                    "kind": "manual_door_created",
+                    "project_id": str(project_id),
+                    "affected_door_ids": [str(door.id)],
+                },
+            )
+            uow.sync_change_log.add_change(
+                company_id=company_id,
+                change_type=SyncChangeType.DOOR,
+                entity_id=door.id,
+                project_id=project_id,
+                installer_id=installer_id,
+                payload=build_door_sync_payload(door),
+            )
+
+        AuditService.add_independent(
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            entity_type="door",
+            entity_id=door.id,
+            action="MANUAL_DOOR_CREATE",
+            after={
+                "project_id": str(project_id),
+                "door_code": door_code,
+                "unit_label": unit_label,
+                "product_id": str(product.id),
+                "door_type_id": str(door_type.id),
+                "installer_id": str(installer_id) if installer_id else None,
+            },
+        )
+        CompanyLimitAlertsService.evaluate_and_alert(
+            uow,
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            metric_keys=["doors_per_project"],
+        )
+        return DoorDTO(
+            id=door.id,
+            unit_label=door.unit_label,
+            door_type_id=door.door_type_id,
+            our_price=door.our_price,
+            order_number=door.order_number,
+            house_number=door.house_number,
+            floor_label=door.floor_label,
+            apartment_number=door.apartment_number,
+            location_code=door.location_code,
+            door_marking=door.door_marking,
+            status=_status_value(door.status),
+            installer_id=door.installer_id,
+            reason_id=door.reason_id,
+            comment=door.comment,
+            is_locked=door.is_locked,
+        )
+
+    @staticmethod
     def import_doors_from_file(
         uow,
         *,
@@ -1124,6 +1495,7 @@ class ProjectAdminService:
         strict_required_fields: bool | None,
         create_missing_door_types: bool,
         analyze_only: bool,
+        allow_partial_import: bool = False,
     ) -> ImportDoorsFromFileResponse:
         try:
             data = ProjectFileImportService.import_project_doors_from_file(
@@ -1139,6 +1511,7 @@ class ProjectAdminService:
                 strict_required_fields=strict_required_fields,
                 create_missing_door_types=create_missing_door_types,
                 analyze_only=analyze_only,
+                allow_partial_import=allow_partial_import,
             )
         except CompanyPlanLimitExceeded as e:
             AuditService.add_independent(
@@ -1185,6 +1558,7 @@ class ProjectAdminService:
         company_id: uuid.UUID,
         project_id: uuid.UUID,
         order_number: str | None = None,
+        locale: str = "en",
     ) -> dict:
         project = uow.projects.get(company_id=company_id, project_id=project_id)
         if not project:
@@ -1208,15 +1582,58 @@ class ProjectAdminService:
             allowed_door_ids = {d.id for d in doors}
             issues = [i for i in issues if i.door_id in allowed_door_ids]
 
+        waze_deep_link, whatsapp_deep_link, call_deep_link = _project_action_links(project, locale=locale)
+        address_lat = format_coordinate(getattr(project, "address_lat", None))
+        address_lng = format_coordinate(getattr(project, "address_lng", None))
+
         return {
             "id": project.id,
             "name": project.name,
-            "address": project.address,
+            "code": getattr(project, "code", None),
+            "address": _project_address(project),
+            "address_details": {
+                "street": getattr(project, "address_street", None),
+                "building": getattr(project, "address_building", None),
+                "city": getattr(project, "address_city", None),
+                "entrance": getattr(project, "address_entrance", None),
+                "lat": address_lat,
+                "lng": address_lng,
+                "waze_url": getattr(project, "address_waze_url", None),
+                "waze_deep_link": waze_deep_link,
+            },
+            "planned_start_date": getattr(project, "planned_start_date", None),
+            "planned_end_date": getattr(project, "planned_end_date", None),
             "status": _status_value(project.status),
+            "lifecycle_status": project.lifecycle_status,
+            "health_status": project.health_status,
+            "developer": {
+                "name": project.developer_company,
+                "contact_name": project.contact_name,
+                "phone": project.contact_phone,
+                "phone_alt": getattr(project, "developer_phone_alt", None),
+                "whatsapp": getattr(project, "developer_whatsapp", None),
+                "email": project.contact_email,
+                "notes": getattr(project, "developer_notes", None),
+                "whatsapp_deep_link": whatsapp_deep_link,
+                "call_deep_link": call_deep_link,
+            },
             "developer_company": project.developer_company,
             "contact_name": project.contact_name,
             "contact_phone": project.contact_phone,
             "contact_email": project.contact_email,
+            "developer_phone_alt": getattr(project, "developer_phone_alt", None),
+            "developer_whatsapp": getattr(project, "developer_whatsapp", None),
+            "developer_notes": getattr(project, "developer_notes", None),
+            "address_street": getattr(project, "address_street", None),
+            "address_building": getattr(project, "address_building", None),
+            "address_city": getattr(project, "address_city", None),
+            "address_entrance": getattr(project, "address_entrance", None),
+            "address_lat": address_lat,
+            "address_lng": address_lng,
+            "address_waze_url": getattr(project, "address_waze_url", None),
+            "waze_deep_link": waze_deep_link,
+            "whatsapp_deep_link": whatsapp_deep_link,
+            "call_deep_link": call_deep_link,
             "doors": [
                 {
                     "id": d.id,
@@ -1360,3 +1777,23 @@ class ProjectAdminService:
             door_id=door_id,
             installer_id=installer_id,
         )
+
+    @staticmethod
+    def bulk_assign_installer_to_doors(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        door_ids: list[uuid.UUID],
+        installer_id: uuid.UUID,
+    ) -> dict:
+        assigned, skipped, assigned_door_ids = ProjectUseCases.assign_installer_to_doors(
+            uow,
+            company_id=company_id,
+            door_ids=door_ids,
+            installer_id=installer_id,
+        )
+        return {
+            "assigned": assigned,
+            "skipped": skipped,
+            "assigned_door_ids": assigned_door_ids,
+        }

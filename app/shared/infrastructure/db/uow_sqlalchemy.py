@@ -23,18 +23,22 @@ from app.modules.journal.infrastructure.repositories import JournalRepository
 from app.modules.calendar.infrastructure.repositories import CalendarRepository
 from app.modules.installers.infrastructure.repositories import InstallerRepository
 from app.modules.installers.infrastructure.rates_repository import InstallerRatesRepository
+from app.modules.library.infrastructure.repositories import ProductLibraryRepository
 from app.modules.outbox.infrastructure.repositories import OutboxRepository
 from app.modules.files.infrastructure.repositories import (
     FileDownloadEventRepository,
     FileTokenRepository,
 )
+from app.modules.documents.infrastructure.repositories import DocumentRepository
 from app.modules.addons.infrastructure.repositories import (
     AddonTypeRepository,
     ProjectAddonFactRepository,
     ProjectAddonPlanRepository,
+    ProjectUrgencySurchargeRepository,
 )
 from app.modules.sync.infrastructure.repositories import (
     InstallerSyncStateRepository,
+    InstallerSyncQueueRepository,
     SyncChangeLogGCRepository,
     SyncChangeLogRepository,
     SyncEventRepository,
@@ -66,15 +70,21 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
         self.calendar = CalendarRepository(self.session)
         self.installers = InstallerRepository(self.session)
         self.installer_rates = InstallerRatesRepository(self.session)
+        self.product_library = ProductLibraryRepository(self.session)
         self.outbox = OutboxRepository(self.session)
         self.file_tokens = FileTokenRepository(self.session)
         self.file_download_events = FileDownloadEventRepository(self.session)
+        self.documents = DocumentRepository(self.session)
         self.addon_types = AddonTypeRepository(self.session)
         self.addon_plans = ProjectAddonPlanRepository(self.session)
         self.addon_facts = ProjectAddonFactRepository(self.session)
+        self.project_urgency_surcharges = ProjectUrgencySurchargeRepository(
+            self.session
+        )
         self.sync_events = SyncEventRepository(self.session)
         self.sync_change_log = SyncChangeLogRepository(self.session)
         self.sync_state = InstallerSyncStateRepository(self.session)
+        self.sync_queue = InstallerSyncQueueRepository(self.session)
         self.sync_change_gc = SyncChangeLogGCRepository(self.session)
         self.door_types = DoorTypeRepository(self.session)
         self.reasons = ReasonRepository(self.session)

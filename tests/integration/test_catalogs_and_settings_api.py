@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
 
 from app.core.config import settings
 from app.modules.audit.infrastructure.models import AuditLogORM
+from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.infrastructure.models import DoorORM
 from app.integrations.email.smtp_sender import SmtpEmailSender
 from app.integrations.whatsapp.twilio_sender import TwilioWhatsAppSender
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
+from app.modules.reasons.infrastructure.default_seed import (
+    DEFAULT_REASONS,
+    seed_default_reasons,
+)
+from app.modules.reasons.infrastructure.models import ReasonORM
 
 
 def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectORM:
@@ -15,6 +24,7 @@ def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectO
         company_id=company_id,
         name=name,
         address=f"{name} address",
+        contact_email="developer@example.com",
         status=ProjectStatus.OK,
     )
     db_session.add(row)
@@ -112,6 +122,50 @@ def test_reasons_admin_crud_flow(client_admin_real_uow):
     assert all(x["id"] != reason_id for x in list_after_delete.json())
 
 
+def test_default_reason_seed_populates_active_admin_catalog(
+    client_admin_real_uow,
+    db_session,
+    company_id,
+):
+    summary = seed_default_reasons(db_session, company_id=company_id)
+    db_session.commit()
+
+    assert summary["created"] == len(DEFAULT_REASONS)
+
+    list_resp = client_admin_real_uow.get(
+        "/api/v1/admin/reasons?is_active=true&limit=200"
+    )
+    assert list_resp.status_code == 200, list_resp.text
+    codes = {item["code"] for item in list_resp.json()}
+    expected_codes = {item.code for item in DEFAULT_REASONS}
+    assert expected_codes.issubset(codes)
+    assert all(code == code.lower() for code in expected_codes)
+
+    first_default = DEFAULT_REASONS[0]
+    row = (
+        db_session.query(ReasonORM)
+        .filter(
+            ReasonORM.company_id == company_id,
+            ReasonORM.code == first_default.code,
+        )
+        .one()
+    )
+    row.name = "Old inactive label"
+    row.is_active = False
+    row.deleted_at = datetime.now(timezone.utc)
+    db_session.add(row)
+    db_session.commit()
+
+    repair_summary = seed_default_reasons(db_session, company_id=company_id)
+    db_session.commit()
+    db_session.refresh(row)
+
+    assert repair_summary["created"] == 0
+    assert row.name == first_default.name
+    assert row.is_active is True
+    assert row.deleted_at is None
+
+
 def test_settings_company_and_integrations_endpoints(client_admin_real_uow):
     get_company = client_admin_real_uow.get("/api/v1/admin/settings/company")
     assert get_company.status_code == 200, get_company.text
@@ -170,6 +224,7 @@ def test_settings_communication_templates_crud_and_preview(
     client_admin_real_uow,
     db_session,
     company_id,
+    make_door_type,
 ):
     list_resp = client_admin_real_uow.get(
         "/api/v1/admin/settings/communication-templates"
@@ -212,6 +267,21 @@ def test_settings_communication_templates_crud_and_preview(
         company_id=company_id,
         name="Communications Project",
     )
+    door_type = make_door_type(name="Communication Door")
+    db_session.add(
+        DoorORM(
+            company_id=company_id,
+            project_id=project.id,
+            door_type_id=door_type.id,
+            unit_label="A-101",
+            door_code="COMM-A-101",
+            our_price=Decimal("100.00"),
+            status=DoorStatus.INSTALLED,
+            installed_at=datetime.now(timezone.utc),
+            is_locked=True,
+        )
+    )
+    db_session.commit()
     journal_id = _create_journal(client_admin_real_uow, project_id=project.id)
     mark_ready_resp = client_admin_real_uow.post(
         f"/api/v1/admin/journals/{journal_id}/mark-ready"
@@ -321,7 +391,7 @@ def test_catalogs_and_settings_forbidden_for_installer_role(client_installer):
     for path in endpoints:
         resp = client_installer.get(path)
         assert resp.status_code == 403, f"{path}: {resp.text}"
-        assert resp.json()["error"]["code"] == "FORBIDDEN"
+        assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     for path, payload in (
         (
@@ -335,4 +405,4 @@ def test_catalogs_and_settings_forbidden_for_installer_role(client_installer):
     ):
         resp = client_installer.post(path, json=payload)
         assert resp.status_code == 403, f"{path}: {resp.text}"
-        assert resp.json()["error"]["code"] == "FORBIDDEN"
+        assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"

@@ -3,7 +3,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,9 +25,16 @@ from app.shared.infrastructure.db.base import (
 
 class FileDownloadTokenORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "file_download_tokens"
+    __table_args__ = (
+        UniqueConstraint("token", name="uq_file_download_tokens_token"),
+        CheckConstraint(
+            "uses_left >= 0",
+            name="ck_file_download_tokens_uses_left_non_negative",
+        ),
+    )
 
     token: Mapped[str] = mapped_column(
-        String(120), nullable=False, unique=True, index=True
+        String(120), nullable=False, index=True
     )
 
     object_key: Mapped[str] = mapped_column(String(800), nullable=False)
@@ -46,6 +61,10 @@ class FileDownloadTokenORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixi
 
 class FileDownloadEventORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "file_download_events"
+    __table_args__ = (
+        Index("ix_file_download_events_correlation_id", "correlation_id"),
+        Index("ix_file_download_events_created_at", "created_at"),
+    )
 
     source: Mapped[str] = mapped_column(String(30), nullable=False)
     token: Mapped[str | None] = mapped_column(String(120), nullable=True)

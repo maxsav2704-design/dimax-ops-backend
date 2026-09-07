@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -16,10 +16,13 @@ class AddonTypeMini(BaseModel):
 
 
 class PlanItemDTO(BaseModel):
+    id: UUID | None = None
     addon_type_id: UUID
+    addon_name: str | None = None
     qty_planned: Decimal
     client_price: Decimal
     installer_price: Decimal
+    notes: str | None = None
 
 
 class FactItemDTO(BaseModel):
@@ -52,6 +55,35 @@ class ProjectAddonsResponse(BaseModel):
 
 class PlanBatchBody(BaseModel):
     items: list[PlanItemDTO]
+
+
+class ProjectAddonPlanListResponse(BaseModel):
+    items: list[PlanItemDTO]
+
+
+class UrgencySurchargeDTO(BaseModel):
+    id: UUID
+    scope: str
+    order_number: str | None
+    reason: str
+    client_amount: Decimal
+    installer_amount: Decimal
+    effective_date: date | None
+    notes: str | None
+
+
+class UrgencySurchargeListResponse(BaseModel):
+    items: list[UrgencySurchargeDTO]
+
+
+class CreateUrgencySurchargeBody(BaseModel):
+    scope: str
+    order_number: str | None = None
+    reason: str
+    client_amount: Decimal
+    installer_amount: Decimal
+    effective_date: date | None = None
+    notes: str | None = None
 
 
 class OkResponse(BaseModel):

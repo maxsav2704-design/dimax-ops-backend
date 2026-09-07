@@ -35,7 +35,21 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
             "company_id", "project_id", "unit_label", "door_type_id",
             name="uq_doors_project_unit_type",
         ),
+        UniqueConstraint(
+            "project_id",
+            "door_code",
+            name="uq_doors_project_door_code",
+        ),
         CheckConstraint("our_price >= 0", name="ck_doors_our_price_nonnegative"),
+        CheckConstraint(
+            "installer_rate_snapshot IS NULL OR installer_rate_snapshot > 0",
+            name="ck_doors_installer_rate_positive",
+        ),
+        CheckConstraint(
+            "surcharge_pct >= 0",
+            name="ck_doors_surcharge_nonnegative",
+        ),
+        CheckConstraint("version >= 0", name="ck_doors_version_nonnegative"),
         Index("ix_doors_project_status", "project_id", "status"),
     )
 
@@ -55,6 +69,7 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
 
     # "квартира/номер" — универсальная метка (apt 12, stair A-3, storage 7 и т.д.)
     unit_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    door_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
     order_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
     house_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     floor_label: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -66,12 +81,16 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     installer_rate_snapshot: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    apply_surcharge_to_installer: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
 
     status: Mapped[DoorStatus] = mapped_column(
         Enum(DoorStatus, name="door_status"),
         nullable=False,
         default=DoorStatus.NOT_INSTALLED,
-        index=True,
     )
 
     installer_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -97,6 +116,13 @@ class DoorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
 
     # "замок" на уровне домена: как только INSTALLED → true (и дальше только admin override)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_critical: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    version: Mapped[int] = mapped_column(default=0, nullable=False)
+    surcharge_pct: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2),
+        default=Decimal("100.00"),
+        nullable=False,
+    )
 
     # Связи
     project: Mapped["ProjectORM"] = relationship(back_populates="doors")

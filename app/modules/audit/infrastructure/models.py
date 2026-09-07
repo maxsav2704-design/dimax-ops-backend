@@ -33,7 +33,7 @@ class AuditLogORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class AuditAlertReadCursorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
+class AuditAlertReadCursorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "audit_alert_read_cursors"
     __table_args__ = (
         UniqueConstraint(
@@ -43,6 +43,12 @@ class AuditAlertReadCursorORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantM
         ),
     )
 
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),

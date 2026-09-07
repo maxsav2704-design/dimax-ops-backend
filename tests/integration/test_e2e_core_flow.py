@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from urllib.parse import urlparse
 
 from app.modules.identity.domain.enums import UserRole
@@ -17,6 +18,7 @@ def _login(client_raw, *, company_id: str, email: str, password: str) -> dict:
             "company_id": company_id,
             "email": email,
             "password": password,
+            "device_id": f"e2e-{email}",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -69,12 +71,28 @@ def test_e2e_auth_projects_addons_journal_sync_flow(
     create_project_resp = client_raw.post(
         "/api/v1/admin/projects",
         headers=admin_headers,
-        json={"name": "E2E Project", "address": "E2E Address"},
+        json={
+            "name": "E2E Project",
+            "address": "E2E Address",
+            "contact_email": "developer.e2e@example.com",
+        },
     )
     assert create_project_resp.status_code == 200, create_project_resp.text
     project_id = create_project_resp.json()["id"]
 
     door_type = make_door_type(name="E2E Door Type")
+    create_rate_resp = client_raw.post(
+        "/api/v1/admin/installer-rates",
+        headers=admin_headers,
+        json={
+            "installer_id": installer_id,
+            "door_type_id": str(door_type.id),
+            "price": "80.00",
+        },
+    )
+    assert create_rate_resp.status_code == 201, create_rate_resp.text
+    assert create_rate_resp.json()["price"] == "80.00"
+
     import_resp = client_raw.post(
         f"/api/v1/admin/projects/{project_id}/doors/import",
         headers=admin_headers,
@@ -235,7 +253,98 @@ def test_e2e_auth_projects_addons_journal_sync_flow(
     assert (
         installer_project_details_resp.status_code == 200
     ), installer_project_details_resp.text
-    assert installer_project_details_resp.json()["id"] == project_id
+    installer_project_details = installer_project_details_resp.json()
+    assert installer_project_details["id"] == project_id
+    installer_door = installer_project_details["doors"][0]
+    assert installer_door["id"] == door_id
+    assert isinstance(installer_door["version"], int)
+
+    install_sync_resp = client_raw.post(
+        "/api/v1/installer/sync",
+        headers=installer_headers,
+        json={
+            "since_cursor": sync_body["next_cursor"],
+            "ack_cursor": sync_body["next_cursor"],
+            "events": [
+                {
+                    "client_event_id": "e2e-door-installed-0001",
+                    "type": "DOOR_SET_STATUS",
+                    "project_id": project_id,
+                    "payload": {
+                        "door_id": door_id,
+                        "status": "INSTALLED",
+                        "previous_version": installer_door["version"],
+                    },
+                }
+            ],
+            "app_version": "e2e",
+            "device_id": "e2e-device",
+        },
+    )
+    assert install_sync_resp.status_code == 200, install_sync_resp.text
+    install_sync_body = install_sync_resp.json()
+    assert install_sync_body["acks"] == [
+        {
+            "client_event_id": "e2e-door-installed-0001",
+            "ok": True,
+            "applied": True,
+            "error": None,
+        }
+    ]
+    assert any(
+        change["change_type"] == "DOOR"
+        and change["payload"]["id"] == door_id
+        and change["payload"]["status"] == "INSTALLED"
+        for change in install_sync_body["changes"]
+    )
+
+    installed_details_resp = client_raw.get(
+        f"/api/v1/admin/projects/{project_id}",
+        headers=admin_headers,
+    )
+    assert installed_details_resp.status_code == 200, installed_details_resp.text
+    installed_door = installed_details_resp.json()["doors"][0]
+    assert installed_door["status"] == "INSTALLED"
+    assert installed_door["is_locked"] is True
+
+    ledger_resp = client_raw.get(
+        (
+            "/api/v1/admin/earnings/ledger"
+            f"?installer_id={installer_id}"
+            f"&project_id={project_id}"
+            "&work_kind=DOOR&entry_type=ORIGINAL"
+        ),
+        headers=admin_headers,
+    )
+    assert ledger_resp.status_code == 200, ledger_resp.text
+    door_ledger_rows = [
+        item for item in ledger_resp.json()["items"] if item["door_id"] == door_id
+    ]
+    assert len(door_ledger_rows) == 1
+    assert door_ledger_rows[0]["door_label"] == "A-01"
+    assert door_ledger_rows[0]["rate_snapshot"] == "80.00"
+    assert door_ledger_rows[0]["amount_snapshot"] == "80.00"
+
+    earnings_resp = client_raw.get(
+        "/api/v1/installer/earnings/summary?period=day",
+        headers=installer_headers,
+    )
+    assert earnings_resp.status_code == 200, earnings_resp.text
+    earnings_body = earnings_resp.json()
+    assert Decimal(earnings_body["today_total"]) >= Decimal("80.00")
+    assert any(
+        row["door_label"] == "A-01" and row["amount"] == "80.00"
+        for row in earnings_body["rows"]
+    )
+
+    kpi_resp = client_raw.get(
+        "/api/v1/admin/reports/kpi",
+        headers=admin_headers,
+    )
+    assert kpi_resp.status_code == 200, kpi_resp.text
+    kpi_body = kpi_resp.json()
+    assert kpi_body["installed_doors"] >= 1
+    assert Decimal(kpi_body["payroll_total"]) >= Decimal("80.00")
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
     calendar_create_resp = client_raw.post(

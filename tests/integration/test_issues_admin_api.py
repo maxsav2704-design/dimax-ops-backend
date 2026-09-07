@@ -77,6 +77,16 @@ def test_admin_issues_list_get_and_update_status(
     assert get_resp.status_code == 200, get_resp.text
     assert get_resp.json()["id"] == str(issue.id)
 
+    comments_resp = client_admin_real_uow.get(
+        f"/api/v1/admin/issues/{issue.id}/comments"
+    )
+    assert comments_resp.status_code == 200, comments_resp.text
+    assert comments_resp.json() == {"items": []}
+
+    media_resp = client_admin_real_uow.get(f"/api/v1/admin/issues/{issue.id}/media")
+    assert media_resp.status_code == 200, media_resp.text
+    assert media_resp.json() == {"items": []}
+
     patch_resp = client_admin_real_uow.patch(
         f"/api/v1/admin/issues/{issue.id}/status",
         json={"status": "CLOSED", "details": "Resolved by admin"},
@@ -303,21 +313,21 @@ def test_admin_issues_forbidden_for_installer(client_installer):
     issue_id = uuid.uuid4()
     list_resp = client_installer.get("/api/v1/admin/issues")
     assert list_resp.status_code == 403, list_resp.text
-    assert list_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert list_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     patch_resp = client_installer.patch(
         f"/api/v1/admin/issues/{issue_id}/status",
         json={"status": "CLOSED"},
     )
     assert patch_resp.status_code == 403, patch_resp.text
-    assert patch_resp.json()["error"]["code"] == "FORBIDDEN"
+    assert patch_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     patch_workflow = client_installer.patch(
         f"/api/v1/admin/issues/{issue_id}/workflow",
         json={"workflow_state": "TRIAGED"},
     )
     assert patch_workflow.status_code == 403, patch_workflow.text
-    assert patch_workflow.json()["error"]["code"] == "FORBIDDEN"
+    assert patch_workflow.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
     patch_bulk = client_installer.patch(
         "/api/v1/admin/issues/workflow/bulk",
@@ -327,4 +337,10 @@ def test_admin_issues_forbidden_for_installer(client_installer):
         },
     )
     assert patch_bulk.status_code == 403, patch_bulk.text
-    assert patch_bulk.json()["error"]["code"] == "FORBIDDEN"
+    assert patch_bulk.json()["error"]["code"] == "FORBIDDEN_SCOPE"
+
+
+def test_authenticated_media_url_returns_404_until_media_store_exists(client_installer):
+    resp = client_installer.get(f"/api/v1/media/{uuid.uuid4()}/url")
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["error"]["code"] == "NOT_FOUND"

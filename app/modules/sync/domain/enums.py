@@ -4,6 +4,7 @@ from enum import Enum
 class SyncEventType(str, Enum):
     DOOR_SET_STATUS = "DOOR_SET_STATUS"
     ADDON_FACT_CREATE = "ADDON_FACT_CREATE"
+    ISSUE_CREATE = "ISSUE_CREATE"
 
 
 class SyncChangeType(str, Enum):

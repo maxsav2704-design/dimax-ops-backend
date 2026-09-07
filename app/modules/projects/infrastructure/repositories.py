@@ -51,8 +51,13 @@ class ProjectRepository:
             like = f"%{q.strip()}%"
             query = query.filter(
                 or_(
+                    ProjectORM.code.ilike(like),
                     ProjectORM.name.ilike(like),
                     ProjectORM.address.ilike(like),
+                    ProjectORM.address_street.ilike(like),
+                    ProjectORM.address_city.ilike(like),
+                    ProjectORM.developer_company.ilike(like),
+                    ProjectORM.contact_name.ilike(like),
                 )
             )
 

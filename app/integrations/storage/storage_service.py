@@ -4,8 +4,6 @@ from threading import Lock
 from datetime import timedelta
 from io import BytesIO
 
-from minio.error import S3Error
-
 from app.core.config import settings
 from app.integrations.storage.minio_client import get_minio
 
@@ -16,6 +14,8 @@ _BUCKET_LOCK = Lock()
 class StorageService:
     @staticmethod
     def _ensure_bucket_exists(*, bucket_name: str) -> None:
+        from minio.error import S3Error
+
         if bucket_name in _BUCKET_READY:
             return
         with _BUCKET_LOCK:
@@ -50,6 +50,19 @@ class StorageService:
         )
 
     @staticmethod
+    def put_object(*, object_key: str, content: bytes, content_type: str) -> None:
+        StorageService._ensure_bucket_exists(bucket_name=settings.MINIO_BUCKET)
+        client = get_minio()
+        data = BytesIO(content)
+        client.put_object(
+            bucket_name=settings.MINIO_BUCKET,
+            object_name=object_key,
+            data=data,
+            length=len(content),
+            content_type=content_type,
+        )
+
+    @staticmethod
     def presign_get(
         *, object_key: str, expiry_seconds: int | None = None
     ) -> str:
@@ -81,6 +94,18 @@ class StorageService:
             bucket_name=settings.MINIO_BUCKET,
             object_name=object_key,
         )
+        try:
+            return resp.read()
+        finally:
+            resp.close()
+            resp.release_conn()
+
+    @staticmethod
+    def get_object_bytes(*, bucket: str, object_key: str) -> bytes:
+        """Download arbitrary object from MinIO as bytes."""
+        StorageService._ensure_bucket_exists(bucket_name=bucket)
+        client = get_minio()
+        resp = client.get_object(bucket_name=bucket, object_name=object_key)
         try:
             return resp.read()
         finally:

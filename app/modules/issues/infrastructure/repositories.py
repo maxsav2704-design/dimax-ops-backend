@@ -134,6 +134,26 @@ class IssueRepository:
             .all()
         )
 
+    def list_created_by_user(
+        self,
+        *,
+        company_id: uuid.UUID,
+        created_by_user_id: uuid.UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[IssueORM]:
+        return (
+            self.session.query(IssueORM)
+            .filter(
+                IssueORM.company_id == company_id,
+                IssueORM.created_by_user_id == created_by_user_id,
+            )
+            .order_by(IssueORM.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
+
     def _find_sync_risk_issue(
         self, *, company_id: uuid.UUID, project_id: uuid.UUID
     ) -> IssueORM | None:

@@ -7,11 +7,18 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security.password import hash_password
-from app.shared.infrastructure.db.session import SessionLocal
-from app.modules.identity.domain.enums import UserRole
-from app.modules.identity.infrastructure.models import CompanyORM, UserORM
+from app.modules.companies.application.service import CompaniesPlatformService
+from app.modules.companies.infrastructure.models import CompanyPlanORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
+from app.modules.identity.domain.enums import AdminScope, UserRole
+from app.modules.identity.infrastructure.models import (
+    AdminProfileORM,
+    CompanyORM,
+    UserORM,
+)
+from app.modules.reasons.infrastructure.default_seed import seed_default_reasons
 from app.modules.reasons.infrastructure.models import ReasonORM
+from app.shared.infrastructure.db.session import SessionLocal
 
 
 @dataclass(frozen=True)
@@ -28,29 +35,21 @@ DEFAULT_DOOR_TYPES = [
     ("FIRE", "Fire Door"),
 ]
 
-DEFAULT_REASONS = [
-    ("MISSING_PARTS", "Missing parts"),
-    ("DAMAGED", "Damaged door"),
-    ("WRONG_SIZE", "Wrong size"),
-    ("SITE_NOT_READY", "Site not ready"),
-    ("CLIENT_REQUEST", "Client request"),
-]
 
-def run_seed(cfg: SeedConfig) -> None:
-    session: Session = SessionLocal()
+def run_seed(cfg: SeedConfig, *, session_factory=SessionLocal) -> None:
+    session: Session = session_factory()
     try:
-        # 1) Company: find or create
         company = (
             session.query(CompanyORM)
             .filter(CompanyORM.name == cfg.company_name)
             .one_or_none()
         )
-        if not company:
+        company_created = company is None
+        if company is None:
             company = CompanyORM(name=cfg.company_name, is_active=True)
             session.add(company)
-            session.flush()  # получаем company.id
+            session.flush()
 
-        # 2) Admin user: find or create (by email in this company)
         admin = (
             session.query(UserORM)
             .filter(
@@ -59,7 +58,8 @@ def run_seed(cfg: SeedConfig) -> None:
             )
             .one_or_none()
         )
-        if not admin:
+        admin_created = admin is None
+        if admin is None:
             admin = UserORM(
                 company_id=company.id,
                 email=cfg.admin_email.lower(),
@@ -69,28 +69,49 @@ def run_seed(cfg: SeedConfig) -> None:
                 is_active=True,
             )
             session.add(admin)
+            session.flush()
 
-        # 3) Door types: upsert by code
+        admin_profile = (
+            session.query(AdminProfileORM)
+            .filter(
+                AdminProfileORM.company_id == company.id,
+                AdminProfileORM.user_id == admin.id,
+            )
+            .one_or_none()
+        )
+        if admin_profile is None:
+            session.add(
+                AdminProfileORM(
+                    company_id=company.id,
+                    user_id=admin.id,
+                    admin_scope=AdminScope.OWNER.value,
+                    can_view_rates=True,
+                    can_manage_imports=True,
+                    can_manage_users=True,
+                )
+            )
+
+        company_plan = (
+            session.query(CompanyPlanORM)
+            .filter(CompanyPlanORM.company_id == company.id)
+            .one_or_none()
+        )
+        if company_plan is None:
+            session.add(CompaniesPlatformService.build_default_plan(company.id))
+
         _upsert_catalog(
             session=session,
             company_id=company.id,
             model=DoorTypeORM,
             items=DEFAULT_DOOR_TYPES,
         )
-
-        # 4) Reasons: upsert by code
-        _upsert_catalog(
-            session=session,
-            company_id=company.id,
-            model=ReasonORM,
-            items=DEFAULT_REASONS,
-        )
+        seed_default_reasons(session=session, company_id=company.id)
 
         session.commit()
-        print("✅ Seed completed")
+        print("Seed completed")
         print(f"Company: {company.name} ({company.id})")
-        print(f"Admin: {cfg.admin_email} / {cfg.admin_password}")
-
+        print(f"Admin: {cfg.admin_email}")
+        print(f"Created: company={company_created}, admin={admin_created}")
     except Exception:
         session.rollback()
         raise

@@ -4,7 +4,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.api.v1.deps import (
+    CurrentUser,
+    ensure_admin_can_view_rates,
+    get_uow,
+    require_admin,
+)
 from app.modules.addons.api.admin_schemas import (
     AddonTypeDTO,
     AddonTypeListResponse,
@@ -24,6 +29,7 @@ def list_types(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return AddonsAdminApiService.list_types(uow, company_id=user.company_id)
 
 
@@ -34,6 +40,7 @@ def create_type(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return AddonsAdminApiService.create_type(
             uow,
             company_id=user.company_id,
@@ -52,6 +59,7 @@ def set_plan(
     uow=Depends(get_uow),
 ):
     with uow:
+        ensure_admin_can_view_rates(uow, user)
         return AddonsAdminApiService.set_plan(
             uow,
             company_id=user.company_id,
@@ -60,4 +68,5 @@ def set_plan(
             qty_planned=body.qty_planned,
             client_price=body.client_price,
             installer_price=body.installer_price,
+            notes=body.notes,
         )
