@@ -115,6 +115,12 @@ jobs:
       - name: Prepare env
         run: cp .env.example .env
 
+      - name: Start database
+        run: docker compose up -d --wait db
+
+      - name: Apply migrations
+        run: docker compose run --rm --no-deps api alembic upgrade head
+
       - name: Run error envelope contract tests
         run: >
           docker compose run --rm --no-deps api pytest -q
@@ -122,6 +128,10 @@ jobs:
           tests/integration/test_admin_access_and_validation.py
           tests/integration/test_installers_link_user_api.py
           tests/integration/test_installer_rates_api.py
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v
 
   integration:
     runs-on: ubuntu-latest
