@@ -70,16 +70,6 @@ def _request_query_keys(request: Request) -> list[str]:
 def create_app() -> FastAPI:
     app = FastAPI(title="DIMAX Operations Suite")
     install_error_handlers(app)
-    origins = _cors_origins()
-    if origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-
     @app.middleware("http")
     async def request_observability(request: Request, call_next):
         request_id = _request_id(request)
@@ -130,6 +120,18 @@ def create_app() -> FastAPI:
             return response
         finally:
             reset_request_id(token)
+
+    # CORS must also wrap the safe 500 response produced by observability.
+    origins = _cors_origins()
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID"],
+        )
 
     @app.get("/health")
     def health() -> dict:
