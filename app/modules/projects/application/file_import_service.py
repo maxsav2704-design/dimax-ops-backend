@@ -1195,12 +1195,17 @@ def _parse_quantity(value: str | None) -> int:
     if not text:
         return 1
     try:
-        qty = int(float(text.replace(",", ".")))
-    except ValueError as e:
+        qty = Decimal(text.replace(",", "."))
+    except InvalidOperation as e:
         raise HTTPException(status_code=422, detail=f"invalid quantity: {value}") from e
+    if not qty.is_finite() or qty != qty.to_integral_value():
+        raise HTTPException(
+            status_code=422,
+            detail=f"quantity must be a finite whole number: {value}",
+        )
     if qty < 1 or qty > 1000:
         raise HTTPException(status_code=422, detail=f"quantity out of range: {value}")
-    return qty
+    return int(qty)
 
 
 def _parse_price(value: str | None, default_price: Decimal) -> Decimal:
@@ -1210,6 +1215,8 @@ def _parse_price(value: str | None, default_price: Decimal) -> Decimal:
         price = Decimal(value.replace(",", ".").strip())
     except InvalidOperation as e:
         raise HTTPException(status_code=422, detail=f"invalid price: {value}") from e
+    if not price.is_finite():
+        raise HTTPException(status_code=422, detail=f"price must be finite: {value}")
     if price < 0:
         raise HTTPException(status_code=422, detail=f"price must be >= 0: {value}")
     return price
@@ -1229,6 +1236,8 @@ def _import_fingerprint(
     allow_partial_import: bool,
 ) -> str:
     metadata = {
+        # Do not reuse previews produced by the former float/truncation parser.
+        "numeric_validation_version": 2,
         "filename": filename,
         "default_door_type_id": str(default_door_type_id) if default_door_type_id else None,
         "default_our_price": str(default_our_price),

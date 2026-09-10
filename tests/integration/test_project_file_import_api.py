@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import uuid
@@ -11,6 +12,8 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+
+from app.modules.projects.application import file_import_service
 
 
 def _b64(text: str) -> str:
@@ -220,6 +223,48 @@ def test_project_import_invalid_numbers_require_explicit_partial_import(
     assert len(doors) == 1
     assert doors[0]["door_marking"] == "VALID"
     assert str(doors[0]["our_price"]) in {"1000", "1000.0", "1000.00"}
+
+
+def test_project_import_revalidates_legacy_numeric_preview(client_admin_real_uow, monkeypatch):
+    project_id = _create_project(client_admin_real_uow, name="Legacy Numeric Preview")
+    _create_door_type(client_admin_real_uow, code="entrance", name="Entrance")
+    payload = {
+        "filename": "legacy.csv",
+        "content_base64": _b64(
+            "house,floor,apartment,marking,door_type,qty,price\n"
+            "A,1,101,VALID,entrance,1,1000\n"
+            "A,1,102,FRACTION,entrance,1.5,1000\n"
+        ),
+        "analyze_only": True,
+    }
+
+    def legacy_fingerprint(**kwargs):
+        content = kwargs.pop("content")
+        kwargs["default_door_type_id"] = (
+            str(kwargs["default_door_type_id"]) if kwargs["default_door_type_id"] else None
+        )
+        kwargs["default_our_price"] = str(kwargs["default_our_price"])
+        digest = hashlib.sha256(content)
+        digest.update(json.dumps(kwargs, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+        return digest.hexdigest()
+
+    path = f"/api/v1/admin/projects/{project_id}/doors/import-file"
+    with monkeypatch.context() as legacy:
+        legacy.setattr(file_import_service, "_import_fingerprint", legacy_fingerprint)
+        legacy.setattr(file_import_service, "_parse_quantity", lambda value: int(float(value)))
+        old = client_admin_real_uow.post(path, json=payload)
+        assert old.status_code == 200, old.text
+        assert old.json()["prepared_rows"] == 2
+
+    fresh = client_admin_real_uow.post(path, json=payload)
+    assert fresh.status_code == 200, fresh.text
+    assert fresh.json()["idempotency_hit"] is False
+    assert fresh.json()["prepared_rows"] == 1
+    assert len(fresh.json()["errors"]) == 1
+    assert client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}").json()["doors"] == []
+    repeated = client_admin_real_uow.post(path, json=payload)
+    assert repeated.json()["idempotency_hit"] is True
+    assert repeated.json()["prepared_rows"] == 1
 
 
 def test_project_import_file_csv_populates_structured_doors(client_admin_real_uow):

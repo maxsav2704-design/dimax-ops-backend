@@ -28,6 +28,24 @@ date, workspace reconciliation, DST short/long days, exclusive range ends and
 preservation of stored work timestamps and amounts. This API evidence does not
 replace native-device or live UI acceptance.
 
+## Import Numeric Contract
+
+Imported door quantities must be finite whole numbers from 1 to 1000. Decimal
+and comma notation for whole numbers remain accepted; fractional quantities must
+never be silently truncated. Prices must be finite nonnegative decimals. Blank
+values retain the existing quantity/default-price behavior.
+
+```bash
+pytest -q tests/integration/test_file_import_numeric_validation.py tests/integration/test_project_file_import_api.py
+```
+
+Tests cover numeric boundaries, preview without door writes, atomic refusal of
+invalid files, explicit partial import and revalidation of pre-fix cached previews.
+The fingerprint version changes; existing door identity still prevents repeat
+inserts and import history is retained. No stored quantities are automatically
+repaired: historical files with fractional quantities need reconciliation against
+their source. No database migration or public API field changes are required.
+
 ## Workspace Test Runtime
 
 From workspace root you can use the isolated test compose without `uvicorn --reload`:
