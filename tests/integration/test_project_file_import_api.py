@@ -7,6 +7,7 @@ import uuid
 import zipfile
 from html import escape
 
+import pytest
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -175,6 +176,50 @@ def _create_door_type(client_admin_real_uow, *, code: str, name: str) -> str:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+@pytest.mark.parametrize(
+    ("quantity", "price", "message"),
+    [
+        (1.5, 1000, "quantity must be a finite whole number"),
+        ("1.00000000000000001", 1000, "quantity must be a finite whole number"),
+        (1, "Infinity", "price must be finite"),
+    ],
+)
+def test_project_import_invalid_numbers_require_explicit_partial_import(
+    client_admin_real_uow, quantity, price, message
+):
+    project_id = _create_project(client_admin_real_uow, name="Numeric Import Safety")
+    _create_door_type(client_admin_real_uow, code="entrance", name="Entrance")
+    workbook = _xlsx_bytes(
+        ["order_number", "house", "floor", "apartment", "marking", "door_type", "qty", "price"],
+        [
+            ["QA-NUM", "A", "1", "101", "VALID", "entrance", 1, 1000],
+            ["QA-NUM", "A", "1", "102", "INVALID", "entrance", quantity, price],
+        ],
+    )
+    path = f"/api/v1/admin/projects/{project_id}/doors/import-upload"
+    files = {"file": ("numeric-input.xlsx", workbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    preview = client_admin_real_uow.post(path, files=files, data={"analyze_only": "true"})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["prepared_rows"] == 1
+    assert preview.json()["would_import"] == 1
+    assert len(preview.json()["errors"]) == 1
+    assert preview.json()["errors"][0]["row"] == 2
+    assert message in preview.json()["errors"][0]["message"]
+    assert client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}").json()["doors"] == []
+
+    strict = client_admin_real_uow.post(path, files=files)
+    assert strict.status_code == 422, strict.text
+    assert client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}").json()["doors"] == []
+
+    partial = client_admin_real_uow.post(path, files=files, data={"allow_partial_import": "true"})
+    assert partial.status_code == 200, partial.text
+    assert partial.json()["imported"] == 1
+    doors = client_admin_real_uow.get(f"/api/v1/admin/projects/{project_id}").json()["doors"]
+    assert len(doors) == 1
+    assert doors[0]["door_marking"] == "VALID"
+    assert str(doors[0]["our_price"]) in {"1000", "1000.0", "1000.00"}
 
 
 def test_project_import_file_csv_populates_structured_doors(client_admin_real_uow):
