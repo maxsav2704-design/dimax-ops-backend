@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +17,7 @@ from app.modules.calendar.infrastructure.models import CalendarEventAssigneeORM,
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.earnings.application.installer_api_service import _period_bounds
 from app.modules.earnings.infrastructure.models import ClientPriceSnapshotORM, CompletedWorkORM
 from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.installers.infrastructure.models import InstallerORM
@@ -898,6 +901,132 @@ def test_installer_sync_queue_list_has_pagination_object(
     }
 
 
+@pytest.mark.parametrize(
+    ("period", "anchor", "expected_start", "expected_end"),
+    [
+        ("day", "2026-09-07", "2026-09-06T21:00:00+00:00", "2026-09-07T21:00:00+00:00"),
+        ("day", "2026-01-07", "2026-01-06T22:00:00+00:00", "2026-01-07T22:00:00+00:00"),
+        ("day", "2026-03-27", "2026-03-26T22:00:00+00:00", "2026-03-27T21:00:00+00:00"),
+        ("day", "2026-10-25", "2026-10-24T21:00:00+00:00", "2026-10-25T22:00:00+00:00"),
+        ("week", "2026-09-09", "2026-09-06T21:00:00+00:00", "2026-09-13T21:00:00+00:00"),
+        ("month", "2026-09-09", "2026-08-31T21:00:00+00:00", "2026-09-30T21:00:00+00:00"),
+        ("month", "2026-12-31", "2026-11-30T22:00:00+00:00", "2026-12-31T22:00:00+00:00"),
+    ],
+)
+def test_earnings_period_boundaries_use_jerusalem(period, anchor, expected_start, expected_end):
+    start, end = _period_bounds(period, datetime.fromisoformat(anchor).date())
+    assert start.astimezone(timezone.utc) == datetime.fromisoformat(expected_start)
+    assert end.astimezone(timezone.utc) == datetime.fromisoformat(expected_end)
+
+
+@pytest.mark.parametrize("period", ["day", "week", "month"])
+@pytest.mark.parametrize("use_default_date", [False, True])
+@pytest.mark.parametrize(
+    ("anchor", "completed_at", "week_start"),
+    [
+        ("2026-09-07", "2026-09-06T21:30:00+00:00", "2026-09-07"),
+        ("2026-09-01", "2026-08-31T21:30:00+00:00", "2026-08-31"),
+        ("2026-01-01", "2025-12-31T22:30:00+00:00", "2025-12-29"),
+    ],
+)
+def test_installer_earnings_after_local_midnight_are_in_correct_day(
+    installer_client_phase2, db_session, company_id, make_door_type, period,
+    anchor, completed_at, week_start, use_default_date,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="Local midnight", address="QA")
+    door_type = make_door_type(name="Midnight test door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id, project_id=project.id, door_type_id=door_type.id,
+        unit_label="QA-01", installer_id=installer_id,
+    )
+    db_session.add(door)
+    db_session.flush()
+    completed_at = datetime.fromisoformat(completed_at)
+    work = CompletedWorkORM(
+        company_id=company_id, project_id=project.id, door_id=door.id,
+        installer_id=installer_id, completed_at=completed_at,
+        quantity=Decimal("1.00"), rate_snapshot=Decimal("250.00"),
+        amount_snapshot=Decimal("250.00"), entry_type="ORIGINAL",
+    )
+    db_session.add(work)
+    db_session.commit()
+
+    query = f"period={period}" + ("" if use_default_date else f"&date={anchor}")
+    with patch(
+        "app.modules.earnings.application.installer_api_service.datetime", wraps=datetime,
+    ) as clock, patch(
+        "app.modules.workspace.application.installer_api_service.datetime", wraps=datetime,
+    ) as workspace_clock:
+        clock.now.side_effect = lambda tz: completed_at.astimezone(tz)
+        workspace_clock.now.side_effect = lambda tz: completed_at.astimezone(tz)
+        response = client.get(f"/api/v1/installer/earnings/summary?{query}")
+        if use_default_date and period == "month":
+            workspace = client.get("/api/v1/installer/workspace")
+            assert workspace.status_code == 200, workspace.text
+            assert workspace.json()["earnings_today"] == "250.00"
+            assert workspace.json()["earnings_summary"]["today_total"] == "250.00"
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == "250.00"
+    assert body["today_total"] == "250.00"
+    assert body["month_total"] == "250.00"
+    assert body["rows"][0]["work_date"] == anchor
+    assert body["days"] == [{"date": anchor, "amount": "250.00", "jobs_count": 1}]
+    if period == "month":
+        assert body["period_key"] == anchor[:7]
+        assert body["weekly_breakdown"] == [{"week_start": week_start, "total": "250.00"}]
+    elif period == "day":
+        assert body["period_key"] == anchor
+    else:
+        week_end = (datetime.fromisoformat(week_start) + timedelta(days=6)).date().isoformat()
+        assert body["period_key"] == f"{week_start}..{week_end}"
+    db_session.refresh(work)
+    assert work.completed_at == completed_at
+    assert work.amount_snapshot == Decimal("250.00")
+
+
+@pytest.mark.parametrize(
+    ("anchor", "start_utc", "end_utc"),
+    [
+        ("2026-03-27", "2026-03-26T22:00:00+00:00", "2026-03-27T21:00:00+00:00"),
+        ("2026-10-25", "2026-10-24T21:00:00+00:00", "2026-10-25T22:00:00+00:00"),
+    ],
+)
+def test_installer_earnings_dst_day_includes_start_and_excludes_end(
+    installer_client_phase2, db_session, company_id, make_door_type,
+    anchor, start_utc, end_utc,
+):
+    client, installer_id, _user = installer_client_phase2
+    project = _make_project(company_id=company_id, name="DST boundary", address="QA")
+    door_type = make_door_type(name="DST test door")
+    db_session.add(project)
+    db_session.flush()
+    start = datetime.fromisoformat(start_utc)
+    end = datetime.fromisoformat(end_utc)
+    for index, completed_at in enumerate((start - timedelta(microseconds=1), start, end)):
+        door = _make_door(
+            company_id=company_id, project_id=project.id, door_type_id=door_type.id,
+            unit_label=f"DST-{index}", installer_id=installer_id,
+        )
+        db_session.add(door)
+        db_session.flush()
+        db_session.add(CompletedWorkORM(
+            company_id=company_id, project_id=project.id, door_id=door.id,
+            installer_id=installer_id, completed_at=completed_at,
+            quantity=Decimal("1.00"), rate_snapshot=Decimal("250.00"),
+            amount_snapshot=Decimal("250.00"), entry_type="ORIGINAL",
+        ))
+    db_session.commit()
+
+    response = client.get(f"/api/v1/installer/earnings/summary?period=day&date={anchor}")
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == "250.00"
+    assert response.json()["days"] == [{"date": anchor, "amount": "250.00", "jobs_count": 1}]
+
+
 def test_installer_earnings_summary_excludes_financial_leakage(
     installer_client_phase2,
     db_session,
@@ -1063,7 +1192,8 @@ def test_installer_earnings_summary_includes_reversal_adjustments(
     db_session.commit()
 
     resp = client.get(
-        f"/api/v1/installer/earnings/summary?period=day&date={reversal_date.date().isoformat()}"
+        f"/api/v1/installer/earnings/summary?period=day&date="
+        f"{reversal_date.astimezone(ZoneInfo('Asia/Jerusalem')).date().isoformat()}"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

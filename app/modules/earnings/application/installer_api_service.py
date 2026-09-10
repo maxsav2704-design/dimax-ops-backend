@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, not_, or_, select
 
@@ -22,9 +23,13 @@ from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.projects.infrastructure.models import ProjectORM
 
 
+TZ_JERUSALEM = ZoneInfo("Asia/Jerusalem")
+
+
 def _period_bounds(period: str, anchor_date: date | None) -> tuple[datetime, datetime]:
-    day = anchor_date or datetime.now(timezone.utc).date()
-    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    day = anchor_date or datetime.now(TZ_JERUSALEM).date()
+    # Keep calendar arithmetic local so DST days span 23 or 25 hours in UTC.
+    start = datetime.combine(day, time.min, tzinfo=TZ_JERUSALEM)
     if period == "day":
         return start, start + timedelta(days=1)
     if period == "week":
@@ -198,6 +203,7 @@ class InstallerEarningsApiService:
         period: str,
         anchor_date: date | None,
     ) -> InstallerEarningsSummaryDTO:
+        anchor_date = anchor_date or datetime.now(TZ_JERUSALEM).date()
         period_start, period_end = _period_bounds(period, anchor_date)
         today_start, today_end = _period_bounds("day", anchor_date)
         month_start, month_end = _period_bounds("month", anchor_date)
@@ -265,7 +271,7 @@ class InstallerEarningsApiService:
                 install_type_label = str(getattr(door_type, "name", None) or "Unknown")
                 door_label = getattr(door, "unit_label", None) if door else None
             project_key = str(row.project_id) if row.project_id else "none"
-            day_key = row.completed_at.date().isoformat()
+            day_key = row.completed_at.astimezone(TZ_JERUSALEM).date().isoformat()
 
             type_bucket = by_type.setdefault(
                 install_type_code,
@@ -315,7 +321,8 @@ class InstallerEarningsApiService:
         if period == "month":
             weekly_totals: dict[date, Decimal] = {}
             for row in rows:
-                bucket = row.completed_at.date() - timedelta(days=row.completed_at.date().weekday())
+                work_day = row.completed_at.astimezone(TZ_JERUSALEM).date()
+                bucket = work_day - timedelta(days=work_day.weekday())
                 weekly_totals[bucket] = weekly_totals.get(bucket, Decimal("0")) + Decimal(
                     str(row.amount_snapshot or 0)
                 )

@@ -5,6 +5,29 @@
 - Docker Desktop is running.
 - Workdir: `backend`.
 
+## Installer Earnings Date Contract
+
+Installer earnings use `Asia/Jerusalem` calendar dates, matching the installer
+workspace. Day/week/month ranges are half-open: local start inclusive, next local
+period start exclusive. Weeks still start on Monday. The optional `date` remains
+a calendar date, not a UTC timestamp. Without it, one local date is captured for
+all totals in the response.
+
+`completed_at` remains a timezone-aware stored instant. No ledger values, rate
+snapshots, correction rules, schema or API fields change. Existing offline
+snapshots remain historical cached responses until a successful online refresh.
+
+On an isolated migrated test database, run:
+
+```bash
+pytest -q tests/integration/test_installer_phase2_api.py tests/integration/test_earnings_corrections_api.py tests/integration/test_financial_integrity_constraints.py tests/integration/test_calendar_api.py
+```
+
+Regressions cover local midnight, week/month/year boundaries, implicit current
+date, workspace reconciliation, DST short/long days, exclusive range ends and
+preservation of stored work timestamps and amounts. This API evidence does not
+replace native-device or live UI acceptance.
+
 ## Workspace Test Runtime
 
 From workspace root you can use the isolated test compose without `uvicorn --reload`:
