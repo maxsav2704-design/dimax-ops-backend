@@ -23,6 +23,7 @@ from app.modules.calendar.infrastructure.models import (
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.infrastructure.models import ClientPriceSnapshotORM, CompletedWorkORM
+from app.modules.earnings.infrastructure.ledger_queries import active_completed_work_filter
 from app.modules.issues.domain.enums import (
     IssuePriority,
     IssueStatus,
@@ -194,14 +195,6 @@ class ReportsRepository:
         date_to: datetime | None = None,
         work_kind: str = "DOOR",
     ):
-        reversed_ids = (
-            select(CompletedWorkORM.correction_ref_id)
-            .where(
-                CompletedWorkORM.company_id == company_id,
-                CompletedWorkORM.entry_type == "REVERSAL",
-                CompletedWorkORM.correction_ref_id.is_not(None),
-            )
-        )
         filters = [
             CompletedWorkORM.company_id == company_id,
             CompletedWorkORM.work_kind == work_kind,
@@ -227,13 +220,7 @@ class ReportsRepository:
             )
             .filter(
                 *filters,
-                or_(
-                    and_(
-                        CompletedWorkORM.entry_type == "ORIGINAL",
-                        not_(CompletedWorkORM.id.in_(reversed_ids)),
-                    ),
-                    CompletedWorkORM.entry_type == "CORRECTION",
-                ),
+                active_completed_work_filter(company_id),
             )
             .subquery()
         )
@@ -2783,6 +2770,23 @@ class ReportsRepository:
             InstallerRateORM.price,
             0,
         )
+        effective_work = self._effective_completed_work_subquery(company_id=company_id)
+        work_by_door = (
+            self.session.query(
+                effective_work.c.door_id,
+                func.sum(effective_work.c.payroll_total).label("payroll_total"),
+            )
+            .group_by(effective_work.c.door_id)
+            .subquery()
+        )
+        # Legacy doors without a ledger retain their snapshot fallback.
+        actual_installer_payroll = case(
+            (
+                DoorORM.id.in_(self._completed_work_door_ids_subquery(company_id=company_id)),
+                func.coalesce(work_by_door.c.payroll_total, 0),
+            ),
+            else_=effective_installer_rate,
+        )
 
         door_row = (
             self.session.query(
@@ -2813,7 +2817,7 @@ class ReportsRepository:
                         case(
                             (
                                 DoorORM.status == DoorStatus.INSTALLED,
-                                effective_installer_rate,
+                                actual_installer_payroll,
                             ),
                             else_=0,
                         )
@@ -2825,7 +2829,7 @@ class ReportsRepository:
                         case(
                             (
                                 DoorORM.status == DoorStatus.INSTALLED,
-                                DoorORM.our_price - effective_installer_rate,
+                                DoorORM.our_price - actual_installer_payroll,
                             ),
                             else_=0,
                         )
@@ -2866,6 +2870,7 @@ class ReportsRepository:
             )
             .select_from(DoorORM)
             .outerjoin(InstallerRateORM, rate_join)
+            .outerjoin(work_by_door, work_by_door.c.door_id == DoorORM.id)
             .filter(
                 DoorORM.company_id == company_id,
                 DoorORM.project_id == project_id,

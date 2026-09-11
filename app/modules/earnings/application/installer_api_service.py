@@ -67,15 +67,6 @@ class InstallerEarningsApiService:
         period_start: datetime,
         period_end: datetime,
     ) -> list[CompletedWorkORM]:
-        reversed_ids = (
-            select(CompletedWorkORM.correction_ref_id)
-            .where(
-                CompletedWorkORM.company_id == company_id,
-                CompletedWorkORM.installer_id == installer_id,
-                CompletedWorkORM.entry_type == "REVERSAL",
-                CompletedWorkORM.correction_ref_id.is_not(None),
-            )
-        )
         corrected_ids = (
             select(CompletedWorkORM.correction_ref_id)
             .where(
@@ -95,7 +86,8 @@ class InstallerEarningsApiService:
                 or_(
                     and_(
                         CompletedWorkORM.entry_type == "ORIGINAL",
-                        not_(CompletedWorkORM.id.in_(reversed_ids)),
+                        # Cancellation is a later debit, not removal of the earned credit.
+                        not_(CompletedWorkORM.id.in_(corrected_ids)),
                     ),
                     and_(
                         CompletedWorkORM.entry_type == "REVERSAL",

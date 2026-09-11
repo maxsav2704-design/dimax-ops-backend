@@ -222,7 +222,11 @@ class DoorUseCases:
         }
 
         if cmd.new_status == "INSTALLED":
-            installed_at = utcnow()
+            installed_at = (
+                door.installed_at
+                if from_status == DoorStatus.INSTALLED and door.installed_at is not None
+                else utcnow()
+            )
             installer_rate_snapshot = resolve_installer_rate_snapshot(
                 uow,
                 company_id=cmd.company_id,

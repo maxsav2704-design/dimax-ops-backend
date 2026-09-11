@@ -330,15 +330,14 @@ class EarningsAdminApiService:
     ) -> EarningsCorrectionResponseDTO:
         assert uow.session is not None
 
-        original = (
+        original_query = (
             uow.session.query(CompletedWorkORM)
             .filter(
                 CompletedWorkORM.company_id == company_id,
                 CompletedWorkORM.id == completed_work_id,
             )
-            .with_for_update()
-            .one_or_none()
         )
+        original = original_query.one_or_none()
         if original is None:
             raise NotFound(
                 "Completed work entry not found",
@@ -350,6 +349,15 @@ class EarningsAdminApiService:
                 "Only ORIGINAL completed work entries can be corrected",
                 field="completed_work_id",
             )
+
+        # Match completion/cancellation lock order: door first, then ledger entry.
+        if original.door_id is not None:
+            door = uow.doors.get(company_id=company_id, door_id=original.door_id, for_update=True)
+            if door is None:
+                raise NotFound("Door not found")
+        original = original_query.populate_existing().with_for_update().one_or_none()
+        if original is None:
+            raise NotFound("Completed work entry not found")
 
         existing_correction_entry = uow.session.execute(
             select(CompletedWorkORM.id).where(

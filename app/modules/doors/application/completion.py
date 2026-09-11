@@ -4,9 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import not_, select
-
 from app.modules.doors.application.pricing import resolve_completion_pricing
+from app.modules.earnings.infrastructure.ledger_queries import active_completed_work_filter
 from app.modules.earnings.infrastructure.models import (
     ClientPriceSnapshotORM,
     CompletedWorkORM,
@@ -90,22 +89,12 @@ def create_completed_work_for_door(
             },
         )
 
-    reversed_ids = (
-        select(CompletedWorkORM.correction_ref_id)
-        .where(
-            CompletedWorkORM.company_id == company_id,
-            CompletedWorkORM.entry_type == "REVERSAL",
-            CompletedWorkORM.correction_ref_id.is_not(None),
-        )
-    )
     existing = (
         uow.session.query(CompletedWorkORM)
         .filter(
-            CompletedWorkORM.company_id == company_id,
+            active_completed_work_filter(company_id),
             CompletedWorkORM.door_id == door.id,
             CompletedWorkORM.work_kind == "DOOR",
-            CompletedWorkORM.entry_type == "ORIGINAL",
-            not_(CompletedWorkORM.id.in_(reversed_ids)),
         )
         .order_by(CompletedWorkORM.completed_at.desc(), CompletedWorkORM.id.desc())
         .first()
@@ -158,23 +147,16 @@ def reverse_completed_work_for_door(
     door,
     reason: str,
 ) -> CompletedWorkORM | None:
-    reversed_ids = (
-        select(CompletedWorkORM.correction_ref_id)
-        .where(
-            CompletedWorkORM.company_id == company_id,
-            CompletedWorkORM.entry_type == "REVERSAL",
-            CompletedWorkORM.correction_ref_id.is_not(None),
-        )
-    )
     original = (
         uow.session.query(CompletedWorkORM)
         .filter(
-            CompletedWorkORM.company_id == company_id,
+            active_completed_work_filter(company_id),
             CompletedWorkORM.door_id == door.id,
-            CompletedWorkORM.entry_type == "ORIGINAL",
-            not_(CompletedWorkORM.id.in_(reversed_ids)),
+            CompletedWorkORM.work_kind == "DOOR",
         )
         .order_by(CompletedWorkORM.completed_at.desc(), CompletedWorkORM.id.desc())
+        .populate_existing()
+        .with_for_update()
         .first()
     )
     if original is None:
