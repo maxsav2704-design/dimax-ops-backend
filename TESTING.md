@@ -141,8 +141,15 @@ docker compose down -v
 
 ## Error Contract Only
 
+Expired access and refresh JWTs return 401 / UNAUTHORIZED, allowing clients to
+refresh a valid session or end an expired one. Invalid signatures, wrong token
+types and permission denials retain their existing 403 contract. Token lifetimes,
+refresh rotation/replay protection and tenant/role checks are unchanged.
+`test_expired_session_api.py` covers admin/installer recovery, expired refresh,
+and multipart upload retry without duplicate doors using real authentication.
+
 ```bash
-docker compose run --rm --no-deps api pytest -q tests/integration/test_auth_guards_api.py tests/integration/test_admin_access_and_validation.py tests/integration/test_installers_link_user_api.py tests/integration/test_installer_rates_api.py
+docker compose run --rm --no-deps api pytest -q tests/integration/test_auth_guards_api.py tests/integration/test_expired_session_api.py tests/integration/test_admin_access_and_validation.py tests/integration/test_installers_link_user_api.py tests/integration/test_installer_rates_api.py
 ```
 
 ## Migration Smoke (Manual)

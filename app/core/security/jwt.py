@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 
 from app.core.config import settings
-from app.shared.domain.errors import Forbidden
+from app.shared.domain.errors import Forbidden, Unauthorized
 
 ALGO = "HS256"
 
@@ -29,7 +29,8 @@ def _decode(token: str) -> dict:
             issuer=settings.JWT_ISSUER,
         )
     except jwt.ExpiredSignatureError:
-        raise Forbidden("Token expired")
+        # Clients refresh expired credentials on 401; 403 is a permission denial.
+        raise Unauthorized("Token expired")
     except jwt.InvalidTokenError:
         raise Forbidden("Invalid token")
 
