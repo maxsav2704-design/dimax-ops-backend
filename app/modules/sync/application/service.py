@@ -75,6 +75,7 @@ class InstallerSyncService:
         *,
         installer_id: uuid.UUID,
         client_event_id: str,
+        event: dict,
     ) -> dict:
         if existing_event.installer_id != installer_id:
             return {
@@ -82,6 +83,22 @@ class InstallerSyncService:
                 "ok": False,
                 "applied": False,
                 "error": "CONFLICT_ASSIGNMENT_CHANGED",
+            }
+        happened_at = event.get("happened_at")
+        if happened_at is not None and happened_at.tzinfo is None:
+            happened_at = happened_at.replace(tzinfo=timezone.utc)
+        # A reused key must never acknowledge work that this record did not apply.
+        if (
+            existing_event.project_id != event["project_id"]
+            or enum_value(existing_event.event_type) != event["type"]
+            or existing_event.payload != (event.get("payload") or {})
+            or existing_event.client_happened_at != happened_at
+        ):
+            return {
+                "client_event_id": client_event_id,
+                "ok": False,
+                "applied": False,
+                "error": "CONFLICT_INVALID_TRANSITION",
             }
         if existing_event.apply_error:
             return {
@@ -497,6 +514,7 @@ class InstallerSyncService:
                             existing_event,
                             installer_id=installer_id,
                             client_event_id=cid,
+                            event=ev,
                         )
                     )
                     continue
@@ -530,6 +548,7 @@ class InstallerSyncService:
                             existing_event,
                             installer_id=installer_id,
                             client_event_id=cid,
+                            event=ev,
                         )
                     )
                     continue

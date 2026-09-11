@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+
+import pytest
 
 from app.modules.addons.domain.enums import AddonFactSource
 from app.modules.addons.infrastructure.models import (
@@ -13,6 +16,7 @@ from app.modules.addons.infrastructure.models import (
 )
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.issues.infrastructure.models import IssueORM
@@ -27,6 +31,133 @@ from app.shared.domain.errors import ValidationError
 
 def _b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+@pytest.fixture()
+def sync_replay_case(client_raw, db_session, company_id, make_user, make_installer, make_door_type):
+    user = make_user(password="Sync-replay-test-2026!")
+    installer = make_installer(full_name="Replay test installer")
+    installer.user_id = user.id
+    door_type = make_door_type()
+    project = ProjectORM(
+        company_id=company_id, name="Replay test tower", address="101 Test Street", status=ProjectStatus.OK,
+    )
+    db_session.add(project)
+    db_session.flush()
+    door = DoorORM(
+        company_id=company_id, project_id=project.id, door_type_id=door_type.id,
+        unit_label="REPLAY-101", our_price=Decimal("1000.00"),
+        installer_rate_snapshot=Decimal("250.00"), installer_id=installer.id,
+        status=DoorStatus.IN_PROGRESS, is_locked=False, version=0,
+    )
+    db_session.add(door)
+    db_session.commit()
+    login = client_raw.post("/api/v1/auth/login", json={
+        "company_id": str(company_id), "email": user.email,
+        "password": "Sync-replay-test-2026!", "device_id": "sync-replay-test",
+    })
+    assert login.status_code == 200, login.text
+    return {
+        "client": client_raw, "headers": {"Authorization": f"Bearer {login.json()['access_token']}"},
+        "company_id": company_id, "door": door, "installer_id": installer.id,
+        "event": {
+            "client_event_id": "lost-response-installation", "type": "DOOR_SET_STATUS",
+            "project_id": str(project.id), "happened_at": "2026-09-11T10:00:00Z",
+            "payload": {"door_id": str(door.id), "status": "INSTALLED", "previous_version": 0},
+        },
+    }
+
+
+def _post_replay_event(case, event):
+    response = case["client"].post("/api/v1/installer/sync", headers=case["headers"], json={
+        "since_cursor": 0, "ack_cursor": 0, "device_id": "sync-replay-test",
+        "events": [event],
+    })
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _assert_one_replay_installation(case, db_session):
+    door = case["door"]
+    db_session.refresh(door)
+    assert (door.status, door.is_locked, door.version) == (DoorStatus.INSTALLED, True, 1)
+    work = db_session.query(CompletedWorkORM).filter(CompletedWorkORM.door_id == door.id).one()
+    assert work.installer_id == case["installer_id"]
+    assert work.entry_type == "ORIGINAL"
+    assert work.quantity == Decimal("1.00")
+    assert work.amount_snapshot == work.rate_snapshot == Decimal("250.00")
+    assert db_session.query(DoorStatusHistoryORM).filter(DoorStatusHistoryORM.door_id == door.id).count() == 1
+    assert db_session.query(SyncEventORM).filter(SyncEventORM.company_id == case["company_id"]).count() == 1
+    assert db_session.query(SyncChangeLogORM).filter(SyncChangeLogORM.entity_id == door.id).count() == 1
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-09-11T10:00:00Z", "2026-09-11T13:00:00+03:00", "2026-09-11T10:00:00", None,
+])
+def test_sync_lost_response_replay_keeps_one_installation_and_accrual(sync_replay_case, db_session, timestamp):
+    case = sync_replay_case
+    if timestamp is None:
+        case["event"].pop("happened_at")
+    elif timestamp == "2026-09-11T10:00:00":
+        case["event"]["happened_at"] = timestamp
+    # The first response is deliberately not acknowledged by the next request.
+    first = _post_replay_event(case, case["event"])
+    assert first["acks"][0]["ok"] is True
+    assert first["acks"][0]["applied"] is True
+    replay = deepcopy(case["event"])
+    replay["payload"] = dict(reversed(list(replay["payload"].items())))
+    if timestamp is not None:
+        replay["happened_at"] = timestamp
+    for _ in range(2):
+        result = _post_replay_event(case, replay)
+        assert result["acks"] == [{
+            "client_event_id": replay["client_event_id"], "ok": True, "applied": False, "error": None,
+        }]
+    _assert_one_replay_installation(case, db_session)
+
+
+@pytest.mark.parametrize("race_lookup", [False, True])
+@pytest.mark.parametrize("changed_field", ["door", "project", "type", "payload", "time", "missing_time"])
+def test_sync_reused_event_id_does_not_ack_different_work(
+    sync_replay_case, db_session, monkeypatch, changed_field, race_lookup,
+):
+    case = sync_replay_case
+    assert _post_replay_event(case, case["event"])["acks"][0]["ok"] is True
+    replay = deepcopy(case["event"])
+    if changed_field == "door":
+        replay["payload"]["door_id"] = str(uuid.uuid4())
+    elif changed_field == "project":
+        replay["project_id"] = str(uuid.uuid4())
+    elif changed_field == "type":
+        replay["type"] = "ISSUE_CREATE"
+    elif changed_field == "payload":
+        replay["payload"]["comment"] = "A different completion"
+    elif changed_field == "time":
+        replay["happened_at"] = "2026-09-11T10:01:00Z"
+    else:
+        replay.pop("happened_at")
+
+    if race_lookup:
+        original_get = SyncEventRepository.get_by_client_event
+        lookups = 0
+
+        def miss_first_lookup(self, **kwargs):
+            nonlocal lookups
+            lookups += 1
+            return None if lookups == 1 else original_get(self, **kwargs)
+
+        monkeypatch.setattr(SyncEventRepository, "get_by_client_event", miss_first_lookup)
+
+    result = _post_replay_event(case, replay)
+    assert result["acks"] == [{
+        "client_event_id": replay["client_event_id"], "ok": False, "applied": False,
+        "error": "CONFLICT_INVALID_TRANSITION",
+    }]
+    _assert_one_replay_installation(case, db_session)
+    stored = db_session.query(SyncEventORM).filter(SyncEventORM.company_id == case["company_id"]).one()
+    assert stored.payload == case["event"]["payload"]
+    assert stored.apply_error is None
+    assert _post_replay_event(case, case["event"])["acks"][0]["ok"] is True
 
 
 def test_installer_sync_rejects_ack_cursor_ahead_of_server(
@@ -211,7 +342,7 @@ def test_installer_sync_concurrent_duplicate_returns_idempotent_ack(
         project_id=project.id,
         event_type=SyncEventType.DOOR_SET_STATUS,
         client_event_id="concurrent-event-1",
-        client_happened_at=datetime.now(timezone.utc),
+        client_happened_at=None,
         payload={
             "door_id": str(door.id),
             "status": "IN_PROGRESS",

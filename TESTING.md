@@ -47,6 +47,31 @@ with one accrual/history entry, and real JWT visibility/payroll reconciliation f
 an owner and two installers. Guard timing is simulated explicitly in two tests;
 it is not described as an unmodified-browser race demonstration.
 
+## Installer Sync Replay Contract
+
+For `/api/v1/installer/sync`, an existing `client_event_id` acknowledges only
+the original installer, project, event type, payload and client timestamp. A
+different event with that key receives the existing
+`CONFLICT_INVALID_TRANSITION` acknowledgement; another installer still receives
+`CONFLICT_ASSIGNMENT_CHANGED`. The original stored event is never overwritten.
+Exact retries after response loss remain `ok=true, applied=false`, including
+JSON key reordering, equivalent timestamp offsets and omitted timestamps when
+both the original and retry omit them. Legacy naive timestamps are treated as
+UTC for replay comparison. No schema or response field changes are required.
+
+```bash
+pytest -q tests/integration/test_sync_installer_snapshot_api.py tests/integration/test_sync_batch_api.py tests/integration/test_door_assignment_atomicity.py tests/integration/test_financial_integrity_constraints.py tests/integration/test_openapi_contract.py
+```
+
+The new replay cases use real JWT login, the API transaction boundary and an
+isolated PostgreSQL database. They check one installation, one status-history
+entry, one change-log entry and one 250.00 accrual after repeated delivery.
+Collision cases cover both the initial lookup and a simulated missed lookup
+followed by a real unique-constraint violation. This is not a physical network
+interruption or proof of native SQLite durability. Mobile service tests verify
+preserved event identity on network/503/missing-ACK retries and payload retention
+after a rejected acknowledgement.
+
 ## Import Numeric Contract
 
 Imported door quantities must be finite whole numbers from 1 to 1000. Decimal
