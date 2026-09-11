@@ -58,6 +58,7 @@ def installer_mark_installed(
                 company_id=user.company_id,
                 actor_user_id=user.id,
                 door_id=door_id,
+                expected_installer_id=_installer_id,
             ),
         )
     return DoorActionResponse(**result)
@@ -80,6 +81,7 @@ def installer_mark_not_installed(
                 door_id=door_id,
                 reason_id=body.reason_id,
                 comment=body.comment,
+                expected_installer_id=_installer_id,
             ),
         )
     return DoorActionResponse(**result)

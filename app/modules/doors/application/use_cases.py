@@ -16,6 +16,7 @@ from app.modules.doors.application.commands import (
 )
 from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.domain.errors import DoorNotAssigned
 from app.modules.issues.domain.enums import IssueStatus
 from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.projects.application.status_service import ProjectStatusService
@@ -48,9 +49,17 @@ def _door_action_result(door) -> dict:
 class DoorUseCases:
     @staticmethod
     def mark_installed(uow, cmd: MarkDoorInstalled) -> dict:
-        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id)
+        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id, for_update=True)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
+        if (
+            cmd.expected_installer_id is not None
+            and door.installer_id != cmd.expected_installer_id
+        ):
+            raise DoorNotAssigned(
+                "Door is not assigned to this installer",
+                details={"door_id": str(cmd.door_id)},
+            )
         from_status = door.status
 
         # lock-инвариант
@@ -115,9 +124,17 @@ class DoorUseCases:
 
     @staticmethod
     def mark_not_installed(uow, cmd: MarkDoorNotInstalled) -> dict:
-        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id)
+        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id, for_update=True)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
+        if (
+            cmd.expected_installer_id is not None
+            and door.installer_id != cmd.expected_installer_id
+        ):
+            raise DoorNotAssigned(
+                "Door is not assigned to this installer",
+                details={"door_id": str(cmd.door_id)},
+            )
         from_status = door.status
 
         if door.is_locked:
@@ -184,7 +201,7 @@ class DoorUseCases:
         if actor_role != "ADMIN":
             raise Forbidden("Admin only")
 
-        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id)
+        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id, for_update=True)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
         from_status = door.status

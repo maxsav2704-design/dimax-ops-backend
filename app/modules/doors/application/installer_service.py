@@ -33,7 +33,7 @@ class InstallerDoorService:
         to_status: DoorStatus,
         source: str = "MOBILE_API",
     ) -> dict:
-        door = uow.doors.get(company_id=company_id, door_id=door_id)
+        door = uow.doors.get(company_id=company_id, door_id=door_id, for_update=True)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(door_id)})
 

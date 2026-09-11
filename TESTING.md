@@ -28,6 +28,25 @@ date, workspace reconciliation, DST short/long days, exclusive range ends and
 preservation of stored work timestamps and amounts. This API evidence does not
 replace native-device or live UI acceptance.
 
+## Door Assignment and Completion Atomicity
+
+Assignment, completion, admin override and sync status writes lock the tenant's
+door row before validating mutable state. Write reads refresh cached ORM values
+after acquiring the lock. Legacy installer actions recheck the expected installer
+inside the write transaction, even if the earlier request guard already passed.
+Bulk assignments lock IDs in stable order while retaining response order.
+No schema migration, public request field or completion/pricing rule is changed.
+
+```bash
+pytest -q tests/integration/test_door_assignment_atomicity.py
+```
+
+Regressions cover interleaved transactions with stale reads, both assignment APIs,
+legacy guard timing, PostgreSQL NOWAIT exclusion/release, simultaneous completion
+with one accrual/history entry, and real JWT visibility/payroll reconciliation for
+an owner and two installers. Guard timing is simulated explicitly in two tests;
+it is not described as an unmodified-browser race demonstration.
+
 ## Import Numeric Contract
 
 Imported door quantities must be finite whole numbers from 1 to 1000. Decimal

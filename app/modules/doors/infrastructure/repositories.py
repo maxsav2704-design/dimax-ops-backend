@@ -20,13 +20,16 @@ class DoorRepository:
         self.session = session
 
     def get(
-        self, *, company_id: uuid.UUID, door_id: uuid.UUID
+        self, *, company_id: uuid.UUID, door_id: uuid.UUID, for_update: bool = False
     ) -> DoorORM | None:
-        return (
+        query = (
             self.session.query(DoorORM)
             .filter(DoorORM.company_id == company_id, DoorORM.id == door_id)
-            .one_or_none()
         )
+        if for_update:
+            # Re-read cached ORM state after waiting for a competing writer.
+            query = query.populate_existing().with_for_update()
+        return query.one_or_none()
 
     def save(self, door: DoorORM) -> None:
         self.session.add(door)

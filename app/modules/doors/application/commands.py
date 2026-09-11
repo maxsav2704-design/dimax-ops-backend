@@ -10,6 +10,7 @@ class MarkDoorInstalled:
     actor_user_id: uuid.UUID
     door_id: uuid.UUID
     source: str = "API"
+    expected_installer_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class MarkDoorNotInstalled:
     reason_id: uuid.UUID
     comment: str | None = None
     source: str = "API"
+    expected_installer_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)

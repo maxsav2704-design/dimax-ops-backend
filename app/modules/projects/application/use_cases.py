@@ -420,7 +420,7 @@ class ProjectUseCases:
         door_id: uuid.UUID,
         installer_id: uuid.UUID,
     ) -> None:
-        door = uow.doors.get(company_id=company_id, door_id=door_id)
+        door = uow.doors.get(company_id=company_id, door_id=door_id, for_update=True)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(door_id)})
 
@@ -518,9 +518,10 @@ class ProjectUseCases:
                 details={"installer_id": str(installer_id)},
             )
 
-        doors = []
-        for door_id in unique_door_ids:
-            door = uow.doors.get(company_id=company_id, door_id=door_id)
+        doors_by_id = {}
+        # Lock overlapping bulk assignments in the same order; preserve response order.
+        for door_id in sorted(unique_door_ids):
+            door = uow.doors.get(company_id=company_id, door_id=door_id, for_update=True)
             if not door:
                 raise NotFound("Door not found", details={"door_id": str(door_id)})
             if door.is_locked:
@@ -528,7 +529,9 @@ class ProjectUseCases:
                     "Door is locked. Cannot reassign installer.",
                     details={"door_id": str(door_id)},
                 )
-            doors.append(door)
+            doors_by_id[door_id] = door
+
+        doors = [doors_by_id[door_id] for door_id in unique_door_ids]
 
         project_ids = {door.project_id for door in doors}
         if len(project_ids) > 1:

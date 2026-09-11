@@ -735,7 +735,7 @@ class InstallerSyncService:
             raise ValidationError("payload requires door_id and status")
 
         d = uow.doors.get(
-            company_id=company_id, door_id=uuid.UUID(str(door_id))
+            company_id=company_id, door_id=uuid.UUID(str(door_id)), for_update=True
         )
         if not d or d.project_id != project_id:
             raise NotFound("Door not found in project")
@@ -770,6 +770,7 @@ class InstallerSyncService:
                     actor_user_id=actor_user_id,
                     door_id=d.id,
                     source="OFFLINE_SYNC",
+                    expected_installer_id=installer_id,
                 ),
             )
         elif status == "NOT_INSTALLED":
@@ -786,6 +787,7 @@ class InstallerSyncService:
                     reason_id=uuid.UUID(str(reason_id)),
                     comment=comment,
                     source="OFFLINE_SYNC",
+                    expected_installer_id=installer_id,
                 ),
             )
         else:
@@ -812,7 +814,7 @@ class InstallerSyncService:
         if not door_id or not status:
             raise ValidationError("payload requires door_id and status")
 
-        door = uow.doors.get(company_id=company_id, door_id=uuid.UUID(str(door_id)))
+        door = uow.doors.get(company_id=company_id, door_id=uuid.UUID(str(door_id)), for_update=True)
         if not door or door.project_id != project_id:
             raise _SyncConflictError(
                 "CONFLICT_ASSIGNMENT_CHANGED",
@@ -884,6 +886,7 @@ class InstallerSyncService:
                         reason_id=uuid.UUID(str(reason_id)),
                         comment=comment,
                         source="OFFLINE_SYNC",
+                        expected_installer_id=installer_id,
                     ),
                 )
             except (ValidationError, Forbidden, Conflict, NotFound) as exc:
