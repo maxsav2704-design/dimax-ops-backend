@@ -16,6 +16,7 @@ from app.modules.journal.api.schemas import (
     JournalDetailsResponse,
 )
 from app.modules.journal.application.admin_service import JournalAdminService
+from app.modules.journal.domain.enums import JournalStatus
 
 
 router = APIRouter(prefix="/admin/journals", tags=["Admin / Journal"])
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/admin/journals", tags=["Admin / Journal"])
 
 @router.get("", response_model=JournalListResponse)
 def list_journals(
-    status: str | None = Query(default=None),
+    status: JournalStatus | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     user: CurrentUser = Depends(require_admin),
