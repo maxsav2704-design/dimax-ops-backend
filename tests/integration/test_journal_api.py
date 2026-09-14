@@ -28,6 +28,11 @@ from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 
 
+def _signature_payload():
+    return {"viewport": {"width": 320, "height": 120},
+            "strokes": [[{"x": 20, "y": 70}, {"x": 140, "y": 35}]]}
+
+
 def _create_project(db_session, *, company_id: uuid.UUID, name: str) -> ProjectORM:
     row = ProjectORM(
         company_id=company_id,
@@ -363,11 +368,21 @@ def test_journal_admin_public_sign_flow(
     assert len(public_body["items"]) == 1
     assert public_body["items"][0]["unit_label"] == "A-01"
 
+    draft_pdf = client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}/pdf")
+    assert draft_pdf.status_code == 200, draft_pdf.text
+    draft_key = f"journals/{company_id}/{journal_id}/journal_{journal_id}.pdf"
+    invalid_signature = client_admin_real_uow.post(
+        f"/api/v1/public/journals/{token}/sign",
+        json={"signer_name": "Client Name", "signature_payload": {"strokes": [1, 2, 3]}},
+    )
+    assert invalid_signature.status_code == 422, invalid_signature.text
+    assert client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}").json()["status"] == "ACTIVE"
+
     sign_resp = client_admin_real_uow.post(
         f"/api/v1/public/journals/{token}/sign",
         json={
             "signer_name": "Client Name",
-            "signature_payload": {"strokes": [1, 2, 3]},
+            "signature_payload": _signature_payload(),
         },
     )
     assert sign_resp.status_code == 200, sign_resp.text
@@ -381,6 +396,19 @@ def test_journal_admin_public_sign_flow(
     assert after_sign["status"] == "ARCHIVED"
     assert after_sign["signer_name"] == "Client Name"
     assert after_sign["signed_at"] is not None
+
+    from app.integrations.storage.storage_service import StorageService
+
+    archived_pdf = client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}/pdf")
+    assert archived_pdf.status_code == 200, archived_pdf.text
+    assert archived_pdf.content != draft_pdf.content
+    assert StorageService.get_pdf(object_key=draft_key) == draft_pdf.content
+    project.name = "Project renamed after signing"
+    db_session.commit()
+    reexport = client_admin_real_uow.post(f"/api/v1/admin/journals/{journal_id}/export-pdf")
+    assert reexport.status_code == 200, reexport.text
+    assert reexport.json()["file_path"].endswith("_signed.pdf")
+    assert StorageService.get_pdf(object_key=reexport.json()["file_path"]) == archived_pdf.content
 
     second_sign_resp = client_admin_real_uow.post(
         f"/api/v1/public/journals/{token}/sign",
@@ -449,7 +477,7 @@ def test_public_journal_can_only_be_signed_once_concurrently(
                 f"/api/v1/public/journals/{token}/sign",
                 json={
                     "signer_name": signer_name,
-                    "signature_payload": {"strokes": [signer_name]},
+                    "signature_payload": _signature_payload(),
                 },
             )
 

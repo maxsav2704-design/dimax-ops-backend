@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
@@ -70,6 +71,10 @@ def _register_fonts() -> tuple[str, str]:
         if Path(regular).is_file() and Path(bold).is_file():
             pdfmetrics.registerFont(TTFont("DimaxSans", regular))
             pdfmetrics.registerFont(TTFont("DimaxSansBold", bold))
+            pdfmetrics.registerFontFamily(
+                "DimaxSans", normal="DimaxSans", bold="DimaxSansBold",
+                italic="DimaxSans", boldItalic="DimaxSansBold",
+            )
             return "DimaxSans", "DimaxSansBold"
     return "Helvetica", "Helvetica-Bold"
 
@@ -86,6 +91,9 @@ def _format_timestamp(value: Any) -> str:
         return "-"
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.astimezone(ZoneInfo("Asia/Jerusalem"))
         return parsed.strftime("%d.%m.%Y %H:%M")
     except ValueError:
         return str(value)
@@ -113,6 +121,10 @@ class SignatureFlowable(Flowable):
         pad = 4 * mm
         draw_width = max(1, self.width - (pad * 2))
         draw_height = max(1, self.height - (pad * 2))
+        self.canv.saveState()
+        clip = self.canv.beginPath()
+        clip.rect(pad, pad, draw_width, draw_height)
+        self.canv.clipPath(clip, stroke=0, fill=0)
         self.canv.setStrokeColor(BRAND_INK)
         self.canv.setLineCap(1)
         self.canv.setLineJoin(1)
@@ -139,6 +151,7 @@ class SignatureFlowable(Flowable):
                 drew = True
             if drew:
                 self.canv.drawPath(path, stroke=1, fill=0)
+        self.canv.restoreState()
 
 
 def _document_table_style() -> TableStyle:
@@ -351,6 +364,11 @@ class PdfGenerator:
             addon_table.setStyle(_document_table_style())
             story.append(addon_table)
 
+        if journal.get("notes"):
+            story.append(Paragraph("Notes", section_style))
+            notes = "<br/>".join(_display_text(line) for line in str(journal["notes"]).splitlines())
+            story.append(Paragraph(notes, body))
+
         if journal.get("signed_at"):
             signature_block = KeepTogether(
                 [
@@ -388,7 +406,8 @@ class PdfGenerator:
                 Spacer(1, 5 * mm),
                 Paragraph(
                     "This document records the completed installation work captured in DIMAX Operations Suite. "
-                    "The signed PDF is distributed to the developer and DIMAX administration.",
+                    "All dates and times are shown in Asia/Jerusalem. "
+                    "Delivery status is tracked separately in DIMAX.",
                     muted,
                 ),
             ]

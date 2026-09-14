@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import urlparse
 
+from app.core.config import settings
 from app.modules.identity.domain.enums import UserRole
 
 
@@ -30,7 +31,10 @@ def test_e2e_auth_projects_addons_journal_sync_flow(
     company_id,
     make_user,
     make_door_type,
+    monkeypatch,
 ):
+    monkeypatch.setattr(settings, "EMAIL_ENABLED", True)
+    monkeypatch.setattr(settings, "WHATSAPP_ENABLED", True)
     admin_password = "AdminStrong123"
     installer_password = "InstallerStrong123"
     admin_user = make_user(role=UserRole.ADMIN, password=admin_password)
@@ -217,7 +221,13 @@ def test_e2e_auth_projects_addons_journal_sync_flow(
 
     sign_resp = client_raw.post(
         f"/api/v1/public/journals/{public_token}/sign",
-        json={"signer_name": "E2E Client", "signature_payload": {"ok": True}},
+        json={
+            "signer_name": "E2E Client",
+            "signature_payload": {
+                "viewport": {"width": 320, "height": 120},
+                "strokes": [[{"x": 20, "y": 70}, {"x": 140, "y": 35}]],
+            },
+        },
     )
     assert sign_resp.status_code == 200, sign_resp.text
     assert sign_resp.json()["ok"] is True

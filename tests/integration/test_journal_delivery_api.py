@@ -23,7 +23,23 @@ from app.workers import outbox_worker
 
 
 @pytest.fixture(autouse=True)
-def fake_storage(monkeypatch):
+def fake_storage(monkeypatch, db_session, company_id):
+    from sqlalchemy.orm import sessionmaker
+    from app.modules.outbox.infrastructure.repositories import OutboxRepository
+
+    # Exercise channel behavior independently of the local stack configuration.
+    monkeypatch.setattr(settings, "EMAIL_ENABLED", True)
+    monkeypatch.setattr(settings, "WHATSAPP_ENABLED", True)
+    test_company_id = company_id
+
+    class CompanyOutboxRepository(OutboxRepository):
+        def lock_next_batch(self, *, company_id=None, limit=20):
+            return super().lock_next_batch(company_id=test_company_id, limit=limit)
+
+    monkeypatch.setattr(outbox_worker, "OutboxRepository", CompanyOutboxRepository)
+    monkeypatch.setattr(
+        outbox_worker, "SessionLocal", sessionmaker(bind=db_session.get_bind())
+    )
     storage: dict[str, bytes] = {}
 
     class _Obj:

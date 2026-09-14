@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.config import settings
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.modules.journal.domain.enums import JournalStatus
+from app.modules.journal.application.signature_validation import validate_signature_payload
 from app.modules.journal.infrastructure.models import (
     JournalAddonItemORM,
     JournalDoorItemORM,
@@ -203,8 +204,7 @@ class JournalUseCases:
         if not signer_name or len(signer_name.strip()) < 2:
             raise ValidationError("signer_name is required")
 
-        if not isinstance(signature_payload, dict) or not signature_payload:
-            raise ValidationError("signature_payload is required")
+        validate_signature_payload(signature_payload)
 
         uow.journals.add_signature(
             JournalSignatureORM(
@@ -230,12 +230,30 @@ class JournalUseCases:
         *,
         company_id: uuid.UUID,
         journal_id: uuid.UUID,
+        finalize_signature: bool = False,
     ) -> JournalFileORM:
-        j = uow.journals.get(company_id=company_id, journal_id=journal_id)
+        # Serialize draft exports with signing so a late draft cannot replace the archive.
+        j = uow.journals.get(
+            company_id=company_id, journal_id=journal_id, for_update=True
+        )
         if not j:
             raise NotFound(
                 "Journal not found", details={"journal_id": str(journal_id)}
             )
+
+        signed_key = f"journals/{company_id}/{journal_id}/journal_{journal_id}_signed.pdf"
+        if j.signed_at is not None:
+            existing = uow.journals.get_file(
+                company_id=company_id, journal_id=journal_id, kind="PDF"
+            )
+            if existing and (not finalize_signature or existing.file_path == signed_key):
+                return existing
+            if not finalize_signature:
+                raise Conflict(
+                    "Signed PDF is missing; restore the archived file instead of regenerating it"
+                )
+        elif finalize_signature:
+            raise Conflict("Cannot finalize a PDF before signing")
 
         project = uow.projects.get(company_id=company_id, project_id=j.project_id)
         if not project:
@@ -269,6 +287,7 @@ class JournalUseCases:
             journal={
                 "id": str(j.id),
                 "title": j.title,
+                "notes": j.notes,
                 "project_name": project.name,
                 "project_address": project.address,
                 "developer_company": project.developer_company,
@@ -308,7 +327,7 @@ class JournalUseCases:
             ),
         )
 
-        object_key = (
+        object_key = signed_key if j.signed_at is not None else (
             f"journals/{company_id}/{journal_id}/journal_{journal_id}.pdf"
         )
         StorageService.put_pdf(object_key=object_key, content=pdf_bytes)

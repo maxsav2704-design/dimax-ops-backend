@@ -19,6 +19,11 @@ logger = get_logger(__name__)
 class JournalSignedDeliveryService:
     @staticmethod
     def enqueue(uow, *, journal) -> dict:
+        # Finalize once inside the signing transaction, even if delivery needs repair.
+        pdf_file = JournalUseCases.export_pdf(
+            uow, company_id=journal.company_id, journal_id=journal.id,
+            finalize_signature=True,
+        )
         project = uow.projects.get(
             company_id=journal.company_id,
             project_id=journal.project_id,
@@ -56,11 +61,6 @@ class JournalSignedDeliveryService:
             return {"queued": False, "recipient_count": 0}
 
         assert developer_email is not None
-        pdf_file = JournalUseCases.export_pdf(
-            uow,
-            company_id=journal.company_id,
-            journal_id=journal.id,
-        )
         to_email = developer_email
         cc_emails = [email for email in recipients if email != to_email]
         project_label = project.name or str(project.id)

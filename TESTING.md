@@ -5,6 +5,37 @@
 - Docker Desktop is running.
 - Workdir: `backend`.
 
+## Journal Signature and PDF Integrity
+
+New signatures use the existing canvas format: a positive numeric `viewport`
+and bounded, finite point `strokes` containing a visible line. Blank, malformed,
+degenerate and excessive payloads return 422 before changing the journal.
+The signing transaction finalizes a separate `_signed.pdf` object once. Exports,
+downloads and resends reuse the signed archive, including legacy object paths;
+they must never reconstruct it from today's project metadata. Missing archives
+must be restored, not silently regenerated. No schema migration is required.
+
+On an isolated migrated test database, run:
+
+```bash
+pytest -q tests/architecture/test_journal_pdf_integrity.py tests/architecture/test_journal_pdf_freshness.py tests/architecture/test_journal_snapshot_contract.py tests/architecture/test_journal_filter_contract.py tests/integration/test_journal_api.py tests/integration/test_journal_delivery_api.py tests/integration/test_e2e_core_flow.py
+```
+
+`tests/integration/test_journal_mailpit_acceptance.py` is opt-in via
+`DIMAX_JOURNAL_MAILPIT=1`. It requires `APP_ENV=test`, both database URLs pointing
+to `db/dimax_acceptance_tests`, SMTP `mailpit:1025` with TLS/auth disabled,
+MinIO `minio:9000` bucket `acceptance`, email enabled and WhatsApp disabled.
+Its module-scoped guard executes before database fixture inserts. The real
+storage/SMTP test runs the outbox worker only for its own ephemeral company,
+compares the received PDF bytes and To/Cc recipients, then removes only its own
+Mailpit messages and MinIO prefix. Database fixtures clean their own company.
+It does not send externally or process the acceptance application's queue.
+
+Optionally mount an ignored QA directory at `/qa` and set
+`DIMAX_JOURNAL_QA_DIR=/qa` to retain two small PDFs for visual inspection. Render
+all their pages with Poppler, inspect them, then remove these temporary artifacts.
+Mailpit receipt is not proof of external inbox delivery or legal signature validity.
+
 ## Installer Earnings Date Contract
 
 Installer earnings use `Asia/Jerusalem` calendar dates, matching the installer

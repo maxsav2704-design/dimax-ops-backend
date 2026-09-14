@@ -22,16 +22,18 @@ class JournalRepository:
         self.session = session
 
     def get(
-        self, *, company_id: uuid.UUID, journal_id: uuid.UUID
+        self, *, company_id: uuid.UUID, journal_id: uuid.UUID, for_update: bool = False
     ) -> JournalORM | None:
-        return (
+        query = (
             self.session.query(JournalORM)
             .filter(
                 JournalORM.company_id == company_id,
                 JournalORM.id == journal_id,
             )
-            .one_or_none()
         )
+        if for_update:
+            query = query.populate_existing().with_for_update()
+        return query.one_or_none()
 
     def get_by_token(
         self,
