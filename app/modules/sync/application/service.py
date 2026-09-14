@@ -562,6 +562,7 @@ class InstallerSyncService:
                             actor_user_id=actor_user_id,
                             project_id=project_id,
                             payload=payload,
+                            happened_at=happened_at,
                         )
                     elif etype == SyncEventType.ADDON_FACT_CREATE:
                         InstallerSyncService._apply_addon_fact_create(
@@ -653,6 +654,7 @@ class InstallerSyncService:
                 project_id=project_id,
                 payload=payload,
                 base_version=base_version,
+                happened_at=happened_at,
             )
 
         if operation_type == "ADDON_FACT_CREATE":
@@ -739,6 +741,7 @@ class InstallerSyncService:
         actor_user_id: uuid.UUID,
         project_id: uuid.UUID,
         payload: dict,
+        happened_at: datetime | None = None,
     ) -> None:
         InstallerSyncService._ensure_project_access(
             uow,
@@ -793,6 +796,7 @@ class InstallerSyncService:
                     door_id=d.id,
                     source="OFFLINE_SYNC",
                     expected_installer_id=installer_id,
+                    happened_at=happened_at,
                 ),
             )
         elif status == "NOT_INSTALLED":
@@ -827,6 +831,7 @@ class InstallerSyncService:
         project_id: uuid.UUID,
         payload: dict,
         base_version: int,
+        happened_at: datetime | None = None,
     ) -> dict:
         door_id = payload.get("door_id")
         status = str(payload.get("status") or "").strip().upper()
@@ -887,6 +892,7 @@ class InstallerSyncService:
                     door_id=door.id,
                     to_status=DoorStatus.INSTALLED,
                     source="OFFLINE_SYNC",
+                    happened_at=happened_at,
                 )
             except (ValidationError, Forbidden, Conflict) as exc:
                 raise _SyncConflictError(

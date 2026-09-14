@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,7 @@ class MarkDoorInstalled:
     door_id: uuid.UUID
     source: str = "API"
     expected_installer_id: uuid.UUID | None = None
+    happened_at: datetime | None = None
 
 
 @dataclass(frozen=True)

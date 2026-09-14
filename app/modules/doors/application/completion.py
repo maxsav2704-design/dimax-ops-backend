@@ -17,6 +17,18 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def resolve_installation_time(
+    happened_at: datetime | None, *, received_at: datetime | None = None,
+) -> datetime:
+    received_at = received_at or utcnow()
+    if happened_at is None:
+        return received_at
+    if happened_at.tzinfo is None:
+        happened_at = happened_at.replace(tzinfo=timezone.utc)
+    # Preserve offline work time, but never book future work from a fast device clock.
+    return min(happened_at.astimezone(timezone.utc), received_at)
+
+
 def enum_value(value: object) -> str:
     return value.value if hasattr(value, "value") else str(value)
 

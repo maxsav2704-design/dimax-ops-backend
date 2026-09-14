@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 
 from app.modules.doors.application.completion import (
     create_completed_work_for_door,
+    resolve_installation_time,
     resolve_installer_rate_snapshot,
 )
 from app.modules.doors.application.transition_recorder import record_door_transition
@@ -32,6 +33,7 @@ class InstallerDoorService:
         door_id: uuid.UUID,
         to_status: DoorStatus,
         source: str = "MOBILE_API",
+        happened_at: datetime | None = None,
     ) -> dict:
         door = uow.doors.get(
             company_id=company_id, door_id=door_id,
@@ -73,7 +75,7 @@ class InstallerDoorService:
         installed_at = None
         installer_rate_snapshot = None
         if to_status == DoorStatus.INSTALLED:
-            installed_at = datetime.now(timezone.utc)
+            installed_at = resolve_installation_time(happened_at)
             current_snapshot = getattr(door, "installer_rate_snapshot", None)
             if current_snapshot is not None and Decimal(str(current_snapshot)) > 0:
                 installer_rate_snapshot = Decimal(str(current_snapshot))

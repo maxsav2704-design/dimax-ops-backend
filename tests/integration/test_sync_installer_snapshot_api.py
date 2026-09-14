@@ -23,6 +23,7 @@ from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 from app.modules.projects.application.use_cases import ProjectUseCases
+from app.modules.rates.infrastructure.models import InstallerRateORM
 from app.modules.sync.application.service import InstallerSyncService
 from app.modules.sync.domain.enums import SyncChangeType, SyncEventType
 from app.modules.sync.infrastructure.models import SyncChangeLogORM, SyncEventORM
@@ -91,6 +92,71 @@ def _assert_one_replay_installation(case, db_session):
     assert db_session.query(DoorStatusHistoryORM).filter(DoorStatusHistoryORM.door_id == door.id).count() == 1
     assert db_session.query(SyncEventORM).filter(SyncEventORM.company_id == case["company_id"]).count() == 1
     assert db_session.query(SyncChangeLogORM).filter(SyncChangeLogORM.entity_id == door.id).count() == 1
+
+
+@pytest.mark.parametrize("transport", ["snapshot", "batch"])
+@pytest.mark.parametrize("timestamp,expected_rate", [
+    ("2026-08-31T20:59:00Z", "250.00"),
+    ("2026-08-31T23:59:00+03:00", "250.00"),
+    ("2026-08-31T20:59:00", "250.00"),
+    (None, "450.00"),
+    ("2099-01-01T00:00:00Z", "450.00"),
+])
+def test_offline_completion_time_controls_period_and_rate(
+    sync_replay_case, db_session, monkeypatch, transport, timestamp, expected_rate,
+):
+    from app.modules.doors.application import completion, use_cases
+
+    received_at = datetime(2026, 9, 1, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(completion, "utcnow", lambda: received_at)
+    monkeypatch.setattr(use_cases, "utcnow", lambda: received_at)
+    case = sync_replay_case
+    door = case["door"]
+    door.installer_rate_snapshot = None
+    for effective_from, price in [
+        (datetime(2026, 1, 1, tzinfo=timezone.utc), "250.00"),
+        (datetime(2026, 8, 31, 21, tzinfo=timezone.utc), "450.00"),
+    ]:
+        db_session.add(InstallerRateORM(
+            company_id=case["company_id"], installer_id=case["installer_id"],
+            door_type_id=door.door_type_id, effective_from=effective_from,
+            price=Decimal(price),
+        ))
+    db_session.commit()
+    event = deepcopy(case["event"])
+    event["happened_at"] = timestamp
+    if transport == "snapshot":
+        send = lambda: _post_replay_event(case, event)
+    else:
+        item = {
+            "id": str(uuid.uuid4()), "entity_type": "door", "entity_id": str(door.id),
+            "operation_type": event["type"], "project_id": event["project_id"],
+            "payload": event["payload"], "base_version": 0, "happened_at": timestamp,
+        }
+
+        def send():
+            response = case["client"].post(
+                "/api/v1/installer/sync-queue/batch", headers=case["headers"],
+                json={"device_id": "completion-time-test", "items": [item]},
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
+    for _ in range(2):
+        result = send()
+        if transport == "snapshot":
+            assert result["acks"][0]["ok"] is True, result
+        else:
+            assert result["results"][0]["status"] == "APPLIED", result
+    expected_at = (
+        datetime(2026, 8, 31, 20, 59, tzinfo=timezone.utc)
+        if expected_rate == "250.00" else received_at
+    )
+    db_session.refresh(door)
+    work = db_session.query(CompletedWorkORM).filter(CompletedWorkORM.door_id == door.id).one()
+    assert work.completed_at == door.installed_at == expected_at
+    assert work.rate_snapshot == work.amount_snapshot == Decimal(expected_rate)
+    assert door.version == 1
 
 
 @pytest.mark.parametrize("timestamp", [

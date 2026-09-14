@@ -7,6 +7,7 @@ from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.doors.application.completion import (
     create_completed_work_for_door,
     reverse_completed_work_for_door,
+    resolve_installation_time,
     resolve_installer_rate_snapshot,
 )
 from app.modules.doors.application.commands import (
@@ -73,7 +74,7 @@ class DoorUseCases:
             )
 
         # ставим installed
-        installed_at = utcnow()
+        installed_at = resolve_installation_time(cmd.happened_at, received_at=utcnow())
         installer_rate_snapshot = resolve_installer_rate_snapshot(
             uow,
             company_id=cmd.company_id,
