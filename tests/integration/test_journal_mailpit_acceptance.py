@@ -156,9 +156,18 @@ def test_signed_pdf_reaches_local_mailpit_unchanged(
         })
         assert invitation.status_code == 200, invitation.text
         assert invitation.json()["public_url"] == signing_url
+        invitation_id = uuid.UUID(invitation.json()["outbox_ids"]["email"])
+        assert invitation.json()["outbox_ids"]["whatsapp"] is None
         assert signing_url.startswith(settings.PUBLIC_APP_BASE_URL.rstrip("/") + "/acceptance/")
         unsigned_content = StorageService.get_pdf(object_key=invitation.json()["object_key"])
         assert outbox_worker.run_once(limit=1) == 1
+        invitation_row = db_session.get(OutboxMessageORM, invitation_id)
+        assert invitation_row is not None
+        assert invitation_row.company_id == company_id
+        assert invitation_row.correlation_id == uuid.UUID(journal_id)
+        assert invitation_row.channel.value == "EMAIL"
+        assert invitation_row.status.value == "SENT"
+        assert invitation_row.payload["subject"] == invite_subject
         invitation_mail = _received_mail(invite_subject)
         invitation_body = invitation_mail.get_body(preferencelist=("plain",)).get_content()
         assert signing_url in invitation_body

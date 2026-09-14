@@ -124,6 +124,7 @@ class JournalSendService:
             msg = OutboxMessageORM(
                 company_id=company_id,
                 channel=OutboxChannel.EMAIL,
+                id=uuid.uuid4(),
                 status=OutboxStatus.PENDING,
                 correlation_id=journal_id,
                 payload={
@@ -180,6 +181,7 @@ class JournalSendService:
             msg = OutboxMessageORM(
                 company_id=company_id,
                 channel=OutboxChannel.WHATSAPP,
+                id=uuid.uuid4(),
                 status=OutboxStatus.PENDING,
                 correlation_id=journal_id,
                 payload={

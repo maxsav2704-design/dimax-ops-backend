@@ -7,6 +7,21 @@
 
 ## Journal Signature and PDF Integrity
 
+Manual-send `outbox_ids` must contain the UUIDs of the persisted queue rows,
+matching `JOURNAL_SEND_REQUESTED` audit data. Unselected channels return JSON
+null. Each intentional resend creates distinct IDs. Delivery API tests cover
+email, WhatsApp and both channels, plus rollback of queue rows, file-token/file
+records, delivery statuses and send audits on preparation or audit failure.
+These rollback checks cover the database transaction, not external object-store
+writes. UUIDs are allocated before enqueue without an extra flush or commit.
+
+On an isolated migrated test database (set both `DATABASE_URL` and
+`TEST_DATABASE_URL`), run:
+
+```bash
+pytest -q tests/architecture/test_transaction_boundary.py tests/integration/test_journal_delivery_api.py
+```
+
 Human signing links use `PUBLIC_APP_BASE_URL/acceptance/{token}`, never the JSON
 API origin. Manual email/WhatsApp messages, fallback email, template previews and
 admin/installer snapshots share the same eligibility check: ACTIVE, unsigned,
@@ -40,7 +55,8 @@ to `db/dimax_acceptance_tests`, SMTP `mailpit:1025` with TLS/auth disabled,
 MinIO `minio:9000` bucket `acceptance`, email enabled and WhatsApp disabled.
 Its module-scoped guard executes before database fixture inserts. The real
 storage/SMTP test runs the outbox worker only for its own ephemeral company,
-verifies the manual invitation's human URL, compares the received PDF bytes and
+verifies the returned invitation ID resolves to the sent queue row and checks
+its human URL, compares the received PDF bytes and
 signed delivery To/Cc recipients, then removes only its own
 Mailpit messages and MinIO prefix. Database fixtures clean their own company.
 It does not send externally or process the acceptance application's queue.

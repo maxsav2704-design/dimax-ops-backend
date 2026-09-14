@@ -10,15 +10,23 @@ import pytest
 
 from app.core.config import settings
 from app.integrations.storage.storage_service import StorageService
+from app.modules.audit.infrastructure.models import AuditLogORM
+from app.modules.audit.infrastructure.repositories import AuditRepository
+from app.modules.files.application.service import FileTokenService
 from app.modules.files.infrastructure.models import (
     FileDownloadEventORM,
     FileDownloadTokenORM,
 )
-from app.modules.journal.infrastructure.models import JournalAddonItemORM, JournalORM
+from app.modules.journal.infrastructure.models import (
+    JournalAddonItemORM,
+    JournalFileORM,
+    JournalORM,
+)
 from app.modules.outbox.domain.enums import OutboxChannel
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
+from app.shared.domain.errors import ValidationError
 from app.workers import outbox_worker
 
 
@@ -225,6 +233,146 @@ def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
     )
     assert wa_token is not None
     assert wa_token.uses_left == 2
+
+
+@pytest.mark.parametrize(
+    ("send_email", "send_whatsapp"),
+    [(True, False), (False, True), (True, True)],
+    ids=["email", "whatsapp", "both"],
+)
+def test_journal_send_ids_match_queue_and_audit_on_each_request(
+    client_admin_real_uow, db_session, company_id, send_email, send_whatsapp
+):
+    project = _create_project(db_session, company_id=company_id, name="Send IDs")
+    journal_id = _create_journal(
+        client_admin_real_uow, db_session, project_id=project.id
+    )
+    journal_uuid = uuid.UUID(journal_id)
+    expected_channels = {"email": send_email, "whatsapp": send_whatsapp}
+    previous_ids = set()
+    for request_number in range(1, 3):
+        response = client_admin_real_uow.post(
+            f"/api/v1/admin/journals/{journal_id}/send",
+            json={
+                "email_to": "queue-qa@example.com",
+                "whatsapp_to": "+15551234567",
+                "send_email": send_email,
+                "send_whatsapp": send_whatsapp,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["enqueued"] == expected_channels
+        current_ids = set()
+        for channel, enabled in expected_channels.items():
+            message_id = body["outbox_ids"][channel]
+            if not enabled:
+                assert message_id is None
+                continue
+            parsed_id = uuid.UUID(message_id)
+            assert str(parsed_id) == message_id
+            row = db_session.get(OutboxMessageORM, parsed_id)
+            assert row is not None
+            assert row.company_id == company_id
+            assert row.correlation_id == journal_uuid
+            assert row.channel.value == channel.upper()
+            assert row.payload["object_key"] == body["object_key"]
+            current_ids.add(parsed_id)
+        assert len(current_ids) == sum(expected_channels.values())
+        assert current_ids.isdisjoint(previous_ids)
+        previous_ids.update(current_ids)
+        audits = db_session.query(AuditLogORM).filter(
+            AuditLogORM.company_id == company_id,
+            AuditLogORM.entity_id == journal_uuid,
+            AuditLogORM.action == "JOURNAL_SEND_REQUESTED",
+        ).all()
+        assert len(audits) == request_number
+        matching = [row for row in audits if row.after["outbox_ids"] == body["outbox_ids"]]
+        assert len(matching) == 1
+        assert matching[0].after["enqueued"] == expected_channels
+        journal = client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}")
+        assert journal.status_code == 200, journal.text
+        for channel in expected_channels:
+            key = f"{channel}_delivery_status"
+            assert matching[0].after[key] == journal.json()[key]
+        queued_ids = {
+            row.id for row in db_session.query(OutboxMessageORM).filter(
+                OutboxMessageORM.company_id == company_id,
+                OutboxMessageORM.correlation_id == journal_uuid,
+            ).all()
+        }
+        assert queued_ids == previous_ids
+
+
+@pytest.mark.parametrize("failure", ["whatsapp_recipient", "whatsapp_token", "audit"])
+def test_journal_send_rolls_back_queue_tokens_statuses_and_audit(
+    client_admin_real_uow, db_session, company_id, monkeypatch, failure
+):
+    client = client_admin_real_uow
+    project = _create_project(db_session, company_id=company_id, name="Send rollback")
+    journal_id = _create_journal(client, db_session, project_id=project.id)
+    journal_uuid = uuid.UUID(journal_id)
+    route = f"/api/v1/admin/journals/{journal_id}"
+    before = client.get(route)
+    assert before.status_code == 200, before.text
+    injected_failures = []
+
+    if failure == "whatsapp_token":
+        create_token = FileTokenService.create_token_for_object
+
+        def fail_after_token(uow, **kwargs):
+            create_token(uow, **kwargs)
+            # Force pending SQL writes before failing, so rollback is exercised.
+            uow.session.flush()
+            injected_failures.append("whatsapp_token")
+            raise ValidationError("QA token preparation failure")
+
+        monkeypatch.setattr(
+            FileTokenService, "create_token_for_object", staticmethod(fail_after_token)
+        )
+    elif failure == "audit":
+        add_audit = AuditRepository.add
+
+        def fail_after_audit(self, row):
+            add_audit(self, row)
+            if row.action == "JOURNAL_SEND_REQUESTED":
+                self.session.flush()
+                injected_failures.append("audit")
+                raise ValidationError("QA audit failure")
+
+        monkeypatch.setattr(AuditRepository, "add", fail_after_audit)
+
+    response = client.post(route + "/send", json={
+        "email_to": "queue-qa@example.com",
+        "whatsapp_to": None if failure == "whatsapp_recipient" else "+15551234567",
+        "send_email": True,
+        "send_whatsapp": True,
+    })
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert injected_failures == ([] if failure == "whatsapp_recipient" else [failure])
+    db_session.expire_all()
+    assert db_session.query(OutboxMessageORM).filter(
+        OutboxMessageORM.company_id == company_id,
+        OutboxMessageORM.correlation_id == journal_uuid,
+    ).count() == 0
+    assert db_session.query(FileDownloadTokenORM).filter(
+        FileDownloadTokenORM.company_id == company_id,
+    ).count() == 0
+    assert db_session.query(JournalFileORM).filter(
+        JournalFileORM.company_id == company_id,
+        JournalFileORM.journal_id == journal_uuid,
+    ).count() == 0
+    assert db_session.query(AuditLogORM).filter(
+        AuditLogORM.company_id == company_id,
+        AuditLogORM.entity_id == journal_uuid,
+        AuditLogORM.action == "JOURNAL_SEND_REQUESTED",
+    ).count() == 0
+    after = client.get(route)
+    assert after.status_code == 200, after.text
+    for channel in ("email", "whatsapp"):
+        key = f"{channel}_delivery_status"
+        assert after.json()[key] == before.json()[key]
 
 
 def test_journal_send_uses_backend_template_preview_when_requested(
