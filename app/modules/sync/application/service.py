@@ -702,6 +702,8 @@ class InstallerSyncService:
         door = uow.doors.get(
             company_id=company_id,
             door_id=uuid.UUID(str(door_id)),
+            for_update=True,
+            active_project_only=True,
         )
         if door is None or door.project_id != project_id:
             raise NotFound("Door not found in project")
@@ -754,7 +756,8 @@ class InstallerSyncService:
             raise ValidationError("payload requires door_id and status")
 
         d = uow.doors.get(
-            company_id=company_id, door_id=uuid.UUID(str(door_id)), for_update=True
+            company_id=company_id, door_id=uuid.UUID(str(door_id)),
+            for_update=True, active_project_only=True,
         )
         if not d or d.project_id != project_id:
             raise NotFound("Door not found in project")
@@ -833,7 +836,10 @@ class InstallerSyncService:
         if not door_id or not status:
             raise ValidationError("payload requires door_id and status")
 
-        door = uow.doors.get(company_id=company_id, door_id=uuid.UUID(str(door_id)), for_update=True)
+        door = uow.doors.get(
+            company_id=company_id, door_id=uuid.UUID(str(door_id)),
+            for_update=True, active_project_only=True,
+        )
         if not door or door.project_id != project_id:
             raise _SyncConflictError(
                 "CONFLICT_ASSIGNMENT_CHANGED",

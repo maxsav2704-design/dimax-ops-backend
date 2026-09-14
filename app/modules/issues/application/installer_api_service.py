@@ -21,11 +21,15 @@ class InstallerIssuesApiService:
         installer_id: uuid.UUID,
         user_id: uuid.UUID,
         issue_id: uuid.UUID,
+        for_update: bool = False,
     ) -> tuple[IssueORM, object]:
         issue = uow.issues.get(company_id=company_id, issue_id=issue_id)
         if issue is None:
             raise NotFound("Issue not found", details={"issue_id": str(issue_id)})
-        door = uow.doors.get(company_id=company_id, door_id=issue.door_id)
+        door = uow.doors.get(
+            company_id=company_id, door_id=issue.door_id,
+            active_project_only=True, for_update=for_update,
+        )
         if door is None:
             raise NotFound("Door not found", details={"door_id": str(issue.door_id)})
         is_assigned = getattr(door, "installer_id", None) == installer_id
@@ -50,7 +54,9 @@ class InstallerIssuesApiService:
         )
         items: list[InstallerIssueReportDTO] = []
         for row in rows:
-            door = uow.doors.get(company_id=company_id, door_id=row.door_id)
+            door = uow.doors.get(
+                company_id=company_id, door_id=row.door_id, active_project_only=True
+            )
             if not door:
                 continue
             items.append(
@@ -84,7 +90,10 @@ class InstallerIssuesApiService:
         details: str | None,
         source: str = "MOBILE_API",
     ) -> InstallerIssueReportDTO:
-        door = uow.doors.get(company_id=company_id, door_id=door_id)
+        door = uow.doors.get(
+            company_id=company_id, door_id=door_id,
+            for_update=True, active_project_only=True,
+        )
         if not door:
             raise NotFound("Door not found", details={"door_id": str(door_id)})
         if getattr(door, "installer_id", None) != installer_id:
@@ -166,6 +175,7 @@ class InstallerIssuesApiService:
             installer_id=installer_id,
             user_id=user_id,
             issue_id=issue_id,
+            for_update=True,
         )
 
         text = str(comment or "").strip()

@@ -20,14 +20,25 @@ class DoorRepository:
         self.session = session
 
     def get(
-        self, *, company_id: uuid.UUID, door_id: uuid.UUID, for_update: bool = False
+        self,
+        *,
+        company_id: uuid.UUID,
+        door_id: uuid.UUID,
+        for_update: bool = False,
+        active_project_only: bool = False,
     ) -> DoorORM | None:
         query = (
             self.session.query(DoorORM)
             .filter(DoorORM.company_id == company_id, DoorORM.id == door_id)
         )
+        if active_project_only:
+            query = query.join(ProjectORM, ProjectORM.id == DoorORM.project_id).filter(
+                ProjectORM.company_id == company_id,
+                ProjectORM.deleted_at.is_(None),
+            )
         if for_update:
             # Re-read cached ORM state after waiting for a competing writer.
+            # Installer writes also lock the joined project against soft deletion.
             query = query.populate_existing().with_for_update()
         return query.one_or_none()
 

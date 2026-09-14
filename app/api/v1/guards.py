@@ -19,7 +19,9 @@ def require_door_owned_by_installer(
     Возвращает installer_id, если дверь принадлежит монтажнику.
     """
     with uow:
-        door = uow.doors.get(company_id=user.company_id, door_id=door_id)
+        door = uow.doors.get(
+            company_id=user.company_id, door_id=door_id, active_project_only=True
+        )
         if not door:
             raise NotFound(
                 "Door not found", details={"door_id": str(door_id)}

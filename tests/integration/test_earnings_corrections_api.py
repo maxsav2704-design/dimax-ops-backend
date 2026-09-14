@@ -226,17 +226,23 @@ def _seed_addon_completed_work(
     return installer, original, fact
 
 
+@pytest.mark.parametrize("deleted_project", [False, True])
 def test_admin_earnings_correction_creates_reversal_and_correction_rows(
     client,
     db_session,
     company_id,
     make_door_type,
+    deleted_project,
 ):
     _installer, original = _seed_original_completed_work(
         db_session=db_session,
         company_id=company_id,
         make_door_type=make_door_type,
     )
+
+    if deleted_project:
+        db_session.get(ProjectORM, original.project_id).deleted_at = datetime.now(timezone.utc)
+        db_session.commit()
 
     resp = client.post(
         "/api/v1/admin/earnings/corrections",

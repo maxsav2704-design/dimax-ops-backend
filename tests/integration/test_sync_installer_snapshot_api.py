@@ -22,11 +22,13 @@ from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
+from app.modules.projects.application.use_cases import ProjectUseCases
 from app.modules.sync.application.service import InstallerSyncService
 from app.modules.sync.domain.enums import SyncChangeType, SyncEventType
 from app.modules.sync.infrastructure.models import SyncChangeLogORM, SyncEventORM
 from app.modules.sync.infrastructure.repositories import SyncEventRepository
 from app.shared.domain.errors import ValidationError
+from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
 
 
 def _b64(text: str) -> str:
@@ -158,6 +160,111 @@ def test_sync_reused_event_id_does_not_ack_different_work(
     assert stored.payload == case["event"]["payload"]
     assert stored.apply_error is None
     assert _post_replay_event(case, case["event"])["acks"][0]["ok"] is True
+
+
+@pytest.mark.parametrize("deleted", [True, False], ids=["deleted-project", "active-project"])
+@pytest.mark.parametrize("operation", [
+    "sync-install", "sync-not-installed", "sync-issue", "batch-install",
+    "online-install", "online-not-installed", "online-status", "online-issue",
+])
+def test_installer_actions_respect_project_deletion(
+    sync_replay_case, db_session, make_reason, deleted, operation,
+):
+    case = sync_replay_case
+    door = case["door"]
+    project_id = door.project_id
+    event = deepcopy(case["event"])
+    reason = make_reason()
+    if "not-installed" in operation:
+        event["payload"].update(status="NOT_INSTALLED", reason_id=str(reason.id))
+    elif "issue" in operation:
+        event["type"] = "ISSUE_CREATE"
+        event["payload"] = {"door_id": str(door.id), "title": "Opening is blocked"}
+
+    if deleted:
+        with SqlAlchemyUnitOfWork() as uow:
+            ProjectUseCases.delete_project(uow, company_id=case["company_id"], project_id=project_id)
+
+    if operation.startswith("sync-"):
+        result = _post_replay_event(case, event)
+        assert result["acks"] == [{
+            "client_event_id": event["client_event_id"], "ok": not deleted, "applied": not deleted,
+            "error": "CONFLICT_ASSIGNMENT_CHANGED" if deleted else None,
+        }]
+        stored = db_session.query(SyncEventORM).filter(SyncEventORM.company_id == case["company_id"]).one()
+        assert stored.payload == event["payload"]
+    elif operation == "batch-install":
+        response = case["client"].post("/api/v1/installer/sync-queue/batch", headers=case["headers"], json={
+            "device_id": "deleted-project-check", "items": [{
+                "id": str(uuid.uuid4()), "entity_type": "door", "entity_id": str(door.id),
+                "project_id": str(project_id), "operation_type": "DOOR_SET_STATUS",
+                "payload": event["payload"], "base_version": 0,
+            }],
+        })
+        assert response.status_code == 200, response.text
+        result = response.json()["results"][0]
+        assert result["status"] == ("CONFLICT" if deleted else "APPLIED"), result
+        assert result["conflict_code"] == ("CONFLICT_ASSIGNMENT_CHANGED" if deleted else None)
+    else:
+        route = f"/api/v1/installer/doors/{door.id}"
+        if operation == "online-status":
+            response = case["client"].patch(route + "/status", headers=case["headers"], json={"status": "INSTALLED"})
+        elif operation == "online-issue":
+            response = case["client"].post("/api/v1/installer/issues", headers=case["headers"], json=event["payload"])
+        else:
+            suffix = operation.removeprefix("online-")
+            response = case["client"].post(route + "/" + suffix, headers=case["headers"],
+                json={"reason_id": str(reason.id)} if suffix == "not-installed" else None)
+        expected = 404 if deleted else 201 if operation == "online-issue" else 200
+        assert response.status_code == expected, response.text
+
+    db_session.expire_all()
+    db_session.refresh(door)
+    works = db_session.query(CompletedWorkORM).filter(CompletedWorkORM.door_id == door.id).all()
+    history_count = db_session.query(DoorStatusHistoryORM).filter(DoorStatusHistoryORM.door_id == door.id).count()
+    issue_count = db_session.query(IssueORM).filter(IssueORM.door_id == door.id).count()
+    project = db_session.get(ProjectORM, project_id)
+    assert (project.deleted_at is not None) == deleted
+    if deleted:
+        assert (door.status, door.is_locked, door.version) == (DoorStatus.IN_PROGRESS, False, 0)
+        assert works == []
+        assert history_count == issue_count == 0
+    else:
+        assert door.version == history_count == 1
+        if "not-installed" in operation or "issue" in operation:
+            assert works == []
+            assert issue_count == 1
+        else:
+            assert door.status == DoorStatus.INSTALLED
+            assert len(works) == 1
+            assert works[0].amount_snapshot == Decimal("250.00")
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_installer_issue_access_respects_project_deletion(sync_replay_case, db_session, deleted):
+    case = sync_replay_case
+    client, headers = case["client"], case["headers"]
+    created = client.post("/api/v1/installer/issues", headers=headers, json={
+        "door_id": str(case["door"].id), "title": "Opening blocked", "details": "Original comment",
+    })
+    assert created.status_code == 201, created.text
+    issue_id = created.json()["id"]
+    if deleted:
+        with SqlAlchemyUnitOfWork() as deletion:
+            ProjectUseCases.delete_project(
+                deletion, company_id=case["company_id"], project_id=case["door"].project_id,
+            )
+
+    listing = client.get("/api/v1/installer/issues", headers=headers)
+    assert listing.status_code == 200, listing.text
+    assert {item["id"] for item in listing.json()["items"]} == (set() if deleted else {issue_id})
+    media = client.get(f"/api/v1/installer/issues/{issue_id}/media", headers=headers)
+    assert media.status_code == (404 if deleted else 200), media.text
+    updated = client.patch(f"/api/v1/installer/issues/{issue_id}", headers=headers, json={"comment": "Updated comment"})
+    assert updated.status_code == (404 if deleted else 200), updated.text
+    db_session.expire_all()
+    issue = db_session.get(IssueORM, uuid.UUID(issue_id))
+    assert issue.details == ("Original comment" if deleted else "Updated comment")
 
 
 def test_installer_sync_rejects_ack_cursor_ahead_of_server(

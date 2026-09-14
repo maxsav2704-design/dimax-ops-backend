@@ -24,7 +24,7 @@ from app.modules.rates.infrastructure.models import InstallerRateORM
 from app.modules.projects.application.use_cases import ProjectUseCases
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
-from app.shared.domain.errors import Conflict
+from app.shared.domain.errors import Conflict, NotFound
 from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
 
 
@@ -131,6 +131,66 @@ def test_legacy_action_rechecks_assignment_after_request_guard(
     door = db_session.get(DoorORM, case.door_id)
     assert door.installer_id == case.second_id
     assert door.status == DoorStatus.IN_PROGRESS
+
+
+def test_completion_rechecks_project_deleted_after_initial_read(assignment_case, db_session):
+    case = assignment_case
+    with SqlAlchemyUnitOfWork() as stale:
+        cached = stale.doors.get(company_id=case.company_id, door_id=case.door_id)
+        with SqlAlchemyUnitOfWork() as deletion:
+            ProjectUseCases.delete_project(deletion, company_id=case.company_id, project_id=cached.project_id)
+        with pytest.raises(NotFound):
+            _complete(stale, case)
+        assert stale.doors.get(company_id=case.company_id, door_id=case.door_id) is cached
+    assert db_session.query(CompletedWorkORM).filter(CompletedWorkORM.door_id == case.door_id).count() == 0
+
+
+@pytest.mark.parametrize("action", ["install", "not-installed"])
+def test_legacy_action_rechecks_deleted_project_after_request_guard(
+    assignment_case, client_raw, db_session, make_reason, action,
+):
+    case = assignment_case
+    login = client_raw.post("/api/v1/auth/login", json={
+        "company_id": str(case.company_id), "email": case.email,
+        "password": "Assignment-check-2026!", "device_id": "deletion-regression",
+    })
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    reason = make_reason()
+    door = db_session.get(DoorORM, case.door_id)
+    with SqlAlchemyUnitOfWork() as deletion:
+        ProjectUseCases.delete_project(deletion, company_id=case.company_id, project_id=door.project_id)
+
+    client_raw.app.dependency_overrides[require_door_owned_by_installer] = lambda: case.first_id
+    try:
+        response = client_raw.post(
+            f"/api/v1/installer/doors/{case.door_id}/{action}", headers=headers,
+            json={"reason_id": str(reason.id)} if action == "not-installed" else None,
+        )
+    finally:
+        client_raw.app.dependency_overrides.pop(require_door_owned_by_installer, None)
+    assert response.status_code == 404, response.text
+    db_session.refresh(door)
+    assert (door.status, door.is_locked, door.version) == (DoorStatus.IN_PROGRESS, False, 0)
+    assert db_session.query(CompletedWorkORM).filter(CompletedWorkORM.door_id == case.door_id).count() == 0
+    assert db_session.query(DoorStatusHistoryORM).filter(DoorStatusHistoryORM.door_id == case.door_id).count() == 0
+
+
+def test_installer_write_read_locks_project_until_transaction_end(assignment_case):
+    case = assignment_case
+    with SqlAlchemyUnitOfWork() as writer:
+        door = writer.doors.get(
+            company_id=case.company_id, door_id=case.door_id,
+            for_update=True, active_project_only=True,
+        )
+        project_id = door.project_id
+        with SqlAlchemyUnitOfWork() as contender:
+            with pytest.raises(OperationalError) as error:
+                contender.session.query(ProjectORM).filter(ProjectORM.id == project_id).with_for_update(nowait=True).one()
+            assert error.value.orig.pgcode == "55P03"
+            contender.rollback()
+    with SqlAlchemyUnitOfWork() as released:
+        assert released.session.query(ProjectORM).filter(ProjectORM.id == project_id).with_for_update(nowait=True).one()
 
 
 def test_write_read_holds_row_lock_until_transaction_end(assignment_case):

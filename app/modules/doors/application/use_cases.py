@@ -49,7 +49,10 @@ def _door_action_result(door) -> dict:
 class DoorUseCases:
     @staticmethod
     def mark_installed(uow, cmd: MarkDoorInstalled) -> dict:
-        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id, for_update=True)
+        door = uow.doors.get(
+            company_id=cmd.company_id, door_id=cmd.door_id, for_update=True,
+            active_project_only=cmd.expected_installer_id is not None,
+        )
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
         if (
@@ -124,7 +127,10 @@ class DoorUseCases:
 
     @staticmethod
     def mark_not_installed(uow, cmd: MarkDoorNotInstalled) -> dict:
-        door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id, for_update=True)
+        door = uow.doors.get(
+            company_id=cmd.company_id, door_id=cmd.door_id, for_update=True,
+            active_project_only=cmd.expected_installer_id is not None,
+        )
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
         if (
