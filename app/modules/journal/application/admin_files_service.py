@@ -51,7 +51,7 @@ class JournalAdminFilesService:
             journal_id=journal_id,
             kind="PDF",
         )
-        if not file_row:
+        if not file_row or journal.signed_at is None:
             file_row = _ensure_pdf(
                 uow,
                 company_id=company_id,
@@ -107,7 +107,7 @@ class JournalAdminFilesService:
             journal_id=journal_id,
             kind="PDF",
         )
-        if not file_row:
+        if not file_row or journal.signed_at is None:
             file_row = _ensure_pdf(
                 uow,
                 company_id=company_id,

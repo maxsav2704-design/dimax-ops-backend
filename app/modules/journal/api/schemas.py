@@ -107,6 +107,10 @@ class PublicJournalGetResponse(BaseModel):
     addon_items: list[PublicJournalAddonItemDTO]
 
 
+class JournalAdminSnapshotResponse(PublicJournalGetResponse):
+    signing_url: str | None
+
+
 class JournalMarkReadyResponse(BaseModel):
     public_token: str
     public_url: str

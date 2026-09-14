@@ -320,6 +320,12 @@ def test_journal_admin_public_sign_flow(
     assert details["status"] == "DRAFT"
     assert details["snapshot_version"] >= 2
 
+    snapshot_resp = client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}/snapshot")
+    assert snapshot_resp.status_code == 200, snapshot_resp.text
+    assert [row["unit_label"] for row in snapshot_resp.json()["items"]] == ["A-01"]
+    assert snapshot_resp.json()["journal"]["status"] == "DRAFT"
+    assert snapshot_resp.json()["signing_url"] is None
+
     patch_resp = client_admin_real_uow.patch(
         f"/api/v1/admin/journals/{journal_id}",
         json={"notes": "ready to sign", "lock_header": True},
@@ -477,6 +483,8 @@ def test_public_journal_can_only_be_signed_once_concurrently(
 
 
 def test_journal_admin_endpoints_forbidden_for_installer_role(client_installer):
+    snapshot_resp = client_installer.get(f"/api/v1/admin/journals/{uuid.uuid4()}/snapshot")
+    assert snapshot_resp.status_code == 403, snapshot_resp.text
     list_resp = client_installer.get("/api/v1/admin/journals")
     assert list_resp.status_code == 403, list_resp.text
     assert list_resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
@@ -625,6 +633,10 @@ def test_journal_multi_tenant_isolation_for_admin(
         )
         assert get_resp.status_code == 404, get_resp.text
         assert get_resp.json()["error"]["code"] == "NOT_FOUND"
+        snapshot_resp = client_admin_real_uow.get(
+            f"/api/v1/admin/journals/{foreign_journal_id}/snapshot"
+        )
+        assert snapshot_resp.status_code == 404, snapshot_resp.text
     finally:
         db_session.rollback()
         db_session.execute(

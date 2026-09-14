@@ -14,6 +14,7 @@ from app.modules.journal.api.schemas import (
     JournalUpdateBody,
     OkResponse,
     JournalDetailsResponse,
+    JournalAdminSnapshotResponse,
 )
 from app.modules.journal.application.admin_service import JournalAdminService
 from app.modules.journal.domain.enums import JournalStatus
@@ -65,6 +66,18 @@ def get_journal(
         return JournalAdminService.get_journal(
             uow,
             company_id=user.company_id, journal_id=journal_id
+        )
+
+
+@router.get("/{journal_id}/snapshot", response_model=JournalAdminSnapshotResponse)
+def get_snapshot(
+    journal_id: UUID,
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        return JournalAdminService.get_snapshot(
+            uow, company_id=user.company_id, journal_id=journal_id,
         )
 
 

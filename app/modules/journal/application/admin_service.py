@@ -8,7 +8,8 @@ from app.modules.journal.api.schemas import (
     JournalExportPdfResponse,
     JournalMarkReadyResponse,
 )
-from app.modules.journal.application.use_cases import JournalUseCases
+from app.modules.journal.application.use_cases import JournalUseCases, utcnow
+from app.modules.journal.application.snapshot import read_journal_snapshot
 from app.modules.journal.application.submission_policy import (
     JournalSubmissionPolicy,
 )
@@ -20,6 +21,24 @@ def _status_value(s) -> str:
 
 
 class JournalAdminService:
+    @staticmethod
+    def get_snapshot(uow, *, company_id: uuid.UUID, journal_id: uuid.UUID) -> dict:
+        journal = uow.journals.get(company_id=company_id, journal_id=journal_id)
+        if journal is None:
+            raise NotFound("Journal not found")
+        result = read_journal_snapshot(uow, journal=journal)
+        can_sign = (
+            _status_value(journal.status) == "ACTIVE"
+            and journal.signed_at is None
+            and journal.public_token
+            and (journal.public_token_expires_at is None or journal.public_token_expires_at > utcnow())
+        )
+        result["signing_url"] = (
+            f"{settings.PUBLIC_APP_BASE_URL.rstrip('/')}/acceptance/{journal.public_token}"
+            if can_sign else None
+        )
+        return result
+
     @staticmethod
     def list_journals(
         uow,
