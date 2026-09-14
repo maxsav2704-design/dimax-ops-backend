@@ -9,6 +9,7 @@ from app.modules.journal.application.submission_policy import (
     JournalSubmissionPolicy,
 )
 from app.modules.journal.application.use_cases import JournalUseCases
+from app.modules.journal.application.signing_links import journal_signing_url
 from app.modules.journal.domain.enums import JournalStatus
 from app.shared.domain.errors import Conflict, Forbidden, NotFound
 
@@ -86,12 +87,7 @@ class InstallerJournalService:
             door_items=door_items,
             addon_items=addon_items,
         )
-        signing_url = None
-        if journal.public_token:
-            signing_url = (
-                f"{settings.PUBLIC_APP_BASE_URL.rstrip('/')}/acceptance/"
-                f"{journal.public_token}"
-            )
+        signing_url = journal_signing_url(journal)
         return {
             "id": journal.id,
             "project_id": journal.project_id,

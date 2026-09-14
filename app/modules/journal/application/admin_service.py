@@ -8,7 +8,8 @@ from app.modules.journal.api.schemas import (
     JournalExportPdfResponse,
     JournalMarkReadyResponse,
 )
-from app.modules.journal.application.use_cases import JournalUseCases, utcnow
+from app.modules.journal.application.use_cases import JournalUseCases
+from app.modules.journal.application.signing_links import journal_signing_url
 from app.modules.journal.application.snapshot import read_journal_snapshot
 from app.modules.journal.application.submission_policy import (
     JournalSubmissionPolicy,
@@ -27,16 +28,7 @@ class JournalAdminService:
         if journal is None:
             raise NotFound("Journal not found")
         result = read_journal_snapshot(uow, journal=journal)
-        can_sign = (
-            _status_value(journal.status) == "ACTIVE"
-            and journal.signed_at is None
-            and journal.public_token
-            and (journal.public_token_expires_at is None or journal.public_token_expires_at > utcnow())
-        )
-        result["signing_url"] = (
-            f"{settings.PUBLIC_APP_BASE_URL.rstrip('/')}/acceptance/{journal.public_token}"
-            if can_sign else None
-        )
+        result["signing_url"] = journal_signing_url(journal)
         return result
 
     @staticmethod

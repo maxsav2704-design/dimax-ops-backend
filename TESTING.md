@@ -7,6 +7,19 @@
 
 ## Journal Signature and PDF Integrity
 
+Human signing links use `PUBLIC_APP_BASE_URL/acceptance/{token}`, never the JSON
+API origin. Manual email/WhatsApp messages, fallback email, template previews and
+admin/installer snapshots share the same eligibility check: ACTIVE, unsigned,
+token present, expiry strictly in the future (legacy null expiry is supported).
+Draft, signed or expired documents can still be sent as PDFs without a dead
+signing link. API file/media URLs and mark-ready's legacy `public_url` field are
+unchanged; its separate `signing_url` remains the human URL. No existing queued
+messages are rewritten and no token expiry is automatically extended.
+
+```bash
+pytest -q tests/architecture/test_journal_signing_links.py tests/architecture/test_journal_snapshot_contract.py tests/integration/test_journal_delivery_api.py tests/integration/test_catalogs_and_settings_api.py tests/integration/test_journal_api.py
+```
+
 New signatures use the existing canvas format: a positive numeric `viewport`
 and bounded, finite point `strokes` containing a visible line. Blank, malformed,
 degenerate and excessive payloads return 422 before changing the journal.
@@ -27,7 +40,8 @@ to `db/dimax_acceptance_tests`, SMTP `mailpit:1025` with TLS/auth disabled,
 MinIO `minio:9000` bucket `acceptance`, email enabled and WhatsApp disabled.
 Its module-scoped guard executes before database fixture inserts. The real
 storage/SMTP test runs the outbox worker only for its own ephemeral company,
-compares the received PDF bytes and To/Cc recipients, then removes only its own
+verifies the manual invitation's human URL, compares the received PDF bytes and
+signed delivery To/Cc recipients, then removes only its own
 Mailpit messages and MinIO prefix. Database fixtures clean their own company.
 It does not send externally or process the acceptance application's queue.
 

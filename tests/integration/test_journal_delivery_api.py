@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
@@ -14,7 +14,7 @@ from app.modules.files.infrastructure.models import (
     FileDownloadEventORM,
     FileDownloadTokenORM,
 )
-from app.modules.journal.infrastructure.models import JournalAddonItemORM
+from app.modules.journal.infrastructure.models import JournalAddonItemORM, JournalORM
 from app.modules.outbox.domain.enums import OutboxChannel
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
@@ -159,7 +159,9 @@ def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
     assert body["enqueued"]["whatsapp"] is True
     assert "email" in body["outbox_ids"]
     assert "whatsapp" in body["outbox_ids"]
-    assert body["public_url"] is not None
+    signing_url = mark_ready_resp.json()["signing_url"]
+    assert body["public_url"] == signing_url
+    assert signing_url.startswith(settings.PUBLIC_APP_BASE_URL.rstrip("/") + "/acceptance/")
 
     journal_uuid = uuid.UUID(journal_id)
     email_msg = (
@@ -190,6 +192,8 @@ def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
     assert email_msg.payload["subject"] == "Delivery Subject"
     assert "Attached: journal PDF." in email_msg.payload["body_text"]
     assert "Public link:" in email_msg.payload["body_text"]
+    assert signing_url in email_msg.payload["body_text"]
+    assert "/api/v1/public/journals/" not in email_msg.payload["body_text"]
 
     assert whatsapp_msg.channel == OutboxChannel.WHATSAPP
     assert whatsapp_msg.payload["to_phone"] == "+15551234567"
@@ -198,6 +202,11 @@ def test_journal_send_enqueues_outbox_and_sets_pending_statuses(
     assert "fallback_subject" in whatsapp_msg.payload
     assert "fallback_body_text" in whatsapp_msg.payload
     assert "object_key" in whatsapp_msg.payload
+    assert signing_url in whatsapp_msg.payload["body_text"]
+    assert signing_url in whatsapp_msg.payload["fallback_body_text"]
+    assert whatsapp_msg.payload["media_url"].startswith(
+        settings.PUBLIC_BASE_URL + "/api/v1/public/files/"
+    )
 
     journal_resp = client_admin_real_uow.get(f"/api/v1/admin/journals/{journal_id}")
     assert journal_resp.status_code == 200, journal_resp.text
@@ -277,9 +286,73 @@ def test_journal_send_uses_backend_template_preview_when_requested(
     assert project.name in email_msg.payload["subject"]
     assert "Delivery Journal" in email_msg.payload["body_text"]
     assert "Public link:" in email_msg.payload["body_text"]
+    signing_url = mark_ready_resp.json()["signing_url"]
+    assert f"via {signing_url}" in email_msg.payload["body_text"]
+    assert "/api/v1/public/journals/" not in email_msg.payload["body_text"]
     assert email_msg.payload["template_id"] == template_id
     assert email_msg.payload["template_code"] == "template-delivery-notice"
     assert email_msg.payload["template_name"] == "Template Delivery Notice"
+
+
+@pytest.mark.parametrize("state", ["draft", "expired", "signed"])
+def test_manual_send_keeps_pdf_but_omits_unusable_signing_links(
+    client_admin_real_uow, db_session, company_id, state
+):
+    client = client_admin_real_uow
+    project = _create_project(db_session, company_id=company_id, name=f"Link {state}")
+    journal_id = _create_journal(client, db_session, project_id=project.id)
+    route = f"/api/v1/admin/journals/{journal_id}"
+    ready = client.post(route + "/mark-ready") if state != "draft" else None
+    if ready is not None:
+        assert ready.status_code == 200, ready.text
+    journal = db_session.query(JournalORM).filter(JournalORM.id == uuid.UUID(journal_id)).one()
+    if state == "draft":
+        journal.public_token = uuid.uuid4().hex
+        journal.public_token_expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+        db_session.commit()
+    elif state == "expired":
+        journal.public_token_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db_session.commit()
+    else:
+        signed = client.post(f"/api/v1/public/journals/{journal.public_token}/sign", json={
+            "signer_name": "QA Signer",
+            "signature_payload": {
+                "viewport": {"width": 320, "height": 120},
+                "strokes": [[{"x": 20, "y": 70}, {"x": 140, "y": 35}]],
+            },
+        })
+        assert signed.status_code == 200, signed.text
+    archived_pdf = client.get(route + "/pdf") if state == "signed" else None
+    template = client.post("/api/v1/admin/settings/communication-templates", json={
+        "name": f"QA {state} invitation", "subject": "Review {{public_url}}",
+        "message": "Review {{journal_title}} via {{public_url}}",
+        "send_email": True, "send_whatsapp": True, "is_active": True,
+    })
+    assert template.status_code == 201, template.text
+    sent = client.post(route + "/send", json={
+        "template_id": template.json()["id"], "email_to": "qa@example.com",
+        "whatsapp_to": "+15551234567", "send_email": True, "send_whatsapp": True,
+    })
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["public_url"] is None
+    rows = db_session.query(OutboxMessageORM).filter(
+        OutboxMessageORM.company_id == company_id,
+        OutboxMessageORM.correlation_id == uuid.UUID(journal_id),
+    ).all()
+    messages = [row for row in rows if row.payload.get("template_id") == template.json()["id"]]
+    assert len(messages) == 2
+    for row in messages:
+        subject_key = "subject" if row.channel == OutboxChannel.EMAIL else "fallback_subject"
+        assert journal.public_token not in row.payload[subject_key]
+        for key in ("body_text", "fallback_body_text"):
+            body = row.payload.get(key, "")
+            assert journal.public_token not in body
+            assert "Public link:" not in body and "Journal link:" not in body
+        content = StorageService.get_pdf(object_key=row.payload["object_key"])
+        assert content.startswith(b"%PDF")
+        if archived_pdf is not None:
+            assert archived_pdf.status_code == 200
+            assert content == archived_pdf.content
 
 
 def test_whatsapp_failure_enqueues_email_fallback_when_enabled(

@@ -62,6 +62,17 @@ def _messages(subject):
     return [row for row in result["messages"] if row["Subject"] == subject]
 
 
+def _received_mail(subject):
+    deadline = time.monotonic() + 15
+    matches = _messages(subject)
+    while not matches and time.monotonic() < deadline:
+        time.sleep(0.2)
+        matches = _messages(subject)
+    assert len(matches) == 1
+    raw = _mailpit(f"message/{matches[0]['ID']}/raw")
+    return BytesParser(policy=policy.default).parsebytes(raw)
+
+
 @pytest.fixture(scope="module", autouse=True)
 def isolated_services():
     # Run before function-scoped fixtures can insert anything into a database.
@@ -94,6 +105,7 @@ def test_signed_pdf_reaches_local_mailpit_unchanged(
     client = client_admin_real_uow
     project_name = f"QA MAILPIT {uuid.uuid4().hex[:12]}"
     subject = f"DIMAX signed work acceptance - {project_name}"
+    invite_subject = f"QA invitation - {project_name}"
     project = ProjectORM(
         company_id=company_id, name=project_name,
         address="QA only / Building A / Floor 2",
@@ -136,6 +148,24 @@ def test_signed_pdf_reaches_local_mailpit_unchanged(
         ready = client.post(route + "/mark-ready")
         assert ready.status_code == 200, ready.text
         token = ready.json()["public_token"]
+        signing_url = ready.json()["signing_url"]
+        invitation = client.post(route + "/send", json={
+            "email_to": project.contact_email, "subject": invite_subject,
+            "message": "QA TEST ONLY - review the attached document.",
+            "send_email": True, "send_whatsapp": False,
+        })
+        assert invitation.status_code == 200, invitation.text
+        assert invitation.json()["public_url"] == signing_url
+        assert signing_url.startswith(settings.PUBLIC_APP_BASE_URL.rstrip("/") + "/acceptance/")
+        unsigned_content = StorageService.get_pdf(object_key=invitation.json()["object_key"])
+        assert outbox_worker.run_once(limit=1) == 1
+        invitation_mail = _received_mail(invite_subject)
+        invitation_body = invitation_mail.get_body(preferencelist=("plain",)).get_content()
+        assert signing_url in invitation_body
+        assert "/api/v1/public/journals/" not in invitation_body
+        invitation_attachments = list(invitation_mail.iter_attachments())
+        assert len(invitation_attachments) == 1
+        assert invitation_attachments[0].get_payload(decode=True) == unsigned_content
         signed = client.post(f"/api/v1/public/journals/{token}/sign", json={
             "signer_name": "QA TEST SIGNER",
             "signature_payload": {
@@ -160,13 +190,14 @@ def test_signed_pdf_reaches_local_mailpit_unchanged(
         message = db_session.query(OutboxMessageORM).filter(
             OutboxMessageORM.company_id == company_id,
             OutboxMessageORM.correlation_id == uuid.UUID(journal_id),
+            OutboxMessageORM.payload["delivery_reason"].as_string() == "SIGNED_JOURNAL",
         ).one()
         assert message.payload["delivery_reason"] == "SIGNED_JOURNAL"
         assert message.payload["to_email"] == project.contact_email
         assert message.payload["cc_emails"] == [admin_email]
         assert message.payload["object_key"].endswith("_signed.pdf")
         draft_key = f"journals/{company_id}/{journal_id}/journal_{journal_id}.pdf"
-        assert StorageService.get_pdf(object_key=draft_key) == draft.content
+        assert StorageService.get_pdf(object_key=draft_key) == unsigned_content
         project.name = "Changed after QA signing"
         db_session.commit()
         exported = client.post(route + "/export-pdf")
@@ -180,14 +211,7 @@ def test_signed_pdf_reaches_local_mailpit_unchanged(
         details = client.get(route)
         assert details.status_code == 200, details.text
         assert details.json()["email_delivery_status"] == "DELIVERED"
-        deadline = time.monotonic() + 15
-        matches = _messages(subject)
-        while not matches and time.monotonic() < deadline:
-            time.sleep(0.2)
-            matches = _messages(subject)
-        assert len(matches) == 1
-        raw = _mailpit(f"message/{matches[0]['ID']}/raw")
-        mail = BytesParser(policy=policy.default).parsebytes(raw)
+        mail = _received_mail(subject)
         assert [address for _, address in getaddresses(mail.get_all("To", []))] == ["developer.qa@example.com"]
         assert [address for _, address in getaddresses(mail.get_all("Cc", []))] == [admin_email]
         attachments = list(mail.iter_attachments())
@@ -199,16 +223,17 @@ def test_signed_pdf_reaches_local_mailpit_unchanged(
         if output_dir:
             output = Path(output_dir).resolve()
             assert output == Path("/qa") and output.is_dir()
-            (output / "qa-unsigned.pdf").write_bytes(draft.content)
+            (output / "qa-unsigned.pdf").write_bytes(unsigned_content)
             (output / "qa-signed.pdf").write_bytes(archived.content)
         print("MAILPIT PASS: signed PDF SHA256=" + sha256(archived.content).hexdigest())
     finally:
         # Never clear a mailbox or bucket: remove only this fixture's artifacts.
         try:
-            ids = [row["ID"] for row in _messages(subject)]
+            ids = [row["ID"] for label in (subject, invite_subject) for row in _messages(label)]
             if ids:
                 _mailpit("messages", method="DELETE", body={"IDs": ids})
             assert not _messages(subject)
+            assert not _messages(invite_subject)
         finally:
             if journal_id:
                 prefix = f"journals/{company_id}/{journal_id}/"

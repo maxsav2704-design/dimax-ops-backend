@@ -6,6 +6,7 @@ import uuid
 from app.core.config import settings
 from app.integrations.email.smtp_sender import SmtpEmailSender
 from app.integrations.whatsapp.twilio_sender import TwilioWhatsAppSender
+from app.modules.journal.application.signing_links import journal_signing_url
 from app.modules.settings.infrastructure.models import CommunicationTemplateORM
 from app.shared.domain.errors import NotFound
 from app.shared.domain.errors import ValidationError
@@ -402,11 +403,7 @@ class SettingsAdminService:
         if project is not None:
             variables["project_name"] = project.name
             variables["project_address"] = project.address
-        if journal.public_token:
-            variables["public_url"] = (
-                f"{settings.PUBLIC_BASE_URL}/api/v1/public/journals/"
-                f"{journal.public_token}"
-            )
+        variables["public_url"] = journal_signing_url(journal)
         return variables
 
     @staticmethod

@@ -300,7 +300,9 @@ def test_settings_communication_templates_crud_and_preview(
     assert "Communications Project" in preview["subject"]
     assert "Communication Preview Journal" in preview["message"]
     assert preview["variables"]["project_name"] == "Communications Project"
-    assert preview["variables"]["public_url"] is not None
+    assert preview["variables"]["public_url"] == mark_ready_resp.json()["signing_url"]
+    assert mark_ready_resp.json()["signing_url"] in preview["message"]
+    assert "/api/v1/public/journals/" not in preview["message"]
 
     delete_resp = client_admin_real_uow.delete(
         f"/api/v1/admin/settings/communication-templates/{created['id']}"
@@ -334,6 +336,8 @@ def test_settings_integration_test_send_endpoints(
 
     monkeypatch.setattr(SmtpEmailSender, "send", _fake_email_send)
     monkeypatch.setattr(TwilioWhatsAppSender, "send", _fake_whatsapp_send)
+    monkeypatch.setattr(settings, "EMAIL_ENABLED", True)
+    monkeypatch.setattr(settings, "WHATSAPP_ENABLED", True)
     monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "AC_TEST")
     monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "auth-token")
     monkeypatch.setattr(settings, "TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")

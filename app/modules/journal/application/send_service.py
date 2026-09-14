@@ -7,6 +7,7 @@ from urllib.parse import quote
 from app.core.config import settings
 from app.shared.domain.errors import NotFound, ValidationError
 from app.modules.journal.application.use_cases import JournalUseCases
+from app.modules.journal.application.signing_links import journal_signing_url
 from app.modules.outbox.domain.enums import OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.files.application.service import FileTokenService
@@ -84,12 +85,7 @@ class JournalSendService:
             journal_id=journal_id,
         )
 
-        public_url = None
-        if j.public_token:
-            public_url = (
-                f"{settings.PUBLIC_BASE_URL}/api/v1/public/journals/"
-                f"{j.public_token}"
-            )
+        public_url = journal_signing_url(j)
 
         subject_final = (subject or "").strip()
         message_final = (message or "").strip()
