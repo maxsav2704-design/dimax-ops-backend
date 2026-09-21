@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -33,6 +34,7 @@ from app.modules.journal.domain.enums import (
 class JournalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "journals"
     __table_args__ = (
+        CheckConstraint("pdf_locale IN ('en', 'ru', 'he')", name="ck_journals_pdf_locale"),
         UniqueConstraint(
             "company_id", "public_token", name="uq_journals_company_public_token"
         ),
@@ -59,6 +61,7 @@ class JournalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     )
 
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pdf_locale: Mapped[str] = mapped_column(String(2), nullable=False, default="en", server_default="en")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     public_token: Mapped[str | None] = mapped_column(

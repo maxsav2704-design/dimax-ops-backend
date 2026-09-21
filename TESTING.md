@@ -277,6 +277,33 @@ docker compose build api
 
 ## Integration Coverage Matrix
 
+### Journal document languages and pagination
+
+`tests/architecture/test_journal_pdf_layout.py` checks RU/EN/HE labels,
+35 unique door positions, multi-page comments, notes and the signature block.
+It verifies bidi conversion after line wrapping, including explicit newlines.
+Mixed-direction PDF text is also inspected with a pypdf visitor because default
+text extraction can omit Latin runs next to Hebrew. Rendered-page inspection
+remains necessary; successful extraction alone does not establish visual quality.
+
+`tests/integration/test_journal_delivery_api.py` checks persisted language,
+auditing, header locks, DRAFT-only editing, invalid API/DB values and unchanged
+signed PDF bytes. Installer preparation retains an existing draft's language.
+New clients send `pdf_locale`; omitted values remain backward compatible (`en`).
+
+Migration `0061_journal_pdf_locale` adds a checked, non-null field with an English
+default and does not regenerate files. `scripts/db_journal_locale_migration_smoke.py`
+requires APP_ENV=test, DIMAX_JOURNAL_LOCALE_MIGRATION=1 and an empty database named
+`dimax_journal_locale_migrations` on host `db`. It verifies the full migration
+chain, a preexisting archive reference, the default/check constraint and one-step
+rollback/re-upgrade. Never run the destructive rollback check against live data.
+
+September 21 focused regression: 88 PASS including existing signature integrity,
+freshness, snapshot, transaction, access and opt-in local Mailpit delivery tests.
+This does not replace the full release gate or external delivery acceptance.
+
+### Module coverage
+
 - `auth`: `tests/integration/test_auth_api.py`, `tests/integration/test_auth_guards_api.py`
 - `installers`: `tests/integration/test_installers_api.py`, `tests/integration/test_installers_link_user_api.py`
 - `installer_rates`: `tests/integration/test_installer_rates_api.py`

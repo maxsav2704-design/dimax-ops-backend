@@ -18,6 +18,7 @@ def read_journal_snapshot(uow, *, journal) -> dict:
         "journal": {
             "id": str(journal.id), "project_id": str(journal.project_id),
             "status": status, "title": journal.title, "notes": journal.notes,
+            "pdf_locale": getattr(journal, "pdf_locale", "en"),
             "lock_header": journal.lock_header, "lock_table": journal.lock_table,
             "lock_footer": journal.lock_footer,
             "signed_at": journal.signed_at.isoformat() if journal.signed_at else None,

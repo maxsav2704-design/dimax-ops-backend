@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from app.core.config import settings
+from app.modules.audit.application.service import AuditService
 from app.modules.journal.api.schemas import (
     JournalCreateResponse,
     JournalExportPdfResponse,
@@ -68,12 +69,14 @@ class JournalAdminService:
         company_id: uuid.UUID,
         project_id: uuid.UUID,
         title: str | None,
+        pdf_locale: str = "en",
     ) -> JournalCreateResponse:
         j = JournalUseCases.create_draft(
             uow,
             company_id=company_id,
             project_id=project_id,
             title=title,
+            pdf_locale=pdf_locale,
         )
         return JournalCreateResponse(id=j.id)
 
@@ -94,6 +97,7 @@ class JournalAdminService:
             "status": _status_value(j.status),
             "title": j.title,
             "notes": j.notes,
+            "pdf_locale": j.pdf_locale,
             "public_token": j.public_token,
             "public_token_expires_at": j.public_token_expires_at,
             "lock_header": j.lock_header,
@@ -124,13 +128,27 @@ class JournalAdminService:
         lock_header: bool | None,
         lock_table: bool | None,
         lock_footer: bool | None,
+        pdf_locale: str | None = None,
+        actor_user_id: uuid.UUID | None = None,
     ) -> None:
-        j = uow.journals.get(company_id=company_id, journal_id=journal_id)
+        j = uow.journals.get(company_id=company_id, journal_id=journal_id, for_update=True)
         if not j:
             raise NotFound("Journal not found")
 
         if _status_value(j.status) != "DRAFT":
             raise Conflict("Only DRAFT journal can be edited")
+
+        if pdf_locale is not None and pdf_locale != j.pdf_locale:
+            if j.lock_header:
+                raise Conflict("Journal header is locked")
+            if actor_user_id is not None:
+                AuditService.add(
+                    uow, company_id=company_id, actor_user_id=actor_user_id,
+                    entity_type="journal", entity_id=journal_id,
+                    action="JOURNAL_PDF_LANGUAGE_UPDATED",
+                    before={"pdf_locale": j.pdf_locale}, after={"pdf_locale": pdf_locale},
+                )
+            j.pdf_locale = pdf_locale
 
         if title is not None and not j.lock_header:
             j.title = title

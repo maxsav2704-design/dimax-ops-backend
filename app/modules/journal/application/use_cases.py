@@ -31,6 +31,7 @@ class JournalUseCases:
         project_id: uuid.UUID,
         title: str | None = None,
         installer_id: uuid.UUID | None = None,
+        pdf_locale: str = "en",
     ) -> JournalORM:
         project = uow.projects.get(company_id=company_id, project_id=project_id)
         if not project:
@@ -38,12 +39,14 @@ class JournalUseCases:
                 "Project not found", details={"project_id": str(project_id)}
             )
 
+        default_title = {"en": "Journal", "ru": "Журнал", "he": "יומן"}[pdf_locale]
         j = JournalORM(
             company_id=company_id,
             project_id=project_id,
             installer_id=installer_id,
             status=JournalStatus.DRAFT,
-            title=title or f"Journal - {project.name}",
+            title=title or f"{default_title} - {project.name}",
+            pdf_locale=pdf_locale,
             lock_header=False,
             lock_table=False,
             lock_footer=False,
@@ -288,6 +291,7 @@ class JournalUseCases:
                 "id": str(j.id),
                 "title": j.title,
                 "notes": j.notes,
+                "pdf_locale": j.pdf_locale,
                 "project_name": project.name,
                 "project_address": project.address,
                 "developer_company": project.developer_company,

@@ -49,6 +49,7 @@ def prepare_journal(
             company_id=user.company_id,
             installer_id=installer_id,
             project_id=body.project_id,
+            pdf_locale=body.pdf_locale,
         )
         AuditService.add(
             uow,
@@ -59,6 +60,7 @@ def prepare_journal(
             action="INSTALLER_JOURNAL_PREPARED",
             after={
                 "project_id": str(body.project_id),
+                "pdf_locale": result["pdf_locale"],
                 "completed_doors": result["completed_doors"],
                 "completed_addons": result["completed_addons"],
             },

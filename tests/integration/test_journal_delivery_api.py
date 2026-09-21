@@ -7,6 +7,8 @@ from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from pypdf import PdfReader
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.integrations.storage.storage_service import StorageService
@@ -101,12 +103,14 @@ def _create_journal(
     db_session,
     *,
     project_id: uuid.UUID,
+    pdf_locale: str = "en",
 ) -> str:
     resp = client_admin_real_uow.post(
         "/api/v1/admin/journals",
         json={
             "project_id": str(project_id),
             "title": "Delivery Journal",
+            "pdf_locale": pdf_locale,
         },
     )
     assert resp.status_code == 200, resp.text
@@ -718,3 +722,69 @@ def test_journal_delivery_validation_and_not_found(client_admin_real_uow):
     )
     assert pdf_not_found_resp.status_code == 404, pdf_not_found_resp.text
     assert pdf_not_found_resp.json()["error"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.parametrize("locale", ["en", "ru", "he"])
+def test_journal_document_language_is_persisted_audited_and_locked_before_signing(
+    client_admin_real_uow, db_session, company_id, locale
+):
+    client = client_admin_real_uow
+    project = _create_project(db_session, company_id=company_id, name="QA PDF language")
+    journal_id = _create_journal(client, db_session, project_id=project.id, pdf_locale=locale)
+    route = f"/api/v1/admin/journals/{journal_id}"
+    assert client.get(route).json()["pdf_locale"] == locale
+    assert client.get(route + "/snapshot").json()["journal"]["pdf_locale"] == locale
+    changed = {"en": "ru", "ru": "he", "he": "en"}[locale]
+    updated = client.patch(route, json={"pdf_locale": changed})
+    assert updated.status_code == 200, updated.text
+    audit = db_session.query(AuditLogORM).filter(
+        AuditLogORM.company_id == company_id,
+        AuditLogORM.entity_id == uuid.UUID(journal_id),
+        AuditLogORM.action == "JOURNAL_PDF_LANGUAGE_UPDATED",
+    ).one()
+    assert audit.before == {"pdf_locale": locale}
+    assert audit.after == {"pdf_locale": changed}
+    assert client.patch(route, json={"lock_header": True}).status_code == 200
+    assert client.patch(route, json={"pdf_locale": locale}).status_code == 409
+    assert client.patch(route, json={"lock_header": False}).status_code == 200
+    ready = client.post(route + "/mark-ready")
+    assert ready.status_code == 200, ready.text
+    assert client.patch(route, json={"pdf_locale": locale}).status_code == 409
+    token = ready.json()["public_token"]
+    public = client.get(f"/api/v1/public/journals/{token}")
+    assert public.status_code == 200, public.text
+    assert public.json()["journal"]["pdf_locale"] == changed
+    signed = client.post(f"/api/v1/public/journals/{token}/sign", json={
+        "signer_name": "QA Signer",
+        "signature_payload": {
+            "viewport": {"width": 320, "height": 120},
+            "strokes": [[{"x": 20, "y": 70}, {"x": 140, "y": 35}]],
+        },
+    })
+    assert signed.status_code == 200, signed.text
+    pdf = client.get(route + "/pdf")
+    assert pdf.status_code == 200, pdf.text
+    text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(pdf.content)).pages)
+    expected = {"en": "Developer acceptance", "ru": "Приёмка застройщиком", "he": "אישור היזם"}
+    assert expected[changed] in text
+    assert client.patch(route, json={"pdf_locale": locale}).status_code == 409
+    assert client.get(route + "/pdf").content == pdf.content
+
+
+def test_journal_pdf_language_rejects_invalid_api_values_and_database_rows(
+    client_admin_real_uow, db_session, company_id
+):
+    client = client_admin_real_uow
+    project = _create_project(db_session, company_id=company_id, name="QA invalid language")
+    journal_id = _create_journal(client, db_session, project_id=project.id)
+    for locale in ("zz", "EN", "ru-RU", ""):
+        assert client.post("/api/v1/admin/journals", json={
+            "project_id": str(project.id), "pdf_locale": locale,
+        }).status_code == 422
+        assert client.patch(f"/api/v1/admin/journals/{journal_id}", json={
+            "pdf_locale": locale,
+        }).status_code == 422
+    db_session.add(JournalORM(company_id=company_id, project_id=project.id, pdf_locale="zz"))
+    with pytest.raises(IntegrityError, match="ck_journals_pdf_locale"):
+        db_session.flush()
+    db_session.rollback()

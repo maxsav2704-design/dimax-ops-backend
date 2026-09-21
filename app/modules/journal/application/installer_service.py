@@ -105,6 +105,7 @@ class InstallerJournalService:
             "can_submit": journal.status == JournalStatus.DRAFT
             and readiness.can_submit,
             "title": journal.title,
+            "pdf_locale": getattr(journal, "pdf_locale", "en"),
             "snapshot_version": journal.snapshot_version,
             "public_token_expires_at": journal.public_token_expires_at,
             "signing_url": signing_url,
@@ -159,6 +160,7 @@ class InstallerJournalService:
         company_id: uuid.UUID,
         installer_id: uuid.UUID,
         project_id: uuid.UUID,
+        pdf_locale: str = "en",
     ) -> dict:
         project, _assigned = InstallerJournalService._assert_project_access(
             uow,
@@ -177,7 +179,7 @@ class InstallerJournalService:
                 company_id=company_id,
                 project_id=project_id,
                 installer_id=installer_id,
-                title=f"Work acceptance - {project.name}",
+                pdf_locale=pdf_locale,
             )
         else:
             JournalUseCases.refresh_snapshot(

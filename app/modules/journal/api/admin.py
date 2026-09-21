@@ -53,6 +53,7 @@ def create_draft(
             company_id=user.company_id,
             project_id=body.project_id,
             title=body.title,
+            pdf_locale=body.pdf_locale,
         )
 
 
@@ -98,6 +99,8 @@ def update_journal(
             lock_header=body.lock_header,
             lock_table=body.lock_table,
             lock_footer=body.lock_footer,
+            pdf_locale=body.pdf_locale,
+            actor_user_id=user.id,
         )
 
     return OkResponse()

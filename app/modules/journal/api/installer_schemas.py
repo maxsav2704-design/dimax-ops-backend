@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -29,6 +30,7 @@ class InstallerJournalListResponse(BaseModel):
 
 class InstallerJournalPrepareBody(BaseModel):
     project_id: UUID
+    pdf_locale: Literal["en", "ru", "he"] = "en"
 
 
 class InstallerJournalDoorItem(BaseModel):
@@ -46,6 +48,7 @@ class InstallerJournalAddonItem(BaseModel):
 
 
 class InstallerJournalDetailsResponse(InstallerJournalSummary):
+    pdf_locale: Literal["en", "ru", "he"] = "en"
     title: str | None
     snapshot_version: int
     public_token_expires_at: datetime | None

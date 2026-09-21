@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class JournalCreateBody(BaseModel):
     project_id: UUID
+    pdf_locale: Literal["en", "ru", "he"] = "en"
     title: str | None = Field(default=None, max_length=200)
 
 
@@ -29,6 +31,7 @@ class JournalCreateResponse(BaseModel):
 
 class JournalDetailsResponse(BaseModel):
     id: UUID
+    pdf_locale: Literal["en", "ru", "he"] = "en"
     project_id: UUID
     status: str
     title: str | None
@@ -52,6 +55,7 @@ class JournalDetailsResponse(BaseModel):
 
 
 class JournalUpdateBody(BaseModel):
+    pdf_locale: Literal["en", "ru", "he"] | None = None
     title: str | None = Field(default=None, max_length=200)
     notes: str | None = Field(default=None, max_length=5000)
     lock_header: bool | None = None
@@ -66,6 +70,7 @@ class PublicSignBody(BaseModel):
 
 class PublicJournalDTO(BaseModel):
     id: UUID
+    pdf_locale: Literal["en", "ru", "he"] = "en"
     project_id: UUID
     status: str
     title: str | None

@@ -202,10 +202,18 @@ def test_installer_journal_is_scoped_and_signed_pdf_is_queued_for_delivery(
 
     prepared = client_installer.post(
         "/api/v1/installer/journals/prepare",
-        json={"project_id": str(project.id)},
+        json={"project_id": str(project.id), "pdf_locale": "he"},
     )
     assert prepared.status_code == 200, prepared.text
     prepared_body = prepared.json()
+    assert prepared_body["pdf_locale"] == "he"
+    repeated = client_installer.post(
+        "/api/v1/installer/journals/prepare",
+        json={"project_id": str(project.id), "pdf_locale": "ru"},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["id"] == prepared_body["id"]
+    assert repeated.json()["pdf_locale"] == "he"
     assert prepared_body["completed_doors"] == 1
     assert prepared_body["completed_addons"] == 1
     assert [row["unit_label"] for row in prepared_body["doors"]] == ["OWN-01"]
