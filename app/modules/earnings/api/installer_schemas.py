@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 
 
 class InstallerEarningsByInstallTypeDTO(BaseModel):
@@ -34,7 +34,12 @@ class InstallerEarningsInstallTypeSummaryDTO(BaseModel):
     code: str
     label: str
     amount: Decimal
-    quantity: int
+    quantity: Decimal
+
+    @field_serializer("quantity", when_used="json")
+    def serialize_quantity(self, value: Decimal) -> float:
+        # Preserve the numeric JSON contract without truncating fractional work.
+        return float(value)
 
 
 class InstallerEarningsRowDTO(BaseModel):

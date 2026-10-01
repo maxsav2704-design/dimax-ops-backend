@@ -271,11 +271,11 @@ class InstallerEarningsApiService:
                     "code": install_type_code,
                     "label": install_type_label,
                     "amount": Decimal("0"),
-                    "quantity": 0,
+                    "quantity": Decimal("0"),
                 },
             )
             type_bucket["amount"] += amount
-            type_bucket["quantity"] += int(quantity)
+            type_bucket["quantity"] += quantity
 
             project_bucket = by_project.setdefault(
                 project_key,
@@ -339,7 +339,7 @@ class InstallerEarningsApiService:
                 code=item["code"],
                 label=item["label"],
                 amount=_money(item["amount"]),
-                quantity=int(item["quantity"]),
+                quantity=item["quantity"],
             )
             for item in sorted(by_type.values(), key=lambda item: item["amount"], reverse=True)
         ]

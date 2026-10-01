@@ -352,6 +352,12 @@ Plan writes and fact creation lock the same project row within the existing
 unit of work, and the existing unique fact/ledger constraints remain in place.
 No schema change or migration is needed for this hardening.
 
+The installer earnings type summary accumulates quantities as Decimal, including
+sub-unit work and multiple fractional facts. Its JSON quantity remains a number,
+now preserving the fraction instead of truncating each fact to an integer.
+`jobs_count` still counts ledger rows; earned amounts and rate snapshots do not
+change. Mobile accepts both numeric and decimal-string quantities.
+
 ### Module coverage
 
 - `auth`: `tests/integration/test_auth_api.py`, `tests/integration/test_auth_guards_api.py`

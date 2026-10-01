@@ -599,6 +599,27 @@ def test_addon_direct_event_id_reuse_rejects_changed_payload(addon_payroll_case,
     assert db_session.query(CompletedWorkORM).filter_by(project_id=case.project.id).one().amount_snapshot == Decimal("14.99")
 
 
+@pytest.mark.parametrize("quantities,total", [(["0.25"], "2.50"), (["1.50", "0.25"], "17.49")])
+def test_addon_earnings_summary_preserves_fractional_type_quantity(addon_payroll_case, quantities, total):
+    case = addon_payroll_case
+    for index, quantity in enumerate(quantities):
+        response = _submit_addon(case, quantity=quantity, event_id=f"fractional-summary-{index}")
+        assert response.status_code == 200, response.text
+        assert response.json()["acks"][0]["ok"] is True
+
+    response = case.client.get("/api/v1/installer/earnings/summary?period=month")
+    assert response.status_code == 200, response.text
+    summary = response.json()
+    assert summary["jobs_count"] == len(quantities)
+    assert len(summary["install_types"]) == 1
+    group = summary["install_types"][0]
+    assert group["code"] == f"addon:{case.addon.id}"
+    assert isinstance(group["quantity"], (int, float))
+    assert Decimal(str(group["quantity"])) == sum(map(Decimal, quantities))
+    assert Decimal(group["amount"]) == Decimal(total)
+    assert sum(Decimal(str(row["quantity"])) for row in summary["rows"]) == Decimal(str(group["quantity"]))
+
+
 @pytest.mark.parametrize("concurrent_plan", [False, True])
 def test_concurrent_addon_writes_preserve_one_fact_one_earning(addon_payroll_case, db_session, concurrent_plan):
     from concurrent.futures import ThreadPoolExecutor
