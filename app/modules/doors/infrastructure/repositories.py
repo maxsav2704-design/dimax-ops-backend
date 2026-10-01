@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM
 from app.modules.projects.infrastructure.models import ProjectORM
 
 
@@ -44,6 +45,20 @@ class DoorRepository:
 
     def save(self, door: DoorORM) -> None:
         self.session.add(door)
+
+    def status_before_issue(self, *, company_id: uuid.UUID, door_id: uuid.UUID) -> str | None:
+        row = (
+            self.session.query(DoorStatusHistoryORM.from_status)
+            .filter(
+                DoorStatusHistoryORM.company_id == company_id,
+                DoorStatusHistoryORM.door_id == door_id,
+                DoorStatusHistoryORM.to_status == DoorStatus.ISSUE_OPEN.value,
+                DoorStatusHistoryORM.from_status != DoorStatus.ISSUE_OPEN.value,
+            )
+            .order_by(DoorStatusHistoryORM.created_at.desc(), DoorStatusHistoryORM.id.desc())
+            .first()
+        )
+        return row[0] if row else None
 
     def add_many(self, doors: list[DoorORM]) -> None:
         self.session.add_all(doors)

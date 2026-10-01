@@ -8,6 +8,7 @@ from app.modules.doors.domain.errors import DoorNotAssigned
 from app.modules.issues.api.installer_schemas import InstallerIssueReportDTO
 from app.modules.issues.domain.enums import IssuePriority, IssueStatus, IssueWorkflowState
 from app.modules.issues.infrastructure.models import IssueORM
+from app.modules.issues.application.sync_payload import publish_issue_change
 from app.modules.projects.application.status_service import ProjectStatusService
 from app.shared.domain.errors import NotFound
 
@@ -32,6 +33,11 @@ class InstallerIssuesApiService:
         )
         if door is None:
             raise NotFound("Door not found", details={"door_id": str(issue.door_id)})
+        if for_update:
+            # An office update may have committed while we waited for the door lock.
+            issue = uow.issues.get(company_id=company_id, issue_id=issue_id, for_update=True)
+            if issue is None:
+                raise NotFound("Issue not found", details={"issue_id": str(issue_id)})
         is_assigned = getattr(door, "installer_id", None) == installer_id
         is_author = issue.created_by_user_id == user_id
         if not is_assigned and not is_author:
@@ -127,10 +133,13 @@ class InstallerIssuesApiService:
         uow.issues.save(issue)
 
         old_status = getattr(door, "status", None)
-        door.status = DoorStatus.ISSUE_OPEN
+        # A defect report must not erase a completed or cancelled installation.
+        if not door.is_locked and door.status in {DoorStatus.NOT_INSTALLED, DoorStatus.IN_PROGRESS}:
+            door.status = DoorStatus.ISSUE_OPEN
         door.version = int(getattr(door, "version", 0) or 0) + 1
         uow.doors.save(door)
 
+        uow.session.flush()
         ProjectStatusService.recalc_and_set(
             uow=uow,
             company_id=company_id,
@@ -146,6 +155,7 @@ class InstallerIssuesApiService:
             reason=title or details,
         )
         uow.session.flush()
+        publish_issue_change(uow, issue=issue, door=door)
 
         return InstallerIssueReportDTO(
             id=issue.id,
@@ -182,6 +192,7 @@ class InstallerIssuesApiService:
         issue.details = text or None
         uow.issues.save(issue)
         uow.session.flush()
+        publish_issue_change(uow, issue=issue, door=door)
 
         return InstallerIssueReportDTO(
             id=issue.id,

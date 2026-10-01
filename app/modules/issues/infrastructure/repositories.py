@@ -30,16 +30,18 @@ class IssueRepository:
         )
 
     def get(
-        self, *, company_id: uuid.UUID, issue_id: uuid.UUID
+        self, *, company_id: uuid.UUID, issue_id: uuid.UUID, for_update: bool = False
     ) -> IssueORM | None:
-        return (
+        query = (
             self.session.query(IssueORM)
             .filter(
                 IssueORM.company_id == company_id,
                 IssueORM.id == issue_id,
             )
-            .one_or_none()
         )
+        if for_update:
+            query = query.populate_existing().with_for_update()
+        return query.one_or_none()
 
     def list_by_ids(
         self,
@@ -120,19 +122,20 @@ class IssueRepository:
         company_id: uuid.UUID,
         project_id: uuid.UUID,
         installer_id: uuid.UUID,
+        include_closed: bool = False,
     ) -> list[IssueORM]:
-        return (
+        query = (
             self.session.query(IssueORM)
             .join(DoorORM, DoorORM.id == IssueORM.door_id)
             .filter(
                 IssueORM.company_id == company_id,
                 DoorORM.project_id == project_id,
                 DoorORM.installer_id == installer_id,
-                IssueORM.status == IssueStatus.OPEN,
             )
-            .order_by(IssueORM.created_at.desc())
-            .all()
         )
+        if not include_closed:
+            query = query.filter(IssueORM.status == IssueStatus.OPEN)
+        return query.order_by(IssueORM.created_at.desc()).all()
 
     def list_created_by_user(
         self,

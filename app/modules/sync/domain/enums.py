@@ -9,6 +9,7 @@ class SyncEventType(str, Enum):
 
 class SyncChangeType(str, Enum):
     DOOR = "DOOR"
+    ISSUE = "ISSUE"
     ADDON_FACT = "ADDON_FACT"
     PROJECT_ADDON_PLAN = "PROJECT_ADDON_PLAN"
     PROJECT_ASSIGNMENTS = "PROJECT_ASSIGNMENTS"

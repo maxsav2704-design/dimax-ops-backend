@@ -302,6 +302,34 @@ September 21 focused regression: 88 PASS including existing signature integrity,
 freshness, snapshot, transaction, access and opt-in local Mailpit delivery tests.
 This does not replace the full release gate or external delivery acceptance.
 
+### Issue lifecycle and incremental sync
+
+`tests/integration/test_issue_lifecycle_sync.py` covers reporting, individual and
+bulk closure, the preceding uncompleted door state, installed-door payroll
+preservation, contradictory statuses, installer reassignment and issue delivery.
+It also checks that a comment refreshes an issue closed after its initial read,
+so an old in-memory status cannot be published back to the phone.
+Closing an issue is not an installation. Opening a defect on an installed door
+does not reverse completed work. Closed issues remain in assigned cold snapshots.
+
+The mobile handler removes only the acknowledged optimistic issue. When a server
+issue arrives, it also removes orphaned local copies left by older clients for
+that door, but preserves every local copy still backed by a pending event.
+
+Migration `0062_issue_sync` adds the `ISSUE` change type and backfills existing
+assigned issues without changing business rows. Apply the migration before
+restarting backend processes. Deploy the updated mobile sync handler with it;
+older clients ignore this event type and do not provide correct incremental
+issue updates. A client that already consumed events with an old handler needs
+a supported cold resync after reconciling its pending work, never a data clear.
+
+`scripts/db_issue_sync_migration_smoke.py` requires APP_ENV=test,
+DIMAX_ISSUE_SYNC_MIGRATION=1 and an empty disposable database named
+`dimax_issue_sync_migrations` on host `db`. It tests the full migration chain,
+OPEN/CLOSED issue backfill, rollback and repeat upgrade without payroll changes.
+Rollback removes only the derived ISSUE change-log rows and retains business
+issues and the additive PostgreSQL enum label. Do not run this smoke on live data.
+
 ### Module coverage
 
 - `auth`: `tests/integration/test_auth_api.py`, `tests/integration/test_auth_guards_api.py`

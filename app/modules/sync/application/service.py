@@ -146,6 +146,9 @@ class InstallerSyncService:
                 },
             )
 
+        if change_type_value == SyncChangeType.ISSUE.value:
+            return InstallerSyncService._only(payload, {"id", "door_id", "project_id", "status", "title", "details"})
+
         if change_type_value == SyncChangeType.ADDON_FACT.value:
             return InstallerSyncService._only(
                 payload,
@@ -197,6 +200,8 @@ class InstallerSyncService:
                     "name",
                     "address",
                     "status",
+                    "lifecycle_status",
+                    "health_status",
                     "waze_url",
                     "updated_at",
                 },
@@ -1052,6 +1057,7 @@ class InstallerSyncService:
                 company_id=company_id,
                 project_id=pid_uuid,
                 installer_id=installer_id,
+                include_closed=True,
             )
             issues.extend(
                 [

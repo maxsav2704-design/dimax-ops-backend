@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, Table, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -65,7 +66,7 @@ def main():
     assert "pdf_locale" not in {column["name"] for column in inspect(engine).get_columns("journals")}
     command.upgrade(config, "head")
     with engine.connect() as connection:
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0061_journal_pdf_locale"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == ScriptDirectory.from_config(config).get_current_head()
         assert connection.execute(text("SELECT pdf_locale FROM journals WHERE id=:id"), {"id": jid}).scalar_one() == "en"
     engine.dispose()
     print("PASS: empty database -> legacy -> head -> legacy -> head; default, constraint and archive reference preserved")

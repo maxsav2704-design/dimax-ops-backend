@@ -12,6 +12,7 @@ from app.shared.application.navigation import (
 from app.modules.companies.application.limits_service import CompanyLimitsService
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.doors.domain.enums import DoorStatus
+from app.modules.issues.application.sync_payload import publish_issue_change
 from app.modules.projects.domain.errors import InvalidPhone, InvalidWazeUrl
 from app.modules.projects.infrastructure.models import ProjectORM
 from app.modules.projects.domain.enums import ProjectLifecycleStatus, ProjectStatus
@@ -499,6 +500,9 @@ class ProjectUseCases:
                     "affected_door_ids": [str(did) for did in affected_door_ids],
                 },
             )
+        issue = uow.issues.get_by_door(company_id=company_id, door_id=door.id)
+        if issue is not None:
+            publish_issue_change(uow, issue=issue, door=door)
 
     @staticmethod
     def assign_installer_to_doors(
@@ -604,6 +608,9 @@ class ProjectUseCases:
                 installer_id=installer_id,
                 payload=build_door_sync_payload(door),
             )
+            issue = uow.issues.get_by_door(company_id=company_id, door_id=door.id)
+            if issue is not None:
+                publish_issue_change(uow, issue=issue, door=door)
 
         for old_installer_id, old_door_ids in removed_by_installer.items():
             uow.sync_change_log.add_change(

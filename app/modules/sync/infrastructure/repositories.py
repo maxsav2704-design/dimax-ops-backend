@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.installers.infrastructure.models import InstallerORM
+from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.projects.infrastructure.models import ProjectORM
 from app.modules.sync.domain.enums import SyncChangeType
 from app.modules.sync.infrastructure.models import (
@@ -232,10 +233,23 @@ class SyncChangeLogRepository:
         else:
             scope_filter = direct_installer_filter
 
+        current_issue_assignment = (
+            self.session.query(IssueORM.id)
+            .join(DoorORM, DoorORM.id == IssueORM.door_id)
+            .filter(
+                IssueORM.id == SyncChangeLogORM.entity_id,
+                IssueORM.company_id == company_id,
+                DoorORM.company_id == company_id,
+                DoorORM.installer_id == installer_id,
+                DoorORM.project_id == SyncChangeLogORM.project_id,
+            )
+            .exists()
+        )
         q = (
             self.session.query(SyncChangeLogORM)
             .filter(*base_filter)
             .filter(scope_filter)
+            .filter(or_(SyncChangeLogORM.change_type != SyncChangeType.ISSUE, current_issue_assignment))
             .order_by(SyncChangeLogORM.cursor_id.asc())
             .limit(limit)
         )

@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 import uuid
 
 from app.modules.audit.application.service import AuditService
+from app.modules.doors.application.transition_recorder import record_door_transition
+from app.modules.doors.domain.enums import DoorStatus
+from app.modules.issues.application.sync_payload import publish_issue_change
+from app.modules.projects.application.status_service import ProjectStatusService
 from app.modules.issues.api.schemas import AdminIssueDTO
 from app.modules.issues.domain.enums import (
     IssuePriority,
@@ -188,6 +192,10 @@ class IssuesAdminApiService:
         by_id = {row.id: row for row in rows}
         missing = [x for x in unique_issue_ids if x not in by_id]
 
+        # Match the door-first lock order used by installer writes and assignments.
+        for door_id in sorted({row.door_id for row in rows}, key=str):
+            uow.doors.get(company_id=company_id, door_id=door_id, for_update=True)
+
         items: list[AdminIssueDTO] = []
         for issue_id in unique_issue_ids:
             if issue_id not in by_id:
@@ -220,6 +228,12 @@ class IssuesAdminApiService:
         patch: dict,
         action: str,
     ) -> AdminIssueDTO:
+        door = uow.doors.get(company_id=company_id, door_id=row.door_id, for_update=True)
+        if door is None:
+            raise NotFound("Door not found", details={"door_id": str(row.door_id)})
+        row = uow.issues.get(company_id=company_id, issue_id=row.id, for_update=True)
+        if row is None:
+            raise NotFound("Issue not found")
         before = _snapshot(row)
 
         if "owner_user_id" in patch:
@@ -251,6 +265,12 @@ class IssuesAdminApiService:
         explicit_status = "status" in patch and patch.get("status") is not None
         explicit_workflow = "workflow_state" in patch and patch.get("workflow_state") is not None
 
+        if explicit_status and explicit_workflow:
+            closed = IssueStatus(patch["status"]) == IssueStatus.CLOSED
+            workflow_closed = IssueWorkflowState(patch["workflow_state"]) == IssueWorkflowState.CLOSED
+            if closed != workflow_closed:
+                raise ValidationError("status and workflow_state must agree on whether the issue is closed")
+
         if explicit_status:
             row.status = IssueStatus(patch["status"])
             if row.status == IssueStatus.CLOSED and not explicit_workflow:
@@ -275,6 +295,29 @@ class IssuesAdminApiService:
                 row.details = text if text else None
 
         uow.issues.save(row)
+        from_status = door.status
+        if row.status == IssueStatus.CLOSED and door.status == DoorStatus.ISSUE_OPEN:
+            if door.is_locked and door.installed_at is not None:
+                door.status = DoorStatus.INSTALLED
+            else:
+                previous = uow.doors.status_before_issue(company_id=company_id, door_id=door.id)
+                door.status = DoorStatus.IN_PROGRESS if previous == "IN_PROGRESS" else DoorStatus.NOT_INSTALLED
+        elif (
+            row.status == IssueStatus.OPEN and before["status"] == IssueStatus.CLOSED.value
+            and not door.is_locked and door.status in {DoorStatus.NOT_INSTALLED, DoorStatus.IN_PROGRESS}
+        ):
+            door.status = DoorStatus.ISSUE_OPEN
+        if door.status != from_status:
+            door.version = int(door.version or 0) + 1
+            uow.doors.save(door)
+            record_door_transition(
+                uow, company_id=company_id, actor_user_id=actor_user_id, door=door,
+                from_status=from_status, source="ISSUE_WORKFLOW", reason=row.details or row.title,
+            )
+        # Queries must see the closed issue before recalculating project health.
+        uow.session.flush()
+        ProjectStatusService.recalc_and_set(uow=uow, company_id=company_id, project_id=door.project_id)
+        publish_issue_change(uow, issue=row, door=door)
 
         AuditService.add(
             uow,

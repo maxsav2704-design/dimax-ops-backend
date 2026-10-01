@@ -18,7 +18,8 @@ from app.modules.doors.application.commands import (
 from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned
-from app.modules.issues.domain.enums import IssueStatus
+from app.modules.issues.domain.enums import IssueStatus, IssueWorkflowState
+from app.modules.issues.application.sync_payload import publish_issue_change
 from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.projects.application.status_service import ProjectStatusService
 
@@ -106,7 +107,9 @@ class DoorUseCases:
         )
         if issue and issue.status != IssueStatus.CLOSED:
             issue.status = IssueStatus.CLOSED
+            issue.workflow_state = IssueWorkflowState.CLOSED
             uow.issues.save(issue)
+            publish_issue_change(uow, issue=issue, door=door)
 
         ProjectStatusService.recalc_and_set(
             uow=uow,
@@ -184,6 +187,8 @@ class DoorUseCases:
             issue.details = cmd.comment
 
         uow.issues.save(issue)
+        issue.workflow_state = IssueWorkflowState.NEW
+        publish_issue_change(uow, issue=issue, door=door)
 
         ProjectStatusService.recalc_and_set(
             uow=uow,
@@ -261,7 +266,9 @@ class DoorUseCases:
             )
             if issue:
                 issue.status = IssueStatus.CLOSED
+                issue.workflow_state = IssueWorkflowState.CLOSED
                 uow.issues.save(issue)
+                publish_issue_change(uow, issue=issue, door=door)
 
         elif cmd.new_status == "NOT_INSTALLED":
             if not cmd.reason_id:
@@ -304,6 +311,8 @@ class DoorUseCases:
                 issue.status = IssueStatus.OPEN
                 issue.details = cmd.comment
             uow.issues.save(issue)
+            issue.workflow_state = IssueWorkflowState.NEW
+            publish_issue_change(uow, issue=issue, door=door)
 
         else:
             raise ValidationError(
