@@ -15,17 +15,19 @@ class ProjectRepository:
         self.session = session
 
     def get(
-        self, *, company_id: uuid.UUID, project_id: uuid.UUID
+        self, *, company_id: uuid.UUID, project_id: uuid.UUID, for_update: bool = False
     ) -> ProjectORM | None:
-        return (
+        query = (
             self.session.query(ProjectORM)
             .filter(
                 ProjectORM.company_id == company_id,
                 ProjectORM.id == project_id,
                 ProjectORM.deleted_at.is_(None),
             )
-            .one_or_none()
         )
+        if for_update:
+            query = query.populate_existing().with_for_update()
+        return query.one_or_none()
 
     def list(
         self,

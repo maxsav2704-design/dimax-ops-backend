@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.acl import get_current_installer_id
 from app.api.v1.deps import CurrentUser, require_installer
 from app.main import create_app
-from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonPlanORM
+from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM, ProjectAddonPlanORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
@@ -498,3 +498,147 @@ def test_admin_addon_financial_fields_reject_invalid_decimals(
         .count()
         == 0
     )
+
+
+@pytest.fixture()
+def addon_payroll_case(client_installer_addons, db_session, company_id, make_door_type):
+    from types import SimpleNamespace
+
+    client, installer_id = client_installer_addons
+    project = _create_project(db_session, company_id=company_id, name="Addon payroll acceptance")
+    addon = AddonTypeORM(company_id=company_id, name="Adjustment", unit="pcs", is_active=True)
+    db_session.add(addon)
+    db_session.flush()
+    plan = ProjectAddonPlanORM(
+        company_id=company_id, project_id=project.id, addon_type_id=addon.id,
+        qty_planned=Decimal("3"), client_price=Decimal("20"), installer_price=Decimal("9.99"),
+    )
+    db_session.add_all([plan, DoorORM(
+        company_id=company_id, project_id=project.id, door_type_id=make_door_type().id,
+        unit_label="ADDON-101", our_price=Decimal("100"), installer_id=installer_id,
+        status=DoorStatus.NOT_INSTALLED, is_locked=False,
+    )])
+    db_session.commit()
+    return SimpleNamespace(client=client, project=project, addon=addon, plan=plan, installer_id=installer_id)
+
+
+def _submit_addon(case, *, quantity="1.50", channel="sync", event_id="addon-financial-check"):
+    body = {"addon_type_id": str(case.addon.id), "qty_done": quantity, "comment": "Test adjustment"}
+    if channel == "direct":
+        return case.client.post(f"/api/v1/installer/addons/projects/{case.project.id}/facts", json={
+            **body, "client_event_id": event_id,
+        })
+    return case.client.post("/api/v1/installer/sync", json={
+        "since_cursor": 0, "ack_cursor": 0, "device_id": "addon-financial-check",
+        "events": [{"client_event_id": event_id, "type": "ADDON_FACT_CREATE",
+                    "project_id": str(case.project.id), "payload": body}],
+    })
+
+
+@pytest.mark.parametrize("quantity", ["1.001", "NaN", "Infinity", "10000000000"])
+def test_addon_sync_rejects_invalid_quantity_without_fact_or_earnings(addon_payroll_case, db_session, quantity):
+    case = addon_payroll_case
+    response = _submit_addon(case, quantity=quantity)
+    assert response.status_code == 200, response.text
+    ack = response.json()["acks"][0]
+    assert ack["ok"] is False and ack["error"] == "CONFLICT_INVALID_TRANSITION", ack
+    assert db_session.query(ProjectAddonFactORM).filter_by(project_id=case.project.id).count() == 0
+    assert db_session.query(CompletedWorkORM).filter_by(project_id=case.project.id).count() == 0
+
+
+@pytest.mark.parametrize("channel", ["direct", "sync"])
+@pytest.mark.parametrize("quantity,rate", [("0.01", "0.01"), ("9999999999.99", "9.99")])
+def test_addon_rejects_unrepresentable_payroll_amount(addon_payroll_case, db_session, channel, quantity, rate):
+    case = addon_payroll_case
+    case.plan.installer_price = Decimal(rate)
+    db_session.commit()
+    response = _submit_addon(case, channel=channel, quantity=quantity)
+    if channel == "direct":
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json()["acks"][0]["error"] == "CONFLICT_INVALID_TRANSITION"
+    assert db_session.query(ProjectAddonFactORM).filter_by(project_id=case.project.id).count() == 0
+    assert db_session.query(CompletedWorkORM).filter_by(project_id=case.project.id).count() == 0
+
+
+@pytest.mark.parametrize("channel", ["direct", "sync"])
+def test_addon_replay_keeps_original_rounded_rate_snapshot(addon_payroll_case, client_admin_real_uow, db_session, channel):
+    case = addon_payroll_case
+    first = _submit_addon(case, channel=channel)
+    assert first.status_code == 200, first.text
+    if channel == "sync":
+        assert first.json()["acks"][0]["ok"] is True
+    changed = client_admin_real_uow.put(f"/api/v1/admin/addons/projects/{case.project.id}/plan", json={
+        "addon_type_id": str(case.addon.id), "qty_planned": "3", "client_price": "30", "installer_price": "25",
+    })
+    assert changed.status_code == 200, changed.text
+    replay = _submit_addon(case, channel=channel)
+    assert replay.status_code == 200, replay.text
+    ack = replay.json()["acks"][0] if channel == "sync" else replay.json()
+    assert ack["ok"] is True and ack["applied"] is False
+    assert db_session.query(ProjectAddonFactORM).filter_by(project_id=case.project.id).count() == 1
+    work = db_session.query(CompletedWorkORM).filter_by(project_id=case.project.id).one()
+    assert work.quantity == Decimal("1.50") and work.rate_snapshot == Decimal("9.99")
+    assert work.amount_snapshot == Decimal("14.99")
+
+
+@pytest.mark.parametrize("channel", ["direct", "sync"])
+def test_addon_direct_event_id_reuse_rejects_changed_payload(addon_payroll_case, db_session, channel):
+    case = addon_payroll_case
+    first = _submit_addon(case, channel="direct")
+    assert first.status_code == 200, first.text
+    changed = _submit_addon(case, channel=channel, quantity="2.50")
+    if channel == "direct":
+        assert changed.status_code == 409, changed.text
+    else:
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["acks"][0]["ok"] is False, changed.text
+    assert db_session.query(ProjectAddonFactORM).filter_by(project_id=case.project.id).count() == 1
+    assert db_session.query(CompletedWorkORM).filter_by(project_id=case.project.id).one().amount_snapshot == Decimal("14.99")
+
+
+@pytest.mark.parametrize("concurrent_plan", [False, True])
+def test_concurrent_addon_writes_preserve_one_fact_one_earning(addon_payroll_case, db_session, concurrent_plan):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from sqlalchemy import text
+    from app.modules.addons.application.use_cases import AddonsUseCases
+    from app.modules.addons.domain.enums import AddonFactSource
+    from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
+
+    case = addon_payroll_case
+    company_id, project_id, addon_id, installer_id = (
+        case.project.company_id, case.project.id, case.addon.id, case.installer_id,
+    )
+    if concurrent_plan:
+        db_session.delete(case.plan)
+        db_session.commit()
+    barrier = Barrier(2)
+
+    def write(plan=False):
+        with SqlAlchemyUnitOfWork() as uow:
+            uow.session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            barrier.wait(timeout=10)
+            if plan:
+                AddonsUseCases.admin_set_project_plan(
+                    uow, company_id=company_id, project_id=project_id, addon_type_id=addon_id,
+                    qty_planned=Decimal("3"), client_price=Decimal("20"), installer_price=Decimal("9.99"),
+                )
+                return "plan"
+            fact = AddonsUseCases.installer_add_fact(
+                uow, company_id=company_id, project_id=project_id, installer_id=installer_id,
+                addon_type_id=addon_id, qty_done=Decimal("1.50"), comment="Concurrent acceptance",
+                done_at=None, source=AddonFactSource.OFFLINE, client_event_id="concurrent-addon",
+            )
+            return str(fact.id) if fact else None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(write), executor.submit(write, concurrent_plan)]
+        results = [future.result(timeout=20) for future in futures]
+    if not concurrent_plan:
+        assert results.count(None) == 1
+    assert db_session.query(ProjectAddonFactORM).filter_by(project_id=project_id).count() == 1
+    work = db_session.query(CompletedWorkORM).filter_by(project_id=project_id).one()
+    assert work.amount_snapshot == Decimal("14.99") and work.rate_snapshot == Decimal("9.99")

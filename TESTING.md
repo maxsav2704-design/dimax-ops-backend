@@ -330,6 +330,28 @@ OPEN/CLOSED issue backfill, rollback and repeat upgrade without payroll changes.
 Rollback removes only the derived ISSUE change-log rows and retains business
 issues and the additive PostgreSQL enum label. Do not run this smoke on live data.
 
+### Add-on quantity, payroll and replay
+
+`tests/integration/test_addons_api.py` covers shared offline/direct quantity
+validation, nonfinite values, Numeric(12,2) boundaries, unrepresentable payroll
+amounts, half-up cent rounding, immutable earned-rate snapshots, altered replay
+payloads and simultaneous writes. Run it with `test_sync_batch_api.py` and
+`test_payroll_lifecycle.py` for both sync paths and existing correction behavior.
+
+Quantity validation now runs in the add-on use case, not only the HTTP schema.
+A finite positive quantity has at most 10 integer and 2 decimal digits. For a
+positive installer rate, the rounded earned amount must fit 0.01..9999999999.99;
+invalid requests roll back the fact as well as its earnings. Zero/missing prices
+still allow the existing late-plan reconciliation flow. Updating a plan does
+not rewrite an already accrued snapshot.
+
+Identical direct retries retain `ok=true, applied=false`. Reusing the key for
+different work now returns HTTP 409 (or a sync conflict), rather than a false
+successful acknowledgment. Blank/oversized event IDs are validation errors.
+Plan writes and fact creation lock the same project row within the existing
+unit of work, and the existing unique fact/ledger constraints remain in place.
+No schema change or migration is needed for this hardening.
+
 ### Module coverage
 
 - `auth`: `tests/integration/test_auth_api.py`, `tests/integration/test_auth_guards_api.py`

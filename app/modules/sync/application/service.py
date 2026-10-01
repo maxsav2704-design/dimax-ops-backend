@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
 
@@ -971,7 +970,7 @@ class InstallerSyncService:
             project_id=project_id,
             installer_id=installer_id,
             addon_type_id=uuid.UUID(str(addon_type_id)),
-            qty_done=Decimal(str(qty_done)),
+            qty_done=qty_done,
             comment=comment,
             done_at=happened_at,
             source=AddonFactSource.OFFLINE,

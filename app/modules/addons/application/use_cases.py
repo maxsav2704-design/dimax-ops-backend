@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.addons.domain.enums import AddonFactSource
 from app.modules.doors.application.completion import enum_value
@@ -13,7 +15,39 @@ from app.modules.addons.infrastructure.models import (
 )
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.sync.domain.enums import SyncChangeType
-from app.shared.domain.errors import Forbidden, NotFound, ValidationError
+from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
+
+
+_CENT = Decimal("0.01")
+_MAX_DECIMAL = Decimal("9999999999.99")
+
+
+def validate_fact_quantity(value) -> Decimal:
+    try:
+        quantity = Decimal(str(value))
+        if not quantity.is_finite() or not 0 < quantity <= _MAX_DECIMAL:
+            raise ValueError
+        normalized = quantity.quantize(_CENT)
+        if quantity != normalized:
+            raise ValueError
+        return normalized
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValidationError(
+            "qty_done must be positive with at most 10 integer and 2 decimal digits",
+            field="qty_done",
+        ) from None
+
+
+def ensure_same_fact(existing, *, project_id, installer_id, addon_type_id, qty_done, comment, done_at) -> None:
+    if done_at is not None and done_at.tzinfo is None:
+        done_at = done_at.replace(tzinfo=timezone.utc)
+    if (
+        existing.project_id != project_id or existing.installer_id != installer_id
+        or existing.addon_type_id != addon_type_id or existing.qty_done != qty_done
+        or (existing.comment or None) != (comment or None)
+        or (done_at is not None and existing.done_at != done_at)
+    ):
+        raise Conflict("client_event_id was already used for different additional work", field="client_event_id")
 
 
 def utcnow() -> datetime:
@@ -52,6 +86,12 @@ def create_completed_work_for_addon_fact(
 
     quantity = Decimal(str(fact.qty_done))
     rate = Decimal(str(plan.installer_price))
+    amount = (quantity * rate).quantize(_CENT, rounding=ROUND_HALF_UP)
+    if not 0 < amount <= _MAX_DECIMAL:
+        raise ValidationError(
+            "Quantity multiplied by the installer rate must round to 0.01 through 9999999999.99",
+            field="qty_done",
+        )
     completed = CompletedWorkORM(
         company_id=company_id,
         project_id=fact.project_id,
@@ -61,7 +101,7 @@ def create_completed_work_for_addon_fact(
         completed_at=fact.done_at or utcnow(),
         quantity=quantity,
         rate_snapshot=rate,
-        amount_snapshot=quantity * rate,
+        amount_snapshot=amount,
         work_kind="ADDON",
         entry_type="ORIGINAL",
         correction_ref_id=None,
@@ -127,7 +167,7 @@ class AddonsUseCases:
         installer_price: Decimal,
         notes: str | None = None,
     ):
-        p = uow.projects.get(company_id=company_id, project_id=project_id)
+        p = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
         if not p:
             raise NotFound("Project not found")
         at = uow.addon_types.get(
@@ -180,7 +220,7 @@ class AddonsUseCases:
         project_id: uuid.UUID,
         items: list[dict],
     ) -> None:
-        p = uow.projects.get(company_id=company_id, project_id=project_id)
+        p = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
         if not p:
             raise NotFound("Project not found")
 
@@ -231,7 +271,7 @@ class AddonsUseCases:
         project_id: uuid.UUID,
         addon_type_id: uuid.UUID,
     ) -> None:
-        p = uow.projects.get(company_id=company_id, project_id=project_id)
+        p = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
         if not p:
             raise NotFound("Project not found")
 
@@ -316,8 +356,14 @@ class AddonsUseCases:
         source: AddonFactSource,
         client_event_id: str | None,
     ) -> ProjectAddonFactORM | None:
-        if qty_done <= 0:
-            raise ValidationError("qty_done must be > 0")
+        qty_done = validate_fact_quantity(qty_done)
+        if client_event_id is not None and (not client_event_id.strip() or len(client_event_id) > 80):
+            raise ValidationError("client_event_id must contain 1 to 80 characters", field="client_event_id")
+
+        # Serialize plan pricing/reconciliation with fact creation, even when no plan exists yet.
+        project = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
+        if project is None:
+            raise Forbidden("Project is not assigned to this installer")
 
         my_doors = uow.doors.list_by_project_for_installer(
             company_id=company_id,
@@ -333,10 +379,15 @@ class AddonsUseCases:
         if not at or at.deleted_at is not None or not at.is_active:
             raise NotFound("Addon type not found or inactive")
 
-        if client_event_id and uow.addon_facts.exists_client_event(
-            company_id=company_id, client_event_id=client_event_id
-        ):
-            return None
+        replay_fields = dict(
+            project_id=project_id, installer_id=installer_id, addon_type_id=addon_type_id,
+            qty_done=qty_done, comment=comment, done_at=done_at,
+        )
+        if client_event_id:
+            existing = uow.addon_facts.get_by_client_event(company_id=company_id, client_event_id=client_event_id)
+            if existing is not None:
+                ensure_same_fact(existing, **replay_fields)
+                return None
 
         row = ProjectAddonFactORM(
             company_id=company_id,
@@ -349,8 +400,18 @@ class AddonsUseCases:
             source=source,
             client_event_id=client_event_id,
         )
-        uow.addon_facts.create(row)
-        uow.session.flush()
+        try:
+            with uow.session.begin_nested():
+                uow.addon_facts.create(row)
+                uow.session.flush()
+        except IntegrityError:
+            existing = uow.addon_facts.get_by_client_event(
+                company_id=company_id, client_event_id=client_event_id,
+            ) if client_event_id else None
+            if existing is None:
+                raise
+            ensure_same_fact(existing, **replay_fields)
+            return None
         plan = uow.addon_plans.get_by_project_type(
             company_id=company_id,
             project_id=project_id,

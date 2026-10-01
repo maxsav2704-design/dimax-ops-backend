@@ -12,7 +12,7 @@ class AddFactBody(BaseModel):
     qty_done: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     done_at: datetime | None = None
     comment: str | None = None
-    client_event_id: str | None = None
+    client_event_id: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class AddFactResponse(BaseModel):

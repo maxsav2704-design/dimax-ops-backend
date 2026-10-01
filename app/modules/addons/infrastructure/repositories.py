@@ -147,6 +147,12 @@ class ProjectAddonFactRepository:
     def create(self, row: ProjectAddonFactORM) -> None:
         self.session.add(row)
 
+    def get_by_client_event(self, *, company_id: uuid.UUID, client_event_id: str) -> ProjectAddonFactORM | None:
+        return self.session.query(ProjectAddonFactORM).filter(
+            ProjectAddonFactORM.company_id == company_id,
+            ProjectAddonFactORM.client_event_id == client_event_id,
+        ).one_or_none()
+
     def exists_client_event(
         self,
         *,
