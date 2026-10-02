@@ -80,24 +80,34 @@ Expected contract:
 ## Factory Price Authority (Open)
 
 The October 2 business requirement is not yet a release PASS. Migration 0063 and
-`/api/v1/admin/price-lists` add company-wide immutable DRAFT/CANCELLED versions,
-not factory approval or activation. Existing installer/project rates still serve
-the legacy payroll paths; do not describe them as factory-confirmed.
+`/api/v1/admin/price-lists` add company-wide immutable versions. Migration 0064
+adds expiring/revocable invitations and explicit, version-bound factory decisions
+(CONFIRMED). The public `/price-approval` page supports RU/EN/HE without access
+to projects, installers or payroll. Existing installer/project rates still serve
+the legacy payroll paths; do not describe them as factory-confirmed. Confirmation
+currently records the decision; it does not activate prices or change earnings.
 
 Before production approval under the new rule:
 
 - reconcile existing per-installer/per-project prices without inventing approval;
-- implement expiring, revocable personal links and explicit confirmation of the
-  exact version by the factory representative;
+- connect invitation management and controlled delivery to the admin UI; verify
+  the factory contact before sharing the link, which is a bearer capability,
+  not independent proof of the holder's identity;
 - activate only confirmed prices, retaining the previous confirmed version while
   an amendment is pending and preserving historical completed-work snapshots;
-- connect the admin/public UI and read-only mobile offline rate cache;
+- connect the admin UI and read-only mobile offline rate cache;
 - verify confirmation, concurrent amendments, offline work and earnings end to end.
 
-Migration 0063 creates only new tables; it neither backfills nor approves rates.
-Its downgrade refuses to discard recorded price-list history. The guarded
-`scripts/db_factory_price_list_migration_smoke.py` exercises a fresh database,
+Neither migration backfills or approves existing rates. Both downgrades refuse
+to discard recorded history. The guarded migration scripts
+`scripts/db_factory_price_list_migration_smoke.py` and
+`scripts/db_factory_price_approval_migration_smoke.py` exercise a fresh database,
 upgrade/rollback/re-upgrade, preserved legacy payroll and metadata agreement.
+The confirmation lifecycle has database-backed concurrency/retry/rollback tests;
+public-page browser tests use mocked responses, not real factory decisions.
+No email/WhatsApp delivery or native-device acceptance is claimed by this step.
+Public request throttling currently uses the existing process-local limiter;
+production multi-worker deployments still need shared/gateway-level limits.
 
 ## Backup/Restore Drill
 

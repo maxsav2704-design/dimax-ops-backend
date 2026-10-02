@@ -9,6 +9,7 @@ from app.modules.addons.infrastructure.models import AddonTypeORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.identity.infrastructure.models import CompanyORM
 from app.modules.rates.infrastructure.price_list_models import FactoryPriceListItemORM, FactoryPriceListORM
+from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
 
 
 class FactoryPriceListsRepository:
@@ -62,4 +63,38 @@ class FactoryPriceListsRepository:
         self.session.add(row)
         self.session.flush()
         self.session.add_all(items)
+        self.session.flush()
+
+    def company(self, company_id: UUID):
+        return self.session.get(CompanyORM, company_id, populate_existing=True)
+
+    def approval_scope(self, token_hash: str):
+        return self.session.execute(select(FactoryPriceApprovalORM.id, FactoryPriceApprovalORM.company_id).where(
+            FactoryPriceApprovalORM.token_hash == token_hash,
+        )).first()
+
+    def approval(self, company_id: UUID, approval_id: UUID):
+        return self.session.scalar(select(FactoryPriceApprovalORM).where(
+            FactoryPriceApprovalORM.company_id == company_id, FactoryPriceApprovalORM.id == approval_id,
+        ).execution_options(populate_existing=True))
+
+    def approval_page(self, company_id: UUID, price_list_id: UUID, limit: int, offset: int):
+        scope = (FactoryPriceApprovalORM.company_id == company_id,
+                 FactoryPriceApprovalORM.price_list_id == price_list_id)
+        total = self.session.scalar(select(func.count()).select_from(FactoryPriceApprovalORM).where(*scope))
+        rows = self.session.scalars(select(FactoryPriceApprovalORM).where(*scope).order_by(
+            FactoryPriceApprovalORM.created_at.desc(), FactoryPriceApprovalORM.id,
+        ).limit(limit).offset(offset)).all()
+        return rows, total
+
+    def pending_approvals(self, company_id: UUID, price_list_id: UUID):
+        return self.session.scalars(select(FactoryPriceApprovalORM).where(
+            FactoryPriceApprovalORM.company_id == company_id,
+            FactoryPriceApprovalORM.price_list_id == price_list_id,
+            FactoryPriceApprovalORM.revoked_at.is_(None), FactoryPriceApprovalORM.confirmed_at.is_(None),
+        )).all()
+
+    def add_approval(self, row: FactoryPriceApprovalORM):
+        self.session.flush()
+        self.session.add(row)
         self.session.flush()

@@ -43,7 +43,7 @@ class PriceListSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     version: int
-    status: Literal["DRAFT", "CANCELLED"]
+    status: Literal["DRAFT", "CANCELLED", "CONFIRMED"]
     currency: Literal["ILS"]
     reason: str
     agreement_reference: str

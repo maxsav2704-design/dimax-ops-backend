@@ -352,4 +352,17 @@ def test_openapi_declares_drafts_and_secured_errors(client_raw):
     schemas = spec["components"]["schemas"]
     assert schemas["CreatePriceList"]["additionalProperties"] is False
     assert schemas["PriceListLineInput"]["additionalProperties"] is False
-    assert schemas["PriceListDetail"]["properties"]["status"]["enum"] == ["DRAFT", "CANCELLED"]
+    assert schemas["PriceListDetail"]["properties"]["status"]["enum"] == ["DRAFT", "CANCELLED", "CONFIRMED"]
+
+
+def test_full_length_reason_survives_create_and_cancel_audit(client, draft, db_session, company_id):
+    draft["reason"] = "R" * 1000
+    created = create(client, draft)
+    assert created["reason"] == draft["reason"]
+    reason = "C" * 1000
+    response = client.post(f'{URL}/{created["id"]}/cancel', json={"reason": reason})
+    assert response.status_code == 200, response.text
+    assert response.json()["cancellation_reason"] == reason
+    rows = audit_rows(db_session, company_id)
+    assert {row.after["reason"] for row in rows} == {draft["reason"], reason}
+    assert all(len(row.reason) == 500 for row in rows)

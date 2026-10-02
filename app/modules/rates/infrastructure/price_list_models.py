@@ -25,7 +25,7 @@ class FactoryPriceListORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         CheckConstraint("btrim(reason) <> '' AND btrim(agreement_reference) <> ''",
                         name="ck_factory_price_lists_reference"),
         CheckConstraint(
-            "(status = 'DRAFT' AND cancelled_at IS NULL AND cancelled_by IS NULL "
+            "(status IN ('DRAFT', 'CONFIRMED') AND cancelled_at IS NULL AND cancelled_by IS NULL "
             "AND cancellation_reason IS NULL) OR "
             "(status = 'CANCELLED' AND cancelled_at IS NOT NULL AND cancelled_by IS NOT NULL "
             "AND cancellation_reason IS NOT NULL AND btrim(cancellation_reason) <> '')",

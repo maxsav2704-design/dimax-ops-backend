@@ -1,0 +1,58 @@
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query, Response
+
+from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates, get_uow, require_admin
+from app.api.v1.rate_limit import rate_limit_factory_prices
+from app.modules.rates.application.approval_dto import (
+    ApprovalPage, ApprovalSummary, ConfirmApproval, IssueApproval, IssuedApproval,
+    PreviewApproval, PublicApproval,
+)
+from app.modules.rates.application.approval_service import FactoryPriceApprovalService
+from app.modules.rates.application.price_list_dto import CancelPriceList
+
+admin_router = APIRouter(prefix="/admin/price-lists", tags=["Admin / Factory price lists"])
+public_router = APIRouter(prefix="/public/price-approvals", tags=["Public / Factory prices"],
+                         dependencies=[Depends(rate_limit_factory_prices)])
+
+
+@admin_router.post("/{price_list_id}/approvals", response_model=IssuedApproval)
+def issue_approval(price_list_id: UUID, body: IssueApproval, response: Response,
+                   user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        return FactoryPriceApprovalService.issue(uow, company_id=user.company_id,
+            price_list_id=price_list_id, actor_user_id=user.id, body=body)
+
+
+@admin_router.get("/{price_list_id}/approvals", response_model=ApprovalPage)
+def approval_history(price_list_id: UUID, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+                     user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        return FactoryPriceApprovalService.history(uow, company_id=user.company_id,
+            price_list_id=price_list_id, limit=limit, offset=offset)
+
+
+@admin_router.post("/{price_list_id}/approvals/{approval_id}/revoke", response_model=ApprovalSummary)
+def revoke_approval(price_list_id: UUID, approval_id: UUID, body: CancelPriceList,
+                    user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        return FactoryPriceApprovalService.revoke(uow, company_id=user.company_id,
+            price_list_id=price_list_id, approval_id=approval_id, actor_user_id=user.id, reason=body.reason)
+
+
+@public_router.post("/preview", response_model=PublicApproval)
+def preview_approval(body: PreviewApproval, response: Response, uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return FactoryPriceApprovalService.preview(uow, token=body.token)
+
+
+@public_router.post("/confirm", response_model=PublicApproval)
+def confirm_approval(body: ConfirmApproval, response: Response, uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return FactoryPriceApprovalService.confirm(uow, body=body)

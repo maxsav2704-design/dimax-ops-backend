@@ -122,8 +122,9 @@ class FactoryPriceListsService:
         AuditService.add(
             uow, company_id=company_id, actor_user_id=actor_user_id,
             entity_type="FACTORY_PRICE_LIST", entity_id=row.id, action="CREATE",
-            reason=body.reason,
-            after={"version": row.version, "status": row.status, "item_count": len(items)},
+            reason=body.reason[:500],
+            after={"version": row.version, "status": row.status, "item_count": len(items),
+                   "reason": body.reason},
         )
         return cls._detail(uow, row)
 
@@ -147,6 +148,7 @@ class FactoryPriceListsService:
         AuditService.add(
             uow, company_id=company_id, actor_user_id=actor_user_id,
             entity_type="FACTORY_PRICE_LIST", entity_id=row.id, action="CANCEL",
-            reason=reason, before={"status": "DRAFT"}, after={"status": "CANCELLED"},
+            reason=reason[:500], before={"status": "DRAFT"},
+            after={"status": "CANCELLED", "reason": reason},
         )
         return cls._detail(uow, row)
