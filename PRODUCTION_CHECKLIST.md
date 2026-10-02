@@ -86,16 +86,20 @@ adds expiring/revocable invitations and explicit, version-bound factory decision
 to projects, installers or payroll. Existing installer/project rates still serve
 the legacy payroll paths; do not describe them as factory-confirmed. Confirmation
 currently records the decision; it does not activate prices or change earnings.
+The admin `/price-lists` workspace now supports draft creation/copy/cancellation,
+named invitations, one-time manual link sharing, revocation and decision history
+in RU/EN/HE. OWNER/OPERATIONS can write with rate access; FINANCE can read with
+rate access. There is no admin substitute for the factory's explicit decision.
 
 Before production approval under the new rule:
 
 - reconcile existing per-installer/per-project prices without inventing approval;
-- connect invitation management and controlled delivery to the admin UI; verify
-  the factory contact before sharing the link, which is a bearer capability,
+- configure controlled delivery and HTTPS; verify the factory contact before
+  sharing the link, which is a bearer capability,
   not independent proof of the holder's identity;
 - activate only confirmed prices, retaining the previous confirmed version while
   an amendment is pending and preserving historical completed-work snapshots;
-- connect the admin UI and read-only mobile offline rate cache;
+- connect active-price state in the admin UI and read-only mobile offline cache;
 - verify confirmation, concurrent amendments, offline work and earnings end to end.
 
 Neither migration backfills or approves existing rates. Both downgrades refuse
@@ -104,7 +108,9 @@ to discard recorded history. The guarded migration scripts
 `scripts/db_factory_price_approval_migration_smoke.py` exercise a fresh database,
 upgrade/rollback/re-upgrade, preserved legacy payroll and metadata agreement.
 The confirmation lifecycle has database-backed concurrency/retry/rollback tests;
-public-page browser tests use mocked responses, not real factory decisions.
+public-page and admin-management browser tests use mocked responses, not real
+factory decisions. The UI-only management step adds no migration or backend
+runtime change and does not replace backend/mobile release gates.
 No email/WhatsApp delivery or native-device acceptance is claimed by this step.
 Public request throttling currently uses the existing process-local limiter;
 production multi-worker deployments still need shared/gateway-level limits.
