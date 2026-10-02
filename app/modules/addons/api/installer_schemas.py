@@ -4,10 +4,12 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AddFactBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     addon_type_id: UUID
     qty_done: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     done_at: datetime | None = None

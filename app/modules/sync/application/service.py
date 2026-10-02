@@ -41,6 +41,18 @@ def utcnow() -> datetime:
 
 class InstallerSyncService:
     @staticmethod
+    def _validate_work_payload(operation_type: str, payload: dict) -> None:
+        allowed = {
+            "DOOR_SET_STATUS": {"door_id", "status", "reason_id", "comment", "base_version", "previous_version"},
+            "ADDON_FACT_CREATE": {"addon_type_id", "qty_done", "comment"},
+        }.get(operation_type)
+        if allowed is not None and (unexpected := sorted(payload.keys() - allowed)):
+            raise ValidationError(
+                "Installer work commands cannot set prices, earnings or approval fields",
+                field="payload", meta={"unexpected_fields": unexpected},
+            )
+
+    @staticmethod
     def _domain_error_to_conflict(exc: Exception) -> _SyncConflictError:
         message = str(exc)
         lowered = message.lower()
@@ -558,6 +570,7 @@ class InstallerSyncService:
                     continue
 
                 with uow.session.begin_nested():
+                    InstallerSyncService._validate_work_payload(etype.value, payload)
                     if etype == SyncEventType.DOOR_SET_STATUS:
                         InstallerSyncService._apply_door_set_status(
                             uow,
@@ -646,6 +659,7 @@ class InstallerSyncService:
         operation_type = item["operation_type"]
         project_id = uuid.UUID(str(item["project_id"]))
         payload = item.get("payload") or {}
+        InstallerSyncService._validate_work_payload(operation_type, payload)
         base_version = int(item.get("base_version") or 0)
         happened_at = item.get("happened_at")
 

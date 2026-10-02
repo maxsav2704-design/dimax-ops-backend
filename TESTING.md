@@ -358,6 +358,27 @@ now preserving the fraction instead of truncating each fact to an integer.
 `jobs_count` still counts ledger rows; earned amounts and rate snapshots do not
 change. Mobile accepts both numeric and decimal-string quantities.
 
+### Installer price authority
+
+Installer work endpoints explicitly reject fields outside their work-command
+schema. This includes client-provided prices, amounts and factory-approval claims.
+The body-less door install endpoint still accepts no body or an empty object;
+extra fields now return 422. Offline work rejects an invalid payload per event
+or batch item, preserving the existing conflict contract and other queued work.
+Valid mobile payloads, server-controlled rates and historical earnings remain
+unchanged. Existing administrative price mutations require an admin role/scope.
+
+`test_addons_api.py` covers direct, status, sync and batch rejection with no work
+or financial mutations. `test_admin_access_and_validation.py` exercises seven
+admin price/earning writes with a real installer JWT. The architecture contract
+checks each forbidden price/approval field independently and valid quantities.
+
+This is an input-authority guard, NOT a factory-approval workflow. The owner now
+requires a common price list across projects with version-specific confirmation
+by the factory representative via personal link, including any requested/agreed
+price edit. That workflow, migration and read-only confirmed mobile prices remain
+an open release requirement; existing prices have not been automatically approved.
+
 ### Module coverage
 
 - `auth`: `tests/integration/test_auth_api.py`, `tests/integration/test_auth_guards_api.py`

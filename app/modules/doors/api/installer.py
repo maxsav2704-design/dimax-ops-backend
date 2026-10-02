@@ -16,6 +16,7 @@ from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.application.use_cases import DoorUseCases
 from app.modules.doors.api.schemas import (
     DoorActionResponse,
+    InstallerDoorInstallBody,
     InstallerDoorStatusUpdateBody,
     InstallerDoorStatusUpdateResponse,
     MarkNotInstalledBody,
@@ -47,6 +48,7 @@ def installer_change_status(
 @router.post("/{door_id}/install", response_model=DoorActionResponse)
 def installer_mark_installed(
     door_id: UUID,
+    body: InstallerDoorInstallBody | None = None,
     user: CurrentUser = Depends(require_installer),
     _installer_id: UUID = Depends(require_door_owned_by_installer),
     uow=Depends(get_uow),

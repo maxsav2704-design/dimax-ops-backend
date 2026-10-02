@@ -45,6 +45,38 @@ def test_admin_installer_rates_bulk_forbidden_for_installer_role(client_installe
     assert resp.json()["error"]["code"] == "FORBIDDEN_SCOPE"
 
 
+def test_real_installer_token_cannot_mutate_prices_or_earnings(client_raw, company_id, make_user):
+    password = "Installer-price-authority-test-2026!"
+    user = make_user(role=UserRole.INSTALLER, password=password)
+    token = _login(client_raw, company_id=str(company_id), email=user.email, password=password)
+    headers = {"Authorization": f"Bearer {token}"}
+    target = str(uuid.uuid4())
+    mutations = [
+        ("POST", "/api/v1/admin/installer-rates", {
+            "installer_id": target, "door_type_id": target, "price": "999.00",
+        }),
+        ("PATCH", f"/api/v1/admin/installer-rates/{target}", {"price": "999.00"}),
+        ("DELETE", f"/api/v1/admin/installer-rates/{target}", None),
+        ("POST", "/api/v1/admin/installer-rates/bulk", {
+            "ids": [target], "operation": "set_price", "price": "999.00",
+        }),
+        ("POST", "/api/v1/admin/addons/types", {
+            "name": "Unauthorized price", "unit": "pcs",
+            "default_client_price": "999.00", "default_installer_price": "999.00",
+        }),
+        ("PUT", f"/api/v1/admin/addons/projects/{target}/plan", {
+            "addon_type_id": target, "qty_planned": "1.00", "client_price": "999.00", "installer_price": "999.00",
+        }),
+        ("POST", "/api/v1/admin/earnings/corrections", {
+            "completed_work_id": target, "rate_snapshot": "999.00", "reason": "Unauthorized adjustment",
+        }),
+    ]
+    for method, path, body in mutations:
+        response = client_raw.request(method, path, headers=headers, json=body)
+        assert response.status_code == 403, (method, path, response.text)
+        assert response.json()["error"]["code"] == "FORBIDDEN_SCOPE"
+
+
 def test_admin_installer_rates_timeline_forbidden_for_installer_role(client_installer):
     resp = client_installer.get(
         f"/api/v1/admin/installer-rates/timeline?installer_id={uuid.uuid4()}&door_type_id={uuid.uuid4()}"

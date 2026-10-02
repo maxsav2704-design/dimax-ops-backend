@@ -663,3 +663,84 @@ def test_concurrent_addon_writes_preserve_one_fact_one_earning(addon_payroll_cas
     assert db_session.query(ProjectAddonFactORM).filter_by(project_id=project_id).count() == 1
     work = db_session.query(CompletedWorkORM).filter_by(project_id=project_id).one()
     assert work.amount_snapshot == Decimal("14.99") and work.rate_snapshot == Decimal("9.99")
+
+
+@pytest.mark.parametrize("channel", ["direct", "sync", "batch"])
+def test_installer_cannot_supply_addon_price_or_factory_approval(addon_payroll_case, db_session, channel):
+    case = addon_payroll_case
+    payload = {
+        "addon_type_id": str(case.addon.id), "qty_done": "1.50",
+        "installer_price": "999.00", "amount_snapshot": "1498.50", "factory_approved": True,
+    }
+    if channel == "direct":
+        response = case.client.post(f"/api/v1/installer/addons/projects/{case.project.id}/facts", json=payload)
+        assert response.status_code == 422, response.text
+    elif channel == "sync":
+        response = case.client.post("/api/v1/installer/sync", json={"events": [{
+            "client_event_id": "forged-addon-pricing", "type": "ADDON_FACT_CREATE",
+            "project_id": str(case.project.id), "payload": payload,
+        }]})
+        assert response.status_code == 200, response.text
+        assert response.json()["acks"][0]["ok"] is False, response.text
+    else:
+        response = case.client.post("/api/v1/installer/sync-queue/batch", json={
+            "device_id": "pricing-authority-check", "items": [{
+                "id": str(uuid.uuid4()), "entity_type": "ADDON_FACT", "entity_id": str(uuid.uuid4()),
+                "operation_type": "ADDON_FACT_CREATE", "project_id": str(case.project.id),
+                "payload": payload, "base_version": 0,
+            }],
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["results"][0]["status"] == "CONFLICT", response.text
+    assert db_session.query(ProjectAddonFactORM).filter_by(project_id=case.project.id).count() == 0
+    assert db_session.query(CompletedWorkORM).filter_by(project_id=case.project.id).count() == 0
+    db_session.refresh(case.plan)
+    assert case.plan.installer_price == Decimal("9.99")
+
+
+@pytest.mark.parametrize("channel", ["install", "status", "sync", "batch"])
+def test_installer_cannot_supply_door_price_or_factory_approval(addon_payroll_case, db_session, channel):
+    from datetime import datetime, timezone
+    from app.modules.rates.infrastructure.models import InstallerRateORM
+
+    case = addon_payroll_case
+    door = db_session.query(DoorORM).filter_by(project_id=case.project.id).one()
+    rate = InstallerRateORM(
+        company_id=case.project.company_id, installer_id=case.installer_id, door_type_id=door.door_type_id,
+        price=Decimal("250"), effective_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    db_session.add(rate)
+    initial_status = DoorStatus.IN_PROGRESS if channel in {"status", "batch"} else DoorStatus.NOT_INSTALLED
+    door.status = initial_status
+    db_session.commit()
+    forged = {"installer_rate_snapshot": "999.00", "surcharge_pct": "900.00", "factory_approved": True}
+    if channel in {"install", "status"}:
+        response = (
+            case.client.post(f"/api/v1/installer/doors/{door.id}/install", json=forged)
+            if channel == "install" else
+            case.client.patch(f"/api/v1/installer/doors/{door.id}/status", json={"status": "INSTALLED", **forged})
+        )
+        assert response.status_code == 422, response.text
+    elif channel == "sync":
+        response = case.client.post("/api/v1/installer/sync", json={"events": [{
+            "client_event_id": "forged-door-pricing", "type": "DOOR_SET_STATUS",
+            "project_id": str(case.project.id),
+            "payload": {"door_id": str(door.id), "status": "INSTALLED", "base_version": 0, **forged},
+        }]})
+        assert response.status_code == 200, response.text
+        assert response.json()["acks"][0]["ok"] is False, response.text
+    else:
+        response = case.client.post("/api/v1/installer/sync-queue/batch", json={
+            "device_id": "pricing-authority-check", "items": [{
+                "id": str(uuid.uuid4()), "entity_type": "DOOR", "entity_id": str(door.id),
+                "operation_type": "DOOR_SET_STATUS", "project_id": str(case.project.id),
+                "payload": {"door_id": str(door.id), "status": "INSTALLED", **forged}, "base_version": 0,
+            }],
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["results"][0]["status"] == "CONFLICT", response.text
+    db_session.refresh(door)
+    db_session.refresh(rate)
+    assert door.status == initial_status and door.is_locked is False
+    assert door.installer_rate_snapshot is None and rate.price == Decimal("250")
+    assert db_session.query(CompletedWorkORM).filter_by(project_id=case.project.id).count() == 0
