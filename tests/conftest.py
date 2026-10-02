@@ -39,6 +39,7 @@ from app.modules.identity.infrastructure.refresh_tokens_repo import RefreshToken
 from app.modules.identity.infrastructure.repositories import UserRepository
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.installers.infrastructure.rates_repository import InstallerRatesRepository
+from app.modules.rates.infrastructure.price_lists_repository import FactoryPriceListsRepository
 from app.modules.installers.infrastructure.repositories import InstallerRepository
 from app.modules.library.infrastructure.repositories import ProductLibraryRepository
 from app.modules.issues.infrastructure.repositories import IssueRepository
@@ -90,6 +91,7 @@ class TestUnitOfWork:
         self.refresh_tokens = RefreshTokenRepository(self.session)
         self.installers = InstallerRepository(self.session)
         self.installer_rates = InstallerRatesRepository(self.session)
+        self.price_lists = FactoryPriceListsRepository(self.session)
         self.product_library = ProductLibraryRepository(self.session)
         self.doors = DoorRepository(self.session)
         self.issues = IssueRepository(self.session)
@@ -150,6 +152,10 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
         yield cid
     finally:
         db_session.rollback()
+        db_session.execute(
+            text("DELETE FROM factory_price_lists WHERE company_id = :cid"),
+            {"cid": cid},
+        )
         db_session.execute(
             text("DELETE FROM document_generations WHERE company_id = :cid"),
             {"cid": cid},

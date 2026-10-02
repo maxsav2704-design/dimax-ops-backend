@@ -77,6 +77,28 @@ Expected contract:
 - Uvicorn access logging stays disabled, and the reverse proxy logs public
   file/journal routes as templates without capability tokens or query values.
 
+## Factory Price Authority (Open)
+
+The October 2 business requirement is not yet a release PASS. Migration 0063 and
+`/api/v1/admin/price-lists` add company-wide immutable DRAFT/CANCELLED versions,
+not factory approval or activation. Existing installer/project rates still serve
+the legacy payroll paths; do not describe them as factory-confirmed.
+
+Before production approval under the new rule:
+
+- reconcile existing per-installer/per-project prices without inventing approval;
+- implement expiring, revocable personal links and explicit confirmation of the
+  exact version by the factory representative;
+- activate only confirmed prices, retaining the previous confirmed version while
+  an amendment is pending and preserving historical completed-work snapshots;
+- connect the admin/public UI and read-only mobile offline rate cache;
+- verify confirmation, concurrent amendments, offline work and earnings end to end.
+
+Migration 0063 creates only new tables; it neither backfills nor approves rates.
+Its downgrade refuses to discard recorded price-list history. The guarded
+`scripts/db_factory_price_list_migration_smoke.py` exercises a fresh database,
+upgrade/rollback/re-upgrade, preserved legacy payroll and metadata agreement.
+
 ## Backup/Restore Drill
 
 Run before first production deploy and on schedule:

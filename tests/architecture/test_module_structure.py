@@ -14,7 +14,7 @@ STANDARD_MODULE_LAYERS = {
 MODULE_LAYER_ALLOWLIST = {
     "audit": {"application", "infrastructure"},
     "files": {"api", "application", "infrastructure"},
-    "rates": {"infrastructure"},
+    "rates": {"api", "application", "infrastructure"},
 }
 
 

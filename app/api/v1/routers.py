@@ -19,6 +19,7 @@ from app.modules.calendar.api.admin import router as admin_calendar
 from app.modules.calendar.api.installer import router as installer_calendar
 from app.modules.installers.api.admin import router as admin_installers
 from app.modules.installers.api.admin_rates import router as admin_installer_rates
+from app.modules.rates.api.admin import router as admin_price_lists
 from app.modules.library.api.admin import router as admin_library
 from app.modules.dashboard.api.admin_dashboard import router as admin_dashboard
 from app.modules.reports.api.admin import router as admin_reports
@@ -102,6 +103,7 @@ router.include_router(admin_calendar, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(installer_calendar, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_installers, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_installer_rates, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_price_lists, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_library, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_dashboard, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_reports, responses=SECURED_ROUTE_RESPONSES)

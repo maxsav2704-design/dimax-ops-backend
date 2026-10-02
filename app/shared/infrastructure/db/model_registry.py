@@ -11,6 +11,7 @@ _MODEL_MODULES = (
     "app.modules.installers.infrastructure.models",
     "app.modules.library.infrastructure.models",
     "app.modules.rates.infrastructure.models",
+    "app.modules.rates.infrastructure.price_list_models",
     "app.modules.projects.infrastructure.models",
     "app.modules.doors.infrastructure.models",
     "app.modules.doors.infrastructure.history_models",

@@ -23,6 +23,7 @@ from app.modules.journal.infrastructure.repositories import JournalRepository
 from app.modules.calendar.infrastructure.repositories import CalendarRepository
 from app.modules.installers.infrastructure.repositories import InstallerRepository
 from app.modules.installers.infrastructure.rates_repository import InstallerRatesRepository
+from app.modules.rates.infrastructure.price_lists_repository import FactoryPriceListsRepository
 from app.modules.library.infrastructure.repositories import ProductLibraryRepository
 from app.modules.outbox.infrastructure.repositories import OutboxRepository
 from app.modules.files.infrastructure.repositories import (
@@ -70,6 +71,7 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
         self.calendar = CalendarRepository(self.session)
         self.installers = InstallerRepository(self.session)
         self.installer_rates = InstallerRatesRepository(self.session)
+        self.price_lists = FactoryPriceListsRepository(self.session)
         self.product_library = ProductLibraryRepository(self.session)
         self.outbox = OutboxRepository(self.session)
         self.file_tokens = FileTokenRepository(self.session)
