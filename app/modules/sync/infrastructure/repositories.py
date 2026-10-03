@@ -491,6 +491,7 @@ class InstallerSyncQueueRepository:
         operation_type: str,
         payload: dict,
         base_version: int,
+        client_happened_at: datetime | None = None,
     ) -> SyncQueueItemORM:
         row = self.get(
             company_id=company_id,
@@ -511,6 +512,7 @@ class InstallerSyncQueueRepository:
         row.operation_type = operation_type
         row.payload = payload or {}
         row.base_version = int(base_version)
+        row.client_happened_at = client_happened_at
         row.status = "PENDING"
         row.conflict_code = None
         row.synced_at = None

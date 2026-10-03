@@ -13,6 +13,7 @@ from app.shared.infrastructure.db.base import Base, TimestampMixin, UUIDPrimaryK
 class FactoryPriceActivationORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "factory_price_activations"
     __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_factory_activation_tenant_id"),
         ForeignKeyConstraint(
             ["company_id", "price_list_id"], ["factory_price_lists.company_id", "factory_price_lists.id"],
             ondelete="RESTRICT", name="fk_factory_activation_tenant_list",

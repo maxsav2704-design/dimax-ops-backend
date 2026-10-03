@@ -14,13 +14,13 @@ from app.modules.doors.application.commands import AdminOverrideDoor
 from app.modules.doors.application.use_cases import DoorUseCases
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
-from app.modules.doors.infrastructure.repositories import DoorRepository
 from app.modules.earnings.application.admin_api_service import EarningsAdminApiService
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.identity.domain.enums import UserRole
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
 from app.modules.rates.infrastructure.models import InstallerRateORM
+from app.modules.rates.infrastructure.price_lists_repository import FactoryPriceListsRepository
 from app.shared.domain.errors import Conflict
 from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
 
@@ -233,18 +233,18 @@ def test_addon_snapshot_and_correction_survive_door_cancellation(payroll_case):
 
 
 @pytest.mark.parametrize("first", ["cancel", "correct"])
-def test_cancellation_and_correction_serialize_on_the_door(payroll_case, monkeypatch, first):
+def test_cancellation_and_correction_lock_company_before_door(payroll_case, monkeypatch, first):
     case = payroll_case
     waiting = threading.Event()
     main_thread = threading.get_ident()
-    get_door = DoorRepository.get
+    lock_company = FactoryPriceListsRepository.lock_company
 
-    def observe_lock(self, **kwargs):
-        if threading.get_ident() != main_thread and kwargs.get("for_update"):
+    def observe_lock(self, company_id):
+        if threading.get_ident() != main_thread:
             waiting.set()
-        return get_door(self, **kwargs)
+        return lock_company(self, company_id)
 
-    monkeypatch.setattr(DoorRepository, "get", observe_lock)
+    monkeypatch.setattr(FactoryPriceListsRepository, "lock_company", observe_lock)
 
     def apply(uow, operation):
         if operation == "correct":
@@ -269,9 +269,10 @@ def test_cancellation_and_correction_serialize_on_the_door(payroll_case, monkeyp
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         with SqlAlchemyUnitOfWork() as uow:
+            assert uow.price_lists.lock_company(case.company_id)
             uow.doors.get(company_id=case.company_id, door_id=case.door_id, for_update=True)
             attempt = executor.submit(second)
-            assert waiting.wait(timeout=15), "The concurrent operation must lock the door first"
+            assert waiting.wait(timeout=15), "The concurrent operation must first attempt the company lock"
             apply(uow, first)
         assert attempt.result(timeout=30) == ("conflict" if first == "cancel" else "applied")
     case.session.expire_all()

@@ -13,6 +13,7 @@ class MarkDoorInstalled:
     source: str = "API"
     expected_installer_id: uuid.UUID | None = None
     happened_at: datetime | None = None
+    legacy_price_queue: bool = False
 
 
 @dataclass(frozen=True)

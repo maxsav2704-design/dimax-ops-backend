@@ -14,6 +14,7 @@ from app.modules.addons.infrastructure.models import (
     ProjectUrgencySurchargeORM,
 )
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
+from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
 from app.modules.sync.domain.enums import SyncChangeType
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
 
@@ -67,10 +68,9 @@ def create_completed_work_for_addon_fact(
     company_id: uuid.UUID,
     fact: ProjectAddonFactORM,
     plan,
+    legacy_price_queue: bool = False,
 ) -> CompletedWorkORM | None:
     if Decimal(str(fact.qty_done or 0)) <= 0:
-        return None
-    if Decimal(str(plan.installer_price or 0)) <= 0:
         return None
 
     existing = (
@@ -85,8 +85,15 @@ def create_completed_work_for_addon_fact(
         return None
 
     quantity = Decimal(str(fact.qty_done))
-    rate = Decimal(str(plan.installer_price))
-    amount = (quantity * rate).quantize(_CENT, rounding=ROUND_HALF_UP)
+    completed_at = fact.done_at or utcnow()
+    quote = FactoryEarningsPricing.quote(
+        uow, company_id=company_id, kind="ADDON", target_id=fact.addon_type_id,
+        performed_at=completed_at, legacy_queue=legacy_price_queue,
+    )
+    if quote is None and (plan is None or Decimal(str(plan.installer_price or 0)) <= 0):
+        return None
+    rate = quote.rate if quote is not None else Decimal(str(plan.installer_price))
+    amount = quote.amount(quantity) if quote is not None else (quantity * rate).quantize(_CENT, rounding=ROUND_HALF_UP)
     if not 0 < amount <= _MAX_DECIMAL:
         raise ValidationError(
             "Quantity multiplied by the installer rate must round to 0.01 through 9999999999.99",
@@ -98,7 +105,7 @@ def create_completed_work_for_addon_fact(
         door_id=None,
         addon_fact_id=fact.id,
         installer_id=fact.installer_id,
-        completed_at=fact.done_at or utcnow(),
+        completed_at=completed_at,
         quantity=quantity,
         rate_snapshot=rate,
         amount_snapshot=amount,
@@ -108,6 +115,7 @@ def create_completed_work_for_addon_fact(
         reason=f"Additional work {fact.addon_type_id}",
     )
     uow.session.add(completed)
+    FactoryEarningsPricing.attach(uow, completed, quote)
     return completed
 
 
@@ -119,6 +127,8 @@ def reconcile_addon_fact_earnings(
     addon_type_id: uuid.UUID,
     plan,
 ) -> None:
+    if FactoryEarningsPricing.is_active(uow, company_id):
+        return
     facts = uow.addon_facts.list_by_project_type(
         company_id=company_id,
         project_id=project_id,
@@ -167,6 +177,7 @@ class AddonsUseCases:
         installer_price: Decimal,
         notes: str | None = None,
     ):
+        FactoryEarningsPricing.lock_company(uow, company_id)
         p = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
         if not p:
             raise NotFound("Project not found")
@@ -220,6 +231,7 @@ class AddonsUseCases:
         project_id: uuid.UUID,
         items: list[dict],
     ) -> None:
+        FactoryEarningsPricing.lock_company(uow, company_id)
         p = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
         if not p:
             raise NotFound("Project not found")
@@ -355,12 +367,14 @@ class AddonsUseCases:
         done_at: datetime | None,
         source: AddonFactSource,
         client_event_id: str | None,
+        legacy_price_queue: bool = False,
     ) -> ProjectAddonFactORM | None:
         qty_done = validate_fact_quantity(qty_done)
         if client_event_id is not None and (not client_event_id.strip() or len(client_event_id) > 80):
             raise ValidationError("client_event_id must contain 1 to 80 characters", field="client_event_id")
 
         # Serialize plan pricing/reconciliation with fact creation, even when no plan exists yet.
+        FactoryEarningsPricing.lock_company(uow, company_id)
         project = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
         if project is None:
             raise Forbidden("Project is not assigned to this installer")
@@ -417,13 +431,10 @@ class AddonsUseCases:
             project_id=project_id,
             addon_type_id=addon_type_id,
         )
-        if plan is not None:
-            create_completed_work_for_addon_fact(
-                uow,
-                company_id=company_id,
-                fact=row,
-                plan=plan,
-            )
+        create_completed_work_for_addon_fact(
+            uow, company_id=company_id, fact=row, plan=plan,
+            legacy_price_queue=legacy_price_queue,
+        )
 
         uow.sync_change_log.add_change(
             company_id=company_id,

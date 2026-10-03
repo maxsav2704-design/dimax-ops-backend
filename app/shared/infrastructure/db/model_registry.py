@@ -27,6 +27,7 @@ _MODEL_MODULES = (
     "app.modules.addons.infrastructure.models",
     "app.modules.sync.infrastructure.models",
     "app.modules.earnings.infrastructure.models",
+    "app.modules.earnings.infrastructure.factory_price_models",
     "app.modules.companies.infrastructure.models",
     "app.modules.settings.infrastructure.models",
 )

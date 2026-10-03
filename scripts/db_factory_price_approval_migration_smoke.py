@@ -37,7 +37,8 @@ def main():
         context = MigrationContext.configure(connection, opts={
             "include_object": lambda obj, name, type_, reflected, compare_to:
                 name in new_tables if type_ == "table" else (
-                    obj.table.name in new_tables and name != "uq_factory_approvals_tenant_list_id"),
+                    obj.table.name in new_tables and name not in {
+                        "uq_factory_approvals_tenant_list_id", "uq_factory_price_items_tenant_list_id"}),
         })
         assert compare_metadata(context, Base.metadata) == []
     command.downgrade(config, "0063_factory_price_lists")

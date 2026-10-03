@@ -16,7 +16,10 @@ from app.modules.earnings.api.admin_schemas import (
     AdminEarningsLedgerResponseDTO,
     EarningsCorrectionResponseDTO,
     EarningsLedgerEntryDTO,
+    FactoryEarningPriceDTO,
 )
+from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
+from app.modules.earnings.infrastructure.factory_price_models import FactoryEarningPriceORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.projects.infrastructure.models import ProjectORM
@@ -54,6 +57,7 @@ def _admin_ledger_item_dto(
     addon_comment: str | None,
     installer_name: str | None,
     can_correct: bool,
+    factory_price: FactoryEarningPriceORM | None = None,
 ) -> AdminEarningsLedgerItemDTO:
     return AdminEarningsLedgerItemDTO(
         id=row.id,
@@ -77,6 +81,7 @@ def _admin_ledger_item_dto(
         installer_id=row.installer_id,
         installer_name=installer_name,
         can_correct=can_correct,
+        factory_price=FactoryEarningPriceDTO.model_validate(factory_price) if factory_price is not None else None,
     )
 
 
@@ -205,6 +210,13 @@ class EarningsAdminApiService:
                 .all()
             )
 
+        factory_mode = FactoryEarningsPricing.is_active(uow, company_id)
+        work_ids = [item[0].id for item in rows]
+        evidence = {proof.completed_work_id: proof for proof in uow.session.query(FactoryEarningPriceORM).filter(
+            FactoryEarningPriceORM.company_id == company_id,
+            FactoryEarningPriceORM.completed_work_id.in_(work_ids),
+        ).all()} if work_ids else {}
+
         return AdminEarningsLedgerResponseDTO(
             items=[
                 _admin_ledger_item_dto(
@@ -219,7 +231,9 @@ class EarningsAdminApiService:
                     can_correct=(
                         str(row.entry_type) == "ORIGINAL"
                         and row.id not in reversed_original_ids
+                        and not factory_mode and row.id not in evidence
                     ),
+                    factory_price=evidence.get(row.id),
                 )
                 for (
                     row,
@@ -329,6 +343,7 @@ class EarningsAdminApiService:
         reason: str,
     ) -> EarningsCorrectionResponseDTO:
         assert uow.session is not None
+        FactoryEarningsPricing.lock_company(uow, company_id)
 
         original_query = (
             uow.session.query(CompletedWorkORM)
@@ -358,6 +373,10 @@ class EarningsAdminApiService:
         original = original_query.populate_existing().with_for_update().one_or_none()
         if original is None:
             raise NotFound("Completed work entry not found")
+
+        if (FactoryEarningsPricing.is_active(uow, company_id)
+                or FactoryEarningsPricing.evidence(uow, company_id, original.id) is not None):
+            raise Conflict("Factory-confirmed earnings cannot be replaced by a manual rate", field="rate_snapshot")
 
         existing_correction_entry = uow.session.execute(
             select(CompletedWorkORM.id).where(

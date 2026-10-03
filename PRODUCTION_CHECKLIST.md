@@ -170,6 +170,33 @@ checks passed in the guarded disposable migration DB; legacy business snapshots
 were preserved and that database was dropped. See the root checkpoint
 `acceptance/steps/2026-10-03-price-timeline.md` for runtime evidence and limits.
 
+### Factory Earning Evidence, October 3
+
+Migration 0066 adds tenant/list-scoped factory price evidence for new earnings
+and retains batch offline execution timestamps. Every door/addon completion
+path selects execution-time prices after internal company activation. Existing
+earnings stay unchanged; reversals retain and offset their original evidence.
+Arbitrary manual corrections and installer surcharges cannot override a factory
+price. Editing a project plan cannot backfill already uploaded unpaid facts
+after activation. Only explicitly classified old offline commands use the first
+confirmed list; missing prices/timestamps remain unresolved with no false earning.
+
+The admin ledger provides optional price evidence and a truthful `can_correct`.
+Existing CSV columns and UOW transaction boundaries are preserved. Company locks
+precede project/door/ledger locks, including legacy writes during cutover.
+No activation HTTP route/UI is enabled. Mobile version cache/outbox/conflict
+handling and rollout writer-consistency checks remain prerequisites.
+
+Final selected PostgreSQL regression: 516 unique PASS (444 main, including 35
+new earning cases, plus 72 payroll/API/constraint/isolation checks). Fresh DB,
+rollback/re-upgrade, metadata, unchanged legacy rows and both downgrade guards
+PASS. Both isolated schemas are at 0066; the owned temporary DB was removed.
+API 8001 is healthy/ready with the new schema and protected financial endpoints;
+all five acceptance business checksums are unchanged. Full evidence is in the
+root checkpoint `acceptance/steps/2026-10-03-factory-earnings.md`. This is not full
+backend/admin/mobile/native or production approval. The migration never activates
+existing companies, and downgrade refuses to discard evidence or queue times.
+
 ## Backup/Restore Drill
 
 Run before first production deploy and on schedule:

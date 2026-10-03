@@ -182,6 +182,7 @@ class InstallerSyncQueueItemDTO(BaseModel):
     operation_type: str
     payload: dict[str, Any]
     base_version: int
+    client_happened_at: datetime | None = None
     status: str
     conflict_code: str | None = None
     created_at: datetime

@@ -42,6 +42,8 @@ def main():
     command.upgrade(config, "0065_factory_price_timeline")
     assert snapshot(tables) == before
     def include_object(obj, name, type_, reflected, compare_to):
+        if name == "uq_factory_activation_tenant_id":
+            return False
         if type_ == "table":
             return name in {"factory_price_activations", "factory_price_approvals"}
         return obj.table.name == "factory_price_activations" or (

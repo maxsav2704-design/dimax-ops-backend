@@ -5,12 +5,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.modules.doors.application.pricing import resolve_completion_pricing
+from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
 from app.modules.earnings.infrastructure.ledger_queries import active_completed_work_filter
 from app.modules.earnings.infrastructure.models import (
     ClientPriceSnapshotORM,
     CompletedWorkORM,
 )
-from app.shared.domain.errors import ValidationError
+from app.shared.domain.errors import Conflict, ValidationError
 
 
 def utcnow() -> datetime:
@@ -79,26 +80,13 @@ def create_completed_work_for_door(
     company_id: uuid.UUID,
     installer_id: uuid.UUID | None,
     door,
+    legacy_price_queue: bool = False,
 ) -> CompletedWorkORM:
     if installer_id is None:
         raise ValidationError(
             "Installer must be assigned before completed work can be recorded",
             field="installer_id",
             meta={"door_id": str(door.id)},
-        )
-
-    raw_rate_snapshot = getattr(door, "installer_rate_snapshot", None)
-    rate_snapshot = (
-        Decimal(str(raw_rate_snapshot)) if raw_rate_snapshot is not None else None
-    )
-    if rate_snapshot is None or rate_snapshot <= 0:
-        raise ValidationError(
-            "A positive installer rate is required before completed work can be recorded",
-            field="installer_rate",
-            meta={
-                "door_id": str(door.id),
-                "installer_id": str(installer_id),
-            },
         )
 
     existing = (
@@ -114,6 +102,23 @@ def create_completed_work_for_door(
     if existing is not None:
         return existing
 
+    completed_at = getattr(door, "installed_at", None) or utcnow()
+    quote = FactoryEarningsPricing.quote(
+        uow, company_id=company_id, kind="DOOR", target_id=door.door_type_id,
+        performed_at=completed_at, legacy_queue=legacy_price_queue,
+    )
+    if quote is not None:
+        if (getattr(door, "apply_surcharge_to_installer", False)
+                and Decimal(str(getattr(door, "surcharge_pct", None) or "100.00")) != 100):
+            raise Conflict("Installer surcharge is not part of the confirmed factory price", field="surcharge_pct")
+        rate_snapshot = quote.rate
+    else:
+        rate_snapshot = resolve_installer_rate_snapshot(
+            uow, company_id=company_id, installer_id=installer_id,
+            door_type_id=door.door_type_id, at=completed_at,
+            current_snapshot=getattr(door, "installer_rate_snapshot", None),
+        )
+    door.installer_rate_snapshot = rate_snapshot
     quantity = Decimal("1.00")
     pricing = resolve_completion_pricing(
         base_client_rate=Decimal(str(getattr(door, "our_price", None) or "0")),
@@ -123,7 +128,6 @@ def create_completed_work_for_door(
             getattr(door, "apply_surcharge_to_installer", False)
         ),
     )
-    completed_at = getattr(door, "installed_at", None) or utcnow()
     completed_work = CompletedWorkORM(
         company_id=company_id,
         project_id=door.project_id,
@@ -149,6 +153,7 @@ def create_completed_work_for_door(
             final_installer_rate=pricing.final_installer_rate,
         )
     )
+    FactoryEarningsPricing.attach(uow, completed_work, quote)
     return completed_work
 
 
@@ -190,4 +195,5 @@ def reverse_completed_work_for_door(
     )
     uow.session.add(reversal)
     uow.session.flush()
+    FactoryEarningsPricing.copy_reversal(uow, original, reversal)
     return reversal

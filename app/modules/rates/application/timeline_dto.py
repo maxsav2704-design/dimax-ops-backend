@@ -51,6 +51,7 @@ class FactoryPriceQuote(BaseModel):
     performed_at: datetime
     effective_from: datetime
     selection: Literal["AT_EXECUTION", "FIRST_CONFIRMED_LEGACY"]
+    snapshot_hash: str
 
     def amount(self, quantity: Decimal) -> Decimal:
         try:

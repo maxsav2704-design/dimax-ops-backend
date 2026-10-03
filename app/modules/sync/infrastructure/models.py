@@ -172,6 +172,7 @@ class SyncQueueItemORM(Base, UUIDPrimaryKeyMixin):
     operation_type: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     base_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    client_happened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
     conflict_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -22,8 +22,9 @@ class FactoryPriceListsRepository:
         self.session = session
 
     def lock_company(self, company_id: UUID) -> bool:
+        # Serialize price decisions without blocking foreign-key KEY SHARE locks.
         return self.session.scalar(
-            select(CompanyORM.id).where(CompanyORM.id == company_id).with_for_update()
+            select(CompanyORM.id).where(CompanyORM.id == company_id).with_for_update(key_share=True)
         ) is not None
 
     def get(self, company_id: UUID, price_list_id: UUID):

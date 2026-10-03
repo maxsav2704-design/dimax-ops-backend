@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EarningsCorrectionCreateDTO(BaseModel):
@@ -30,6 +30,21 @@ class EarningsCorrectionResponseDTO(BaseModel):
     correction: EarningsLedgerEntryDTO
 
 
+class FactoryEarningPriceDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    price_list_id: uuid.UUID
+    price_list_item_id: uuid.UUID
+    approval_id: uuid.UUID
+    activation_id: uuid.UUID
+    version: int
+    selection: str
+    unit: str
+    currency: str
+    confirmed_rate: Decimal
+    performed_at: datetime
+    effective_from: datetime
+
+
 class AdminEarningsLedgerItemDTO(EarningsLedgerEntryDTO):
     work_kind: str
     project_id: uuid.UUID | None
@@ -44,6 +59,7 @@ class AdminEarningsLedgerItemDTO(EarningsLedgerEntryDTO):
     installer_id: uuid.UUID
     installer_name: str | None
     can_correct: bool
+    factory_price: FactoryEarningPriceDTO | None = None
 
 
 class AdminEarningsLedgerResponseDTO(BaseModel):

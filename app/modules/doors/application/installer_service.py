@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
 
 from app.modules.doors.application.completion import (
     create_completed_work_for_door,
     resolve_installation_time,
-    resolve_installer_rate_snapshot,
 )
 from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned, InvalidTransition
+from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
 from app.modules.projects.application.status_service import ProjectStatusService
 from app.shared.domain.errors import NotFound
 
@@ -34,7 +33,9 @@ class InstallerDoorService:
         to_status: DoorStatus,
         source: str = "MOBILE_API",
         happened_at: datetime | None = None,
+        legacy_price_queue: bool = False,
     ) -> dict:
+        FactoryEarningsPricing.lock_company(uow, company_id)
         door = uow.doors.get(
             company_id=company_id, door_id=door_id,
             for_update=True, active_project_only=True,
@@ -73,27 +74,14 @@ class InstallerDoorService:
             )
 
         installed_at = None
-        installer_rate_snapshot = None
         if to_status == DoorStatus.INSTALLED:
             installed_at = resolve_installation_time(happened_at)
-            current_snapshot = getattr(door, "installer_rate_snapshot", None)
-            if current_snapshot is not None and Decimal(str(current_snapshot)) > 0:
-                installer_rate_snapshot = Decimal(str(current_snapshot))
-            else:
-                installer_rate_snapshot = resolve_installer_rate_snapshot(
-                    uow,
-                    company_id=company_id,
-                    installer_id=installer_id,
-                    door_type_id=door.door_type_id,
-                    at=installed_at,
-                )
 
         door.status = to_status
         door.version = int(getattr(door, "version", 0) or 0) + 1
         if to_status == DoorStatus.INSTALLED:
             door.installed_at = installed_at
             door.is_locked = True
-            door.installer_rate_snapshot = installer_rate_snapshot
         else:
             door.installed_at = None
             door.is_locked = False
@@ -106,6 +94,7 @@ class InstallerDoorService:
                 company_id=company_id,
                 installer_id=installer_id,
                 door=door,
+                legacy_price_queue=legacy_price_queue,
             )
 
         ProjectStatusService.recalc_and_set(

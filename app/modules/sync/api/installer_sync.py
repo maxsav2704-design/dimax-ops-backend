@@ -44,6 +44,7 @@ def list_sync_queue(
                 operation_type=row.operation_type,
                 payload=row.payload or {},
                 base_version=row.base_version,
+                client_happened_at=row.client_happened_at,
                 status=row.status,
                 conflict_code=row.conflict_code,
                 created_at=row.created_at,

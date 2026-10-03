@@ -12,6 +12,7 @@ from app.modules.doors.application.installer_service import InstallerDoorService
 from app.modules.doors.application.commands import MarkDoorInstalled, MarkDoorNotInstalled
 from app.modules.doors.application.use_cases import DoorUseCases
 from app.modules.doors.domain.enums import DoorStatus
+from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
 from app.modules.issues.application.installer_api_service import InstallerIssuesApiService
 from app.modules.projects.application.sync_payload import build_project_sync_payload
 from app.modules.sync.domain.enums import SyncChangeType, SyncEventType
@@ -241,6 +242,7 @@ class InstallerSyncService:
         device_id: str,
         items: list[dict],
     ) -> dict:
+        FactoryEarningsPricing.lock_company(uow, company_id)
         log_event(
             logger,
             "installer.sync_batch.requested",
@@ -287,6 +289,7 @@ class InstallerSyncService:
                 operation_type=item["operation_type"],
                 payload=item.get("payload") or {},
                 base_version=int(item.get("base_version") or 0),
+                client_happened_at=item.get("happened_at"),
             )
             try:
                 with uow.session.begin_nested():
@@ -399,6 +402,8 @@ class InstallerSyncService:
             app_version=app_version,
             device_id=device_id,
         )
+        if events:
+            FactoryEarningsPricing.lock_company(uow, company_id)
         max_acknowledgeable = uow.sync_change_log.max_cursor(company_id=company_id)
         if ack_cursor > max_acknowledgeable:
             raise ValidationError(
@@ -571,6 +576,7 @@ class InstallerSyncService:
 
                 with uow.session.begin_nested():
                     InstallerSyncService._validate_work_payload(etype.value, payload)
+                    InstallerSyncService._validate_execution_time(uow, company_id, etype.value, payload, happened_at)
                     if etype == SyncEventType.DOOR_SET_STATUS:
                         InstallerSyncService._apply_door_set_status(
                             uow,
@@ -662,6 +668,7 @@ class InstallerSyncService:
         InstallerSyncService._validate_work_payload(operation_type, payload)
         base_version = int(item.get("base_version") or 0)
         happened_at = item.get("happened_at")
+        InstallerSyncService._validate_execution_time(uow, company_id, operation_type, payload, happened_at)
 
         if operation_type == "DOOR_SET_STATUS":
             return InstallerSyncService._apply_batch_door_set_status(
@@ -688,6 +695,13 @@ class InstallerSyncService:
             return {"new_version": None}
 
         raise ValidationError(f"Unsupported sync operation type: {operation_type}")
+
+    @staticmethod
+    def _validate_execution_time(uow, company_id, operation_type, payload, happened_at):
+        completes_work = operation_type == "ADDON_FACT_CREATE" or (
+            operation_type == "DOOR_SET_STATUS" and str(payload.get("status", "")).upper() == "INSTALLED")
+        if completes_work and happened_at is None and FactoryEarningsPricing.is_active(uow, company_id):
+            raise Conflict("Offline work requires its execution time for factory pricing", field="happened_at")
 
     @staticmethod
     def _ensure_project_access(
@@ -815,6 +829,7 @@ class InstallerSyncService:
                     source="OFFLINE_SYNC",
                     expected_installer_id=installer_id,
                     happened_at=happened_at,
+                    legacy_price_queue=happened_at is not None,
                 ),
             )
         elif status == "NOT_INSTALLED":
@@ -911,6 +926,7 @@ class InstallerSyncService:
                     to_status=DoorStatus.INSTALLED,
                     source="OFFLINE_SYNC",
                     happened_at=happened_at,
+                    legacy_price_queue=happened_at is not None,
                 )
             except (ValidationError, Forbidden, Conflict) as exc:
                 raise _SyncConflictError(
@@ -989,6 +1005,7 @@ class InstallerSyncService:
             done_at=happened_at,
             source=AddonFactSource.OFFLINE,
             client_event_id=client_event_id,
+            legacy_price_queue=happened_at is not None,
         )
         if result is None:
             pass

@@ -249,7 +249,7 @@ class AdminSyncStateService:
                     "base_version": row.base_version,
                     "payload": row.payload or {},
                     "created_at": row.created_at,
-                    "client_happened_at": None,
+                    "client_happened_at": row.client_happened_at,
                     "applied_at": None,
                     "synced_at": row.synced_at,
                 }

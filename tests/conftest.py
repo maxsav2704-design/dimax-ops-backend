@@ -153,6 +153,10 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
     finally:
         db_session.rollback()
         db_session.execute(
+            text("DELETE FROM factory_earning_prices WHERE company_id = :cid"),
+            {"cid": cid},
+        )
+        db_session.execute(
             text("DELETE FROM factory_price_activations WHERE company_id = :cid"),
             {"cid": cid},
         )

@@ -122,4 +122,4 @@ class FactoryPriceTimelineService:
         return FactoryPriceQuote(price_list_id=price_list.id, price_list_item_id=item.id, version=price_list.version,
             approval_id=receipt.id, activation_id=activation.id, kind=kind, target_id=target_id,
             unit=item.unit, rate=item.installer_price, currency=price_list.currency, performed_at=performed_at,
-            effective_from=activation.effective_from, selection=selection)
+            effective_from=activation.effective_from, selection=selection, snapshot_hash=receipt.snapshot_hash)

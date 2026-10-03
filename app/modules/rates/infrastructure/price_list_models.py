@@ -56,6 +56,7 @@ class FactoryPriceListORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class FactoryPriceListItemORM(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "factory_price_list_items"
     __table_args__ = (
+        UniqueConstraint("company_id", "price_list_id", "id", name="uq_factory_price_items_tenant_list_id"),
         ForeignKeyConstraint(
             ["company_id", "price_list_id"], ["factory_price_lists.company_id", "factory_price_lists.id"],
             ondelete="CASCADE", name="fk_factory_price_items_tenant_list",

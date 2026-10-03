@@ -14,6 +14,7 @@ from app.shared.infrastructure.db.base import Base, UUIDPrimaryKeyMixin, Timesta
 class CompletedWorkORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "completed_work"
     __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_completed_work_tenant_id"),
         CheckConstraint(
             "entry_type IN ('ORIGINAL', 'REVERSAL', 'CORRECTION')",
             name="ck_completed_work_entry_type",

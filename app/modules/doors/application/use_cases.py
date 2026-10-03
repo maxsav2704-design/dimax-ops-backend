@@ -8,7 +8,6 @@ from app.modules.doors.application.completion import (
     create_completed_work_for_door,
     reverse_completed_work_for_door,
     resolve_installation_time,
-    resolve_installer_rate_snapshot,
 )
 from app.modules.doors.application.commands import (
     AdminOverrideDoor,
@@ -18,6 +17,7 @@ from app.modules.doors.application.commands import (
 from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned
+from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
 from app.modules.issues.domain.enums import IssueStatus, IssueWorkflowState
 from app.modules.issues.application.sync_payload import publish_issue_change
 from app.modules.issues.infrastructure.models import IssueORM
@@ -51,6 +51,7 @@ def _door_action_result(door) -> dict:
 class DoorUseCases:
     @staticmethod
     def mark_installed(uow, cmd: MarkDoorInstalled) -> dict:
+        FactoryEarningsPricing.lock_company(uow, cmd.company_id)
         door = uow.doors.get(
             company_id=cmd.company_id, door_id=cmd.door_id, for_update=True,
             active_project_only=cmd.expected_installer_id is not None,
@@ -76,21 +77,12 @@ class DoorUseCases:
 
         # ставим installed
         installed_at = resolve_installation_time(cmd.happened_at, received_at=utcnow())
-        installer_rate_snapshot = resolve_installer_rate_snapshot(
-            uow,
-            company_id=cmd.company_id,
-            installer_id=door.installer_id,
-            door_type_id=door.door_type_id,
-            at=installed_at,
-            current_snapshot=door.installer_rate_snapshot,
-        )
 
         door.status = DoorStatus.INSTALLED
         door.installed_at = installed_at
         door.is_locked = True
         door.reason_id = None
         door.comment = None
-        door.installer_rate_snapshot = installer_rate_snapshot
         _bump_door_version(door)
 
         uow.doors.save(door)
@@ -99,6 +91,7 @@ class DoorUseCases:
             company_id=cmd.company_id,
             installer_id=door.installer_id,
             door=door,
+            legacy_price_queue=cmd.legacy_price_queue,
         )
 
         # закрываем issue если было
@@ -131,6 +124,7 @@ class DoorUseCases:
 
     @staticmethod
     def mark_not_installed(uow, cmd: MarkDoorNotInstalled) -> dict:
+        FactoryEarningsPricing.lock_company(uow, cmd.company_id)
         door = uow.doors.get(
             company_id=cmd.company_id, door_id=cmd.door_id, for_update=True,
             active_project_only=cmd.expected_installer_id is not None,
@@ -213,6 +207,7 @@ class DoorUseCases:
         if actor_role != "ADMIN":
             raise Forbidden("Admin only")
 
+        FactoryEarningsPricing.lock_company(uow, cmd.company_id)
         door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id, for_update=True)
         if not door:
             raise NotFound("Door not found", details={"door_id": str(cmd.door_id)})
@@ -239,21 +234,12 @@ class DoorUseCases:
                 if from_status == DoorStatus.INSTALLED and door.installed_at is not None
                 else utcnow()
             )
-            installer_rate_snapshot = resolve_installer_rate_snapshot(
-                uow,
-                company_id=cmd.company_id,
-                installer_id=door.installer_id,
-                door_type_id=door.door_type_id,
-                at=installed_at,
-                current_snapshot=door.installer_rate_snapshot,
-            )
 
             door.status = DoorStatus.INSTALLED
             door.installed_at = installed_at
             door.is_locked = True
             door.reason_id = None
             door.comment = None
-            door.installer_rate_snapshot = installer_rate_snapshot
             create_completed_work_for_door(
                 uow,
                 company_id=cmd.company_id,
