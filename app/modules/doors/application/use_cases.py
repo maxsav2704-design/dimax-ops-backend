@@ -92,6 +92,7 @@ class DoorUseCases:
             installer_id=door.installer_id,
             door=door,
             legacy_price_queue=cmd.legacy_price_queue,
+            seen_price_list_id=cmd.seen_price_list_id,
         )
 
         # закрываем issue если было

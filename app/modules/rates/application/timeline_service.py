@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from app.modules.audit.application.service import AuditService
 from app.modules.rates.application.approval_service import approval_snapshot_matches
+from app.modules.rates.application.installer_price_dto import InstallerPriceItem, InstallerPriceSnapshot
 from app.modules.rates.application.reconciliation_service import FactoryPriceReconciliationService
 from app.modules.rates.application.timeline_dto import ActivatePriceVersion, EffectivePriceVersion, FactoryPriceQuote
 from app.modules.rates.infrastructure.timeline_models import FactoryPriceActivationORM
@@ -15,7 +16,21 @@ from app.shared.infrastructure.db.base import utcnow
 
 
 class FactoryPriceTimelineService:
-    """Internal transition engine; intentionally not exposed until mobile can cache price versions."""
+    """Price timeline and installer read model; activation stays internal pending rollout checks."""
+
+    @classmethod
+    def installer_snapshot(cls, uow, *, company_id: UUID) -> InstallerPriceSnapshot | None:
+        activation = uow.price_lists.latest_activation(company_id)
+        if activation is None:
+            return None
+        price_list, _ = cls._effective_receipt(uow, activation)
+        return InstallerPriceSnapshot(
+            price_list_id=price_list.id, version=price_list.version, currency=price_list.currency,
+            effective_from=activation.effective_from,
+            items=[InstallerPriceItem(kind=item.kind, target_id=item.door_type_id or item.addon_type_id,
+                                      unit=item.unit, rate=item.installer_price)
+                   for item in uow.price_lists.items(company_id, price_list.id)],
+        )
 
     @staticmethod
     def activate(uow, *, company_id: UUID, actor_user_id: UUID, price_list_id: UUID,

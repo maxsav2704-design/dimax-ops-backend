@@ -34,6 +34,7 @@ class InstallerDoorService:
         source: str = "MOBILE_API",
         happened_at: datetime | None = None,
         legacy_price_queue: bool = False,
+        seen_price_list_id: uuid.UUID | None = None,
     ) -> dict:
         FactoryEarningsPricing.lock_company(uow, company_id)
         door = uow.doors.get(
@@ -95,6 +96,7 @@ class InstallerDoorService:
                 installer_id=installer_id,
                 door=door,
                 legacy_price_queue=legacy_price_queue,
+                seen_price_list_id=seen_price_list_id,
             )
 
         ProjectStatusService.recalc_and_set(

@@ -59,10 +59,11 @@ def activate(case, *, expected=0, previous=None, door_price="250", addon_price="
     return version, transition(case.company, case.actor, version, previous)
 
 
-def submit(case, kind, channel, at=None, event_id=None):
+def submit(case, kind, channel, at=None, event_id=None, extra_payload=None):
     event_id = event_id or str(uuid4())
     payload = ({"door_id": str(case.door), "status": "INSTALLED"} if kind == "DOOR"
                else {"addon_type_id": str(case.addon), "qty_done": "1.50", "comment": "QA"})
+    payload.update(extra_payload or {})
     if channel == "install":
         return case.client.post(f"/api/v1/installer/doors/{case.door}/install", json={})
     if channel == "status":

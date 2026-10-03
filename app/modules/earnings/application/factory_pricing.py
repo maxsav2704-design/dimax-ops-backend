@@ -18,13 +18,14 @@ class FactoryEarningsPricing:
         return uow.price_lists.latest_activation(company_id) is not None
 
     @staticmethod
-    def quote(uow, *, company_id, kind, target_id, performed_at, legacy_queue=False):
-        if not FactoryEarningsPricing.is_active(uow, company_id):
+    def quote(uow, *, company_id, kind, target_id, performed_at, legacy_queue=False, seen_price_list_id=None):
+        if seen_price_list_id is None and not FactoryEarningsPricing.is_active(uow, company_id):
             return None
         if performed_at.tzinfo is None:
             performed_at = performed_at.replace(tzinfo=timezone.utc)
         return FactoryPriceTimelineService.quote(uow, company_id=company_id, kind=kind, target_id=target_id,
-                                                performed_at=performed_at, legacy_queue=legacy_queue)
+                                                performed_at=performed_at, legacy_queue=legacy_queue,
+                                                seen_price_list_id=seen_price_list_id)
 
     @staticmethod
     def evidence(uow, company_id, work_id):

@@ -197,6 +197,29 @@ root checkpoint `acceptance/steps/2026-10-03-factory-earnings.md`. This is not f
 backend/admin/mobile/native or production approval. The migration never activates
 existing companies, and downgrade refuses to discard evidence or queue times.
 
+### Mobile Price Sync, October 3
+
+Installer sync now returns only the receipt-validated active company price
+snapshot, including on an unchanged cursor and on cold reset. Inactive pricing
+returns null; confirmation alone does not make a list effective. Mobile caches
+this in account-owned SQLite state and captures the version in new completion
+commands. Historical work keeps its recorded version/time. Both sync protocols
+compare it with the authoritative execution-time quote before earning creation.
+
+Price conflicts keep the command with `CONFLICT_FACTORY_PRICE`; the mobile queue
+explains the hold in EN/RU/HE without offering blind retry or deletion. Old mobile
+undo metadata remains compatible but cannot override prices or server state.
+Batch IDs cannot be reused to rewrite the execution timestamp, quantity or price
+reference, including failed commands. Existing JSON/state tables are sufficient;
+no migration beyond 0066 is introduced.
+
+Selected PostgreSQL regression: 190 PASS, including 22 new price-sync cases,
+earning/timeline regression, installer-price authority, both sync protocols and
+OpenAPI contracts. See `acceptance/steps/2026-10-03-mobile-price-sync.md` in the
+workspace root for mobile and runtime evidence. Read-only price-card UI,
+authorized conflict resolution, reviewed activation/writer consistency and
+physical-device acceptance remain prerequisites. No company is activated here.
+
 ## Backup/Restore Drill
 
 Run before first production deploy and on schedule:

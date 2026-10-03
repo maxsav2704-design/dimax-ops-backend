@@ -80,6 +80,7 @@ def sync(
             next_cursor=res["next_cursor"],
             reset_required=res.get("reset_required", False),
             snapshot=res.get("snapshot"),
+            factory_prices=res.get("factory_prices"),
             acks=[SyncAckItem(**x) for x in res["acks"]],
             changes=[SyncChangeDTO(**x) for x in res["changes"]],
         )

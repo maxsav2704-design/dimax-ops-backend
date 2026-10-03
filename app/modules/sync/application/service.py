@@ -15,6 +15,7 @@ from app.modules.doors.domain.enums import DoorStatus
 from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
 from app.modules.issues.application.installer_api_service import InstallerIssuesApiService
 from app.modules.projects.application.sync_payload import build_project_sync_payload
+from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
 from app.modules.sync.domain.enums import SyncChangeType, SyncEventType
 from app.shared.domain.errors import (
     Conflict,
@@ -42,20 +43,41 @@ def utcnow() -> datetime:
 
 class InstallerSyncService:
     @staticmethod
+    def _command_payload(operation_type: str, payload: dict) -> dict:
+        if operation_type != "DOOR_SET_STATUS":
+            return payload
+        # Older mobile builds included local undo data. It never authorizes a server transition.
+        local_only = {"previous_status", "previous_reason_id", "previous_comment", "previous_is_locked"}
+        return {key: value for key, value in payload.items() if key not in local_only}
+
+    @staticmethod
     def _validate_work_payload(operation_type: str, payload: dict) -> None:
+        payload = InstallerSyncService._command_payload(operation_type, payload)
         allowed = {
-            "DOOR_SET_STATUS": {"door_id", "status", "reason_id", "comment", "base_version", "previous_version"},
-            "ADDON_FACT_CREATE": {"addon_type_id", "qty_done", "comment"},
+            "DOOR_SET_STATUS": {"door_id", "status", "reason_id", "comment", "base_version", "previous_version", "price_list_id"},
+            "ADDON_FACT_CREATE": {"addon_type_id", "qty_done", "comment", "price_list_id"},
         }.get(operation_type)
         if allowed is not None and (unexpected := sorted(payload.keys() - allowed)):
             raise ValidationError(
                 "Installer work commands cannot set prices, earnings or approval fields",
                 field="payload", meta={"unexpected_fields": unexpected},
             )
+        if allowed is not None and "price_list_id" in payload:
+            value = payload["price_list_id"]
+            try:
+                if not isinstance(value, str):
+                    raise ValueError
+                uuid.UUID(value)
+            except (ValueError, AttributeError):
+                raise ValidationError("Invalid cached price version", field="price_list_id") from None
+            if operation_type == "DOOR_SET_STATUS" and payload.get("status") != "INSTALLED":
+                raise ValidationError("Only completed work can reference a price version", field="price_list_id")
 
     @staticmethod
     def _domain_error_to_conflict(exc: Exception) -> _SyncConflictError:
         message = str(exc)
+        if getattr(exc, "field", None) == "price_list_id":
+            return _SyncConflictError("CONFLICT_FACTORY_PRICE", message)
         lowered = message.lower()
         if (
             "assigned" in lowered
@@ -82,6 +104,19 @@ class InstallerSyncService:
         return str(exc)
 
     @staticmethod
+    def _batch_item_matches(row, item: dict) -> bool:
+        happened_at = item.get("happened_at")
+        if happened_at is not None and happened_at.tzinfo is None:
+            happened_at = happened_at.replace(tzinfo=timezone.utc)
+        return (
+            row.project_id == item["project_id"] and row.entity_id == item["entity_id"]
+            and row.entity_type == item["entity_type"] and row.operation_type == item["operation_type"]
+            and row.base_version == item["base_version"] and row.client_happened_at == happened_at
+            and InstallerSyncService._command_payload(row.operation_type, row.payload or {})
+            == InstallerSyncService._command_payload(item["operation_type"], item.get("payload") or {})
+        )
+
+    @staticmethod
     def _existing_event_ack(
         existing_event,
         *,
@@ -103,7 +138,8 @@ class InstallerSyncService:
         if (
             existing_event.project_id != event["project_id"]
             or enum_value(existing_event.event_type) != event["type"]
-            or existing_event.payload != (event.get("payload") or {})
+            or InstallerSyncService._command_payload(event["type"], existing_event.payload or {})
+            != InstallerSyncService._command_payload(event["type"], event.get("payload") or {})
             or existing_event.client_happened_at != happened_at
         ):
             return {
@@ -268,6 +304,13 @@ class InstallerSyncService:
                 item_id=uuid.UUID(str(item["id"])),
                 user_id=actor_user_id,
             )
+            if existing is not None and not InstallerSyncService._batch_item_matches(existing, item):
+                results.append({
+                    "item_id": existing.id, "status": "CONFLICT", "new_version": None,
+                    "conflict_code": "CONFLICT_INVALID_TRANSITION",
+                    "message": "Queue ID was already used for different work; the original record is preserved",
+                })
+                continue
             if existing is not None and existing.status == "APPLIED":
                 results.append(
                     InstallerSyncService._applied_batch_result(
@@ -432,6 +475,8 @@ class InstallerSyncService:
 
         uow.session.flush()
 
+        # Send the active read-only price snapshot even when the change cursor has not moved.
+        factory_prices = FactoryPriceTimelineService.installer_snapshot(uow, company_id=company_id)
         min_available = uow.sync_change_log.min_cursor(company_id=company_id)
         max_now = uow.sync_change_log.max_cursor(company_id=company_id)
 
@@ -463,6 +508,7 @@ class InstallerSyncService:
                 "next_cursor": max_now,
                 "reset_required": True,
                 "snapshot": snapshot,
+                "factory_prices": factory_prices,
                 "acks": acks,
                 "changes": [],
             }
@@ -509,6 +555,7 @@ class InstallerSyncService:
             "next_cursor": next_cursor,
             "acks": acks,
             "changes": changes,
+            "factory_prices": factory_prices,
         }
 
     @staticmethod
@@ -830,6 +877,7 @@ class InstallerSyncService:
                     expected_installer_id=installer_id,
                     happened_at=happened_at,
                     legacy_price_queue=happened_at is not None,
+                    seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
                 ),
             )
         elif status == "NOT_INSTALLED":
@@ -927,12 +975,10 @@ class InstallerSyncService:
                     source="OFFLINE_SYNC",
                     happened_at=happened_at,
                     legacy_price_queue=happened_at is not None,
+                    seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
                 )
             except (ValidationError, Forbidden, Conflict) as exc:
-                raise _SyncConflictError(
-                    "CONFLICT_INVALID_TRANSITION",
-                    str(exc),
-                ) from exc
+                raise InstallerSyncService._domain_error_to_conflict(exc) from exc
             return {"new_version": result["version"]}
 
         if status == DoorStatus.NOT_INSTALLED.value:
@@ -1006,6 +1052,7 @@ class InstallerSyncService:
             source=AddonFactSource.OFFLINE,
             client_event_id=client_event_id,
             legacy_price_queue=happened_at is not None,
+            seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
         )
         if result is None:
             pass

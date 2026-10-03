@@ -69,6 +69,7 @@ def create_completed_work_for_addon_fact(
     fact: ProjectAddonFactORM,
     plan,
     legacy_price_queue: bool = False,
+    seen_price_list_id: uuid.UUID | None = None,
 ) -> CompletedWorkORM | None:
     if Decimal(str(fact.qty_done or 0)) <= 0:
         return None
@@ -88,7 +89,7 @@ def create_completed_work_for_addon_fact(
     completed_at = fact.done_at or utcnow()
     quote = FactoryEarningsPricing.quote(
         uow, company_id=company_id, kind="ADDON", target_id=fact.addon_type_id,
-        performed_at=completed_at, legacy_queue=legacy_price_queue,
+        performed_at=completed_at, legacy_queue=legacy_price_queue, seen_price_list_id=seen_price_list_id,
     )
     if quote is None and (plan is None or Decimal(str(plan.installer_price or 0)) <= 0):
         return None
@@ -368,6 +369,7 @@ class AddonsUseCases:
         source: AddonFactSource,
         client_event_id: str | None,
         legacy_price_queue: bool = False,
+        seen_price_list_id: uuid.UUID | None = None,
     ) -> ProjectAddonFactORM | None:
         qty_done = validate_fact_quantity(qty_done)
         if client_event_id is not None and (not client_event_id.strip() or len(client_event_id) > 80):
@@ -434,6 +436,7 @@ class AddonsUseCases:
         create_completed_work_for_addon_fact(
             uow, company_id=company_id, fact=row, plan=plan,
             legacy_price_queue=legacy_price_queue,
+            seen_price_list_id=seen_price_list_id,
         )
 
         uow.sync_change_log.add_change(

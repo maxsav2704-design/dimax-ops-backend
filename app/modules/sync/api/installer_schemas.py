@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.pagination import PaginationDTO
+from app.modules.rates.application.installer_price_dto import InstallerPriceSnapshot
 
 
 class SyncEventIn(BaseModel):
@@ -168,6 +169,7 @@ class InstallerSyncResponse(BaseModel):
     next_cursor: int
     reset_required: bool = False
     snapshot: ColdSnapshotDTO | None = None
+    factory_prices: InstallerPriceSnapshot | None = None
 
     acks: list[SyncAckItem]
 

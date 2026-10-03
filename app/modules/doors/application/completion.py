@@ -81,6 +81,7 @@ def create_completed_work_for_door(
     installer_id: uuid.UUID | None,
     door,
     legacy_price_queue: bool = False,
+    seen_price_list_id: uuid.UUID | None = None,
 ) -> CompletedWorkORM:
     if installer_id is None:
         raise ValidationError(
@@ -105,7 +106,7 @@ def create_completed_work_for_door(
     completed_at = getattr(door, "installed_at", None) or utcnow()
     quote = FactoryEarningsPricing.quote(
         uow, company_id=company_id, kind="DOOR", target_id=door.door_type_id,
-        performed_at=completed_at, legacy_queue=legacy_price_queue,
+        performed_at=completed_at, legacy_queue=legacy_price_queue, seen_price_list_id=seen_price_list_id,
     )
     if quote is not None:
         if (getattr(door, "apply_surcharge_to_installer", False)

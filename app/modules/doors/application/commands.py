@@ -14,6 +14,7 @@ class MarkDoorInstalled:
     expected_installer_id: uuid.UUID | None = None
     happened_at: datetime | None = None
     legacy_price_queue: bool = False
+    seen_price_list_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
