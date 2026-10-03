@@ -1,4 +1,5 @@
 from uuid import UUID
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 
@@ -7,6 +8,8 @@ from app.modules.rates.application.price_list_dto import (
     CancelPriceList, CreatePriceList, PriceListDetail, PriceListPage,
 )
 from app.modules.rates.application.price_lists_service import FactoryPriceListsService
+from app.modules.rates.application.reconciliation_dto import ReconciliationPage
+from app.modules.rates.application.reconciliation_service import FactoryPriceReconciliationService
 
 router = APIRouter(prefix="/admin/price-lists", tags=["Admin / Factory price lists"])
 
@@ -21,11 +24,35 @@ def list_price_lists(
         return FactoryPriceListsService.list(uow, company_id=user.company_id, limit=limit, offset=offset)
 
 
+@router.get("/reconciliation", response_model=ReconciliationPage)
+def reconcile_company_prices(
+    limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+    issues_only: bool = False, kind: Literal["DOOR", "ADDON"] | None = None,
+    user: CurrentUser = Depends(require_admin), uow=Depends(get_uow),
+):
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        return FactoryPriceReconciliationService.get(uow, company_id=user.company_id, price_list_id=None,
+            limit=limit, offset=offset, issues_only=issues_only, kind=kind)
+
+
 @router.get("/{price_list_id}", response_model=PriceListDetail)
 def get_price_list(price_list_id: UUID, user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
     with uow:
         ensure_admin_can_view_rates(uow, user)
         return FactoryPriceListsService.get(uow, company_id=user.company_id, price_list_id=price_list_id)
+
+
+@router.get("/{price_list_id}/reconciliation", response_model=ReconciliationPage)
+def reconcile_price_list(
+    price_list_id: UUID, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+    issues_only: bool = False, kind: Literal["DOOR", "ADDON"] | None = None,
+    user: CurrentUser = Depends(require_admin), uow=Depends(get_uow),
+):
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        return FactoryPriceReconciliationService.get(uow, company_id=user.company_id, price_list_id=price_list_id,
+            limit=limit, offset=offset, issues_only=issues_only, kind=kind)
 
 
 @router.post("", response_model=PriceListDetail)

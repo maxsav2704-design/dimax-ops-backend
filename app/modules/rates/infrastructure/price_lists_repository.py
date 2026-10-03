@@ -10,6 +10,7 @@ from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.identity.infrastructure.models import CompanyORM
 from app.modules.rates.infrastructure.price_list_models import FactoryPriceListItemORM, FactoryPriceListORM
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
+from app.modules.rates.infrastructure.reconciliation_queries import reconciliation_query
 
 
 class FactoryPriceListsRepository:
@@ -98,3 +99,6 @@ class FactoryPriceListsRepository:
         self.session.flush()
         self.session.add(row)
         self.session.flush()
+
+    def reconciliation_page(self, **scope):
+        return self.session.execute(reconciliation_query(**scope)).mappings().all()

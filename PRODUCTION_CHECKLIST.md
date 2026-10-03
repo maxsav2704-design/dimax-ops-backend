@@ -90,6 +90,12 @@ The admin `/price-lists` workspace now supports draft creation/copy/cancellation
 named invitations, one-time manual link sharing, revocation and decision history
 in RU/EN/HE. OWNER/OPERATIONS can write with rate access; FINANCE can read with
 rate access. There is no admin substitute for the factory's explicit decision.
+The readonly reconciliation report inventories company prices before the first
+draft and compares legacy sources with a selected version. It flags different
+current prices, door snapshots/surcharges, future rates, missing prices/parents,
+catalog/unit changes and additional work without accrual. Historical earnings
+are counted but never repriced. The report does not choose prices or activate a
+version; actual settlement with the factory and the rollout remain open.
 
 Before production approval under the new rule:
 
