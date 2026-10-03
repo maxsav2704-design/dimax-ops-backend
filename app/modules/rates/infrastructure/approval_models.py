@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,7 @@ from app.shared.infrastructure.db.base import Base, TimestampMixin, UUIDPrimaryK
 class FactoryPriceApprovalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "factory_price_approvals"
     __table_args__ = (
+        UniqueConstraint("company_id", "price_list_id", "id", name="uq_factory_approvals_tenant_list_id"),
         ForeignKeyConstraint(
             ["company_id", "price_list_id"], ["factory_price_lists.company_id", "factory_price_lists.id"],
             ondelete="CASCADE", name="fk_factory_approvals_tenant_list",

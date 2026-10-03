@@ -36,7 +36,8 @@ def main():
         assert connection.execute(text("SELECT count(*) FROM factory_price_approvals")).scalar_one() == 0
         context = MigrationContext.configure(connection, opts={
             "include_object": lambda obj, name, type_, reflected, compare_to:
-                name in new_tables if type_ == "table" else obj.table.name in new_tables,
+                name in new_tables if type_ == "table" else (
+                    obj.table.name in new_tables and name != "uq_factory_approvals_tenant_list_id"),
         })
         assert compare_metadata(context, Base.metadata) == []
     command.downgrade(config, "0063_factory_price_lists")

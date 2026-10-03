@@ -141,10 +141,34 @@ for frontend/browser/live verification and remaining work.
 Offline policy is now agreed: use the confirmed price effective at execution
 time; only old queued work without a confirmed version uses the first confirmed
 company list at rollout. Do not reprice recorded earnings or bypass assignment,
-quantity and replay checks. Actual activation/timeline, immutable earning
+quantity and replay checks. Live activation, immutable earning
 provenance and mobile price sync remain open. Activation must recheck under the
 company lock; a historical work resolver must not reject an old valid version
 merely because the current preparation report flags it as superseded.
+
+### Internal Timeline Engine, October 3
+
+Migration 0065 records effective-version history without activating any company
+or repricing its existing work. The internal service rechecks factory evidence
+and company-wide prerequisites under the company lock, enforces active
+OWNER/OPERATIONS rate access, expected-version/retry checks, strictly increasing
+effective times and atomic audit. There is no activation HTTP route or UI action yet.
+
+Execution-time quotes retain the matching version/receipt/item/rate. Only an
+explicitly classified old versionless queue uses the first confirmed list;
+missing/damaged first-list evidence or missing prices cannot select a later
+amendment. Historical quotes do not use the current-version preparation gate.
+Quote evidence is not yet persisted in completed-work rows, and the legacy
+door/project-plan/manual-rate correction paths are intentionally not switched.
+Before enabling activation, guard those paths and implement mobile versioned
+price cache/sync and unresolved-price handling.
+
+Final selected PostgreSQL regression: 316 PASS, including 54 timeline cases,
+factory APIs, addons, earnings corrections and architecture checks. This is
+not the full backend/native release suite. Fresh/rollback/metadata/history-loss
+checks passed in the guarded disposable migration DB; legacy business snapshots
+were preserved and that database was dropped. See the root checkpoint
+`acceptance/steps/2026-10-03-price-timeline.md` for runtime evidence and limits.
 
 ## Backup/Restore Drill
 

@@ -13,6 +13,7 @@ _MODEL_MODULES = (
     "app.modules.rates.infrastructure.models",
     "app.modules.rates.infrastructure.price_list_models",
     "app.modules.rates.infrastructure.approval_models",
+    "app.modules.rates.infrastructure.timeline_models",
     "app.modules.projects.infrastructure.models",
     "app.modules.doors.infrastructure.models",
     "app.modules.doors.infrastructure.history_models",
