@@ -121,6 +121,31 @@ No email/WhatsApp delivery or native-device acceptance is claimed by this step.
 Public request throttling currently uses the existing process-local limiter;
 production multi-worker deployments still need shared/gateway-level limits.
 
+### Pre-Application Check, October 3
+
+Selected-version reconciliation now includes an advisory application check.
+It requires a matching recorded factory receipt, checks company-wide work-price
+coverage and referenced catalog availability, and identifies changed units/names,
+superseded confirmed versions and installer surcharges. Door snapshots, legacy
+differences, scheduled rates, unaccrued work and urgency agreements remain explicit
+review items. Filters cannot hide these prerequisites. VERIFIED is not ACTIVE;
+`affects_earnings` remains false. Missing or corrupted evidence fails closed.
+
+Final selected PostgreSQL regression: 218 PASS, including 19 new check cases,
+existing reconciliation/draft/confirmation and architecture gates. The initial
+run stopped at an invalid test email; the fixture was fixed without weakening
+email validation. No migration or financial backfill is introduced here.
+See `acceptance/steps/2026-10-03-price-application-check.md` in the root repository
+for frontend/browser/live verification and remaining work.
+
+Offline policy is now agreed: use the confirmed price effective at execution
+time; only old queued work without a confirmed version uses the first confirmed
+company list at rollout. Do not reprice recorded earnings or bypass assignment,
+quantity and replay checks. Actual activation/timeline, immutable earning
+provenance and mobile price sync remain open. Activation must recheck under the
+company lock; a historical work resolver must not reject an old valid version
+merely because the current preparation report flags it as superseded.
+
 ## Backup/Restore Drill
 
 Run before first production deploy and on schedule:

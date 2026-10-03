@@ -55,11 +55,28 @@ class ReconciliationSummary(BaseModel):
     multiple_rate_types: int
 
 
+class PriceApplicationIssue(BaseModel):
+    code: Literal["NOT_CONFIRMED", "CONFIRMATION_MISSING", "CONFIRMATION_MISMATCH", "SUPERSEDED_CONFIRMED",
+                  "NO_ITEMS", "MISSING_DOOR_PRICES", "MISSING_ADDON_PRICES", "UNAVAILABLE_WORK", "CATALOG_CHANGED",
+                  "INSTALLER_SURCHARGES", "LEGACY_DIFFERENCES", "DOOR_SNAPSHOTS", "SCHEDULED_RATES",
+                  "UNACCRUED_WORK", "URGENCY_CHARGES"]
+    count: int
+
+
+class PriceApplicationCheck(BaseModel):
+    status: Literal["BLOCKED", "REVIEW_REQUIRED", "VERIFIED"]
+    affects_earnings: Literal[False] = False
+    confirmed_at: datetime | None
+    blockers: list[PriceApplicationIssue]
+    review: list[PriceApplicationIssue]
+
+
 class ReconciliationPage(BaseModel):
     price_list_id: UUID | None
     version: int | None
     currency: Literal["ILS"]
     generated_at: datetime
     summary: ReconciliationSummary
+    application_check: PriceApplicationCheck | None
     items: list[ReconciliationLine]
     total: int

@@ -11,6 +11,7 @@ from app.modules.identity.infrastructure.models import CompanyORM
 from app.modules.rates.infrastructure.price_list_models import FactoryPriceListItemORM, FactoryPriceListORM
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
 from app.modules.rates.infrastructure.reconciliation_queries import reconciliation_query
+from app.modules.rates.infrastructure.application_check_queries import required_work_query
 
 
 class FactoryPriceListsRepository:
@@ -102,3 +103,15 @@ class FactoryPriceListsRepository:
 
     def reconciliation_page(self, **scope):
         return self.session.execute(reconciliation_query(**scope)).mappings().all()
+
+    def confirmed_approval(self, company_id: UUID, price_list_id: UUID):
+        return self.session.scalar(select(FactoryPriceApprovalORM).where(
+            FactoryPriceApprovalORM.company_id == company_id, FactoryPriceApprovalORM.price_list_id == price_list_id,
+            FactoryPriceApprovalORM.confirmed_at.is_not(None)))
+
+    def latest_confirmed_version(self, company_id: UUID):
+        return self.session.scalar(select(func.max(FactoryPriceListORM.version)).where(
+            FactoryPriceListORM.company_id == company_id, FactoryPriceListORM.status == "CONFIRMED")) or 0
+
+    def required_work(self, company_id: UUID, price_list_id: UUID):
+        return self.session.execute(required_work_query(company_id, price_list_id)).mappings().all()

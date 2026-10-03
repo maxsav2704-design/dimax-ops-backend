@@ -35,6 +35,15 @@ def _digest(price_list, snapshot: dict) -> str:
     return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def approval_snapshot_matches(uow, price_list, invitation) -> bool:
+    try:
+        current = _snapshot(uow, price_list, invitation.snapshot["company_name"])
+        return (compare_digest(_digest(price_list, current), invitation.snapshot_hash)
+                and compare_digest(_digest(price_list, invitation.snapshot), invitation.snapshot_hash))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 class FactoryPriceApprovalService:
     @staticmethod
     def issue(uow, *, company_id: UUID, price_list_id: UUID, actor_user_id: UUID, body: IssueApproval):
@@ -113,9 +122,7 @@ class FactoryPriceApprovalService:
             raise NotFound("Invitation unavailable")
         if invitation.confirmed_at is None and price_list.version != uow.price_lists.latest_version(scope.company_id):
             raise Conflict("This price-list version has been superseded")
-        current = _snapshot(uow, price_list, invitation.snapshot["company_name"])
-        if (not compare_digest(_digest(price_list, current), invitation.snapshot_hash)
-                or not compare_digest(_digest(price_list, invitation.snapshot), invitation.snapshot_hash)):
+        if not approval_snapshot_matches(uow, price_list, invitation):
             raise Conflict("The price list no longer matches this invitation")
         return invitation, price_list, now
 
