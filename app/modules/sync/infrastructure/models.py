@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -9,8 +10,10 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     Sequence,
     String,
     Text,
@@ -24,12 +27,14 @@ from app.shared.infrastructure.db.base import (
     Base,
     TimestampMixin,
     UUIDPrimaryKeyMixin,
+    utcnow,
 )
 
 
 class SyncEventORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "sync_events"
     __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_sync_events_tenant_id"),
         Index("ix_sync_events_company_project", "company_id", "project_id"),
         Index("ix_sync_events_company_installer", "company_id", "installer_id"),
         Index("ix_sync_events_created_at", "created_at"),
@@ -145,6 +150,7 @@ class InstallerSyncStateORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class SyncQueueItemORM(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "sync_queue_items"
     __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_sync_queue_tenant_id"),
         Index("ix_sync_queue_items_user_status", "user_id", "status"),
         Index("ix_sync_queue_items_company_project", "company_id", "project_id"),
         CheckConstraint(
@@ -181,3 +187,35 @@ class SyncQueueItemORM(Base, UUIDPrimaryKeyMixin):
     synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class SyncPriceResolutionORM(Base, UUIDPrimaryKeyMixin):
+    __tablename__ = "sync_price_resolutions"
+    __table_args__ = (
+        UniqueConstraint("company_id", "request_id", name="uq_sync_price_resolution_request"),
+        UniqueConstraint("company_id", "sync_event_id", name="uq_sync_price_resolution_event"),
+        UniqueConstraint("company_id", "sync_queue_item_id", name="uq_sync_price_resolution_queue"),
+        UniqueConstraint("completed_work_id", name="uq_sync_price_resolution_work"),
+        ForeignKeyConstraint(["company_id", "sync_event_id"], ["sync_events.company_id", "sync_events.id"],
+                             ondelete="RESTRICT", name="fk_sync_price_resolution_event"),
+        ForeignKeyConstraint(["company_id", "sync_queue_item_id"], ["sync_queue_items.company_id", "sync_queue_items.id"],
+                             ondelete="RESTRICT", name="fk_sync_price_resolution_queue"),
+        ForeignKeyConstraint(["company_id", "completed_work_id"], ["completed_work.company_id", "completed_work.id"],
+                             ondelete="RESTRICT", name="fk_sync_price_resolution_work"),
+        CheckConstraint("(sync_event_id IS NULL) <> (sync_queue_item_id IS NULL)", name="ck_sync_price_resolution_source"),
+        CheckConstraint("amount > 0 AND length(btrim(reason)) BETWEEN 10 AND 500", name="ck_sync_price_resolution_decision"),
+    )
+
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    sync_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    sync_queue_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    completed_work_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    original_command: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    quote_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

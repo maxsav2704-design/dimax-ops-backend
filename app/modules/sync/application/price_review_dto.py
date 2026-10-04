@@ -1,9 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.modules.rates.application.timeline_dto import FactoryPriceQuote
 
@@ -30,8 +30,27 @@ class PriceConflictReview(BaseModel):
         "MISSING_EXECUTION_TIME", "INVALID_EXECUTION_TIME", "NO_ACTIVE_FACTORY_PRICES",
         "MISSING_FACTORY_PRICE", "INVALID_FACTORY_EVIDENCE", "WORK_UNAVAILABLE",
         "INVALID_QUANTITY", "UNSUPPORTED_WORK", "CATALOG_UNIT_CHANGED",
+        "ORIGINAL_PRICE_UNAVAILABLE",
     ]
     applicable_quote: FactoryPriceQuote | None = None
     preview_amount: Decimal | None = None
     work_context: Literal["CURRENT_CATALOG"] = "CURRENT_CATALOG"
-    resolution_available: Literal[False] = False
+    resolution_available: bool = False
+    review_token: str | None = None
+
+
+class ResolvePriceConflict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    review_token: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=500)]
+
+
+class PriceConflictResolution(BaseModel):
+    id: UUID
+    completed_work_id: UUID
+    price_list_id: UUID
+    amount: Decimal
+    resolved_at: datetime
+    reason: str

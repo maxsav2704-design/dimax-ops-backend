@@ -432,6 +432,7 @@ class InstallerSyncService:
         app_version: str | None,
         device_id: str | None,
         events: list[dict],
+        price_resolution_checks: list[str] | None = None,
     ) -> dict:
         log_event(
             logger,
@@ -472,6 +473,14 @@ class InstallerSyncService:
             actor_user_id=actor_user_id,
             events=events,
         )
+
+        # Read-only acknowledgement of an admin decision; never re-execute blocked device work.
+        if price_resolution_checks:
+            acknowledged = {ack["client_event_id"] for ack in acks}
+            for resolved in uow.sync_events.resolved_price_events(company_id=company_id,
+                    installer_id=installer_id, client_event_ids=price_resolution_checks):
+                if resolved.client_event_id not in acknowledged:
+                    acks.append({"client_event_id": resolved.client_event_id, "ok": True, "applied": False, "error": None})
 
         uow.session.flush()
 

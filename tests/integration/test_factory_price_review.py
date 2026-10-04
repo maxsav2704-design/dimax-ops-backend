@@ -9,12 +9,16 @@ from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.sync.infrastructure.models import SyncEventORM, SyncQueueItemORM
 from app.modules.identity.infrastructure.models import AdminProfileORM
+from app.shared.domain.errors import Conflict
 from test_factory_earnings import activate, case, submit
 
 
 def conflict(case, db, kind="DOOR", channel="batch"):
     v1, _ = activate(case)
-    v2, a2 = activate(case, expected=1, previous=v1.id, door_price="300", addon_price="12")
+    try:
+        v2, a2 = activate(case, expected=1, previous=v1.id, door_price="300", addon_price="12")
+    except Conflict as exc:
+        pytest.fail(f"Conflict fixture activation failed: {exc}; {exc.meta}")
     event_id = str(uuid4())
     response = submit(case, kind, channel, a2.effective_from, event_id,
                       {"price_list_id": str(v1.id)})
@@ -43,7 +47,7 @@ def test_review_uses_execution_price_without_mutating_work(case, db_session, cli
         assert data["applicable_quote"]["price_list_id"] == str(v2.id)
         assert data["applicable_quote"]["version"] == 2
         assert float(data["preview_amount"]) == (300 if kind == "DOOR" else 18)
-        assert data["resolution_available"] is False
+        assert data["resolution_available"] is (kind == "ADDON" or channel == "batch")
         assert data["work_context"] == "CURRENT_CATALOG"
     db_session.expire_all()
     assert (row.payload, row.client_happened_at,

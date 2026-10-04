@@ -73,6 +73,7 @@ def sync(
             app_version=body.app_version,
             device_id=body.device_id,
             events=[e.model_dump() for e in body.events],
+            price_resolution_checks=body.price_resolution_checks,
         )
 
         return InstallerSyncResponse(

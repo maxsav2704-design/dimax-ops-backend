@@ -16,6 +16,7 @@ from app.modules.sync.infrastructure.models import (
     SyncChangeLogORM,
     SyncEventORM,
     SyncQueueItemORM,
+    SyncPriceResolutionORM,
 )
 
 
@@ -27,8 +28,9 @@ class SyncEventRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def get_for_company(self, *, company_id: uuid.UUID, item_id: uuid.UUID) -> SyncEventORM | None:
-        return self.session.query(SyncEventORM).filter_by(company_id=company_id, id=item_id).one_or_none()
+    def get_for_company(self, *, company_id: uuid.UUID, item_id: uuid.UUID, for_update=False) -> SyncEventORM | None:
+        query = self.session.query(SyncEventORM).filter_by(company_id=company_id, id=item_id)
+        return (query.with_for_update() if for_update else query).one_or_none()
 
     def exists_client_event(
         self, *, company_id: uuid.UUID, client_event_id: str
@@ -42,6 +44,16 @@ class SyncEventRepository:
             .first()
             is not None
         )
+
+    def resolved_price_events(self, *, company_id, installer_id, client_event_ids):
+        if not client_event_ids:
+            return []
+        return self.session.query(SyncEventORM).join(SyncPriceResolutionORM,
+            and_(SyncPriceResolutionORM.company_id == SyncEventORM.company_id,
+                 SyncPriceResolutionORM.sync_event_id == SyncEventORM.id)).filter(
+            SyncEventORM.company_id == company_id, SyncEventORM.installer_id == installer_id,
+            SyncEventORM.client_event_id.in_(client_event_ids), SyncEventORM.apply_error.is_(None),
+            SyncEventORM.applied_at.isnot(None)).all()
 
     def get_by_client_event(
         self, *, company_id: uuid.UUID, client_event_id: str
@@ -469,8 +481,9 @@ class InstallerSyncQueueRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def get_for_company(self, *, company_id: uuid.UUID, item_id: uuid.UUID) -> SyncQueueItemORM | None:
-        return self.session.query(SyncQueueItemORM).filter_by(company_id=company_id, id=item_id).one_or_none()
+    def get_for_company(self, *, company_id: uuid.UUID, item_id: uuid.UUID, for_update=False) -> SyncQueueItemORM | None:
+        query = self.session.query(SyncQueueItemORM).filter_by(company_id=company_id, id=item_id)
+        return (query.with_for_update() if for_update else query).one_or_none()
 
     def get(
         self,

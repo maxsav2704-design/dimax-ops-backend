@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +23,7 @@ class InstallerSyncRequest(BaseModel):
     since_cursor: int = Field(default=0, ge=0)
     ack_cursor: int = Field(default=0, ge=0)
     events: list[SyncEventIn] = Field(default_factory=list, max_length=500)
+    price_resolution_checks: list[Annotated[str, Field(min_length=8, max_length=80)]] = Field(default_factory=list, max_length=500)
 
     app_version: str | None = None
     device_id: str | None = None

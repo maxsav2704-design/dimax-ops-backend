@@ -8,6 +8,8 @@ from app.api.v1.deps import get_uow, require_admin
 from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates
 from app.modules.sync.application.price_review_dto import PriceConflictReview, PriceConflictSource
 from app.modules.sync.application.price_review_service import PriceConflictReviewService
+from app.modules.sync.application.price_review_dto import PriceConflictResolution, ResolvePriceConflict
+from app.modules.sync.application.price_resolution_service import PriceConflictResolutionService
 from app.modules.sync.api.admin_schemas import (
     SyncProblemsResponseDTO,
     SyncResetLegacyResponse,
@@ -74,6 +76,17 @@ def review_price_conflict(
     with uow:
         ensure_admin_can_view_rates(uow, admin)
         return PriceConflictReviewService.get(uow, company_id=admin.company_id, source=source, item_id=item_id)
+
+
+@router.post("/price-conflicts/{source}/{item_id}/resolve", response_model=PriceConflictResolution)
+def resolve_price_conflict(
+    source: PriceConflictSource, item_id: UUID, body: ResolvePriceConflict,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin),
+) -> PriceConflictResolution:
+    with uow:
+        ensure_admin_can_view_rates(uow, admin)
+        return PriceConflictResolutionService.resolve(uow, company_id=admin.company_id,
+            actor_user_id=admin.id, source=source, item_id=item_id, body=body)
 
 
 @router.post(

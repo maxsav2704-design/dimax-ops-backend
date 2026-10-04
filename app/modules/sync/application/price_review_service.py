@@ -1,3 +1,5 @@
+import hashlib
+import json
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
@@ -14,22 +16,39 @@ def _uuid(value):
 
 
 class PriceConflictReviewService:
-    """Read-only diagnosis. A quote here never authorizes replay or payroll changes."""
+    """Read-only diagnosis. A token detects stale review; it is not authorization."""
 
     @staticmethod
-    def get(uow, *, company_id: UUID, source: PriceConflictSource, item_id: UUID) -> PriceConflictReview:
+    def pending(uow, *, company_id: UUID, source: PriceConflictSource, item_id: UUID, for_update=False):
         if source == "sync_event":
-            row = uow.sync_events.get_for_company(company_id=company_id, item_id=item_id)
+            row = uow.sync_events.get_for_company(company_id=company_id, item_id=item_id, for_update=for_update)
             if row is None or row.apply_error != "CONFLICT_FACTORY_PRICE":
                 raise NotFound("Price conflict not found")
             installer = uow.installers.get(company_id, row.installer_id)
             operation = row.event_type.value
         else:
-            row = uow.sync_queue.get_for_company(company_id=company_id, item_id=item_id)
+            row = uow.sync_queue.get_for_company(company_id=company_id, item_id=item_id, for_update=for_update)
             if row is None or row.status not in ("CONFLICT", "BLOCKED") or row.conflict_code != "CONFLICT_FACTORY_PRICE":
                 raise NotFound("Price conflict not found")
             installer = uow.installers.get_by_user_id(company_id=company_id, user_id=row.user_id)
             operation = row.operation_type
+        return row, installer, operation
+
+    @staticmethod
+    def original(row, source):
+        return {"source": source, "id": str(row.id), "company_id": str(row.company_id),
+            "project_id": str(row.project_id), "payload": row.payload,
+            "happened_at": row.client_happened_at.isoformat() if row.client_happened_at else None,
+            "received_at": row.created_at.isoformat(),
+            **({"installer_id": str(row.installer_id), "client_event_id": row.client_event_id,
+                "operation_type": row.event_type.value} if source == "sync_event" else
+               {"user_id": str(row.user_id), "entity_id": str(row.entity_id), "entity_type": row.entity_type,
+                "base_version": row.base_version, "operation_type": row.operation_type})}
+
+    @staticmethod
+    def get(uow, *, company_id: UUID, source: PriceConflictSource, item_id: UUID) -> PriceConflictReview:
+        row, installer, operation = PriceConflictReviewService.pending(
+            uow, company_id=company_id, source=source, item_id=item_id)
         project = uow.projects.get(company_id=company_id, project_id=row.project_id) if row.project_id else None
         payload = row.payload or {}
         raw_seen = payload.get("price_list_id")
@@ -43,7 +62,8 @@ class PriceConflictReviewService:
             seen_version_status=("MISSING" if "price_list_id" not in payload else "INVALID" if seen is None
                                  else "AVAILABLE" if seen_list else "UNAVAILABLE"),
             analysis_code="UNSUPPORTED_WORK")
-        target_id, unit = None, None
+        target_id, unit, work_context = None, None, {}
+        version_known = True
         if operation == "DOOR_SET_STATUS" and payload.get("status") == "INSTALLED":
             result.work_kind, result.quantity = "DOOR", "1"
             door_id = _uuid(payload.get("door_id"))
@@ -54,6 +74,10 @@ class PriceConflictReviewService:
             door = uow.doors.get(company_id=company_id, door_id=door_id) if door_id else None
             if door and door.project_id == row.project_id:
                 result.work_label, target_id = door.unit_label, door.door_type_id
+                work_context = {"door_type_id": str(door.door_type_id), "version": door.version,
+                    "installer_id": str(door.installer_id), "status": door.status.value, "locked": door.is_locked}
+                expected = row.base_version if source == "sync_queue" else payload.get("base_version", payload.get("previous_version"))
+                version_known = type(expected) is int and expected == door.version
         elif operation == "ADDON_FACT_CREATE":
             if source == "sync_queue" and row.entity_type != "addon_fact":
                 return result
@@ -64,6 +88,8 @@ class PriceConflictReviewService:
             addon = uow.addon_types.get(company_id=company_id, addon_type_id=addon_id) if addon_id else None
             if addon:
                 result.work_label, target_id, unit = addon.name, addon.id, addon.unit
+                work_context = {"addon_type_id": str(addon.id), "unit": addon.unit,
+                    "active": addon.is_active, "deleted": addon.deleted_at is not None}
         else:
             return result
         if target_id is None or project is None:
@@ -72,7 +98,7 @@ class PriceConflictReviewService:
         if result.performed_at is None:
             result.analysis_code = "MISSING_EXECUTION_TIME"
             return result
-        # Omit the seen ID only for comparison. Preserve it above; never send this quote to a command.
+        # Compare independently of the device version. Resolution must revalidate under locks.
         try:
             quote = FactoryPriceTimelineService.quote(uow, company_id=company_id, kind=result.work_kind,
                 target_id=target_id, performed_at=result.performed_at, legacy_queue="price_list_id" not in payload)
@@ -97,4 +123,20 @@ class PriceConflictReviewService:
         result.analysis_code = ("NO_VERSION" if result.seen_version_status == "MISSING" else
                                 "INVALID_VERSION" if result.seen_version_status == "INVALID" else
                                 "VERSION_MATCH" if seen == quote.price_list_id else "VERSION_MISMATCH")
+        if (result.analysis_code == "VERSION_MISMATCH" and seen_list is not None and installer is not None
+                and quote.selection == "AT_EXECUTION" and result.performed_at <= result.received_at and version_known):
+            try:
+                FactoryPriceTimelineService._receipt(uow, seen_list, at=result.performed_at)
+            except Conflict:
+                return result
+            seen_item = next((item for item in uow.price_lists.items(company_id, seen_list.id)
+                if item.kind == result.work_kind and (item.door_type_id or item.addon_type_id) == target_id), None)
+            if seen_item is None or seen_item.unit != quote.unit:
+                result.analysis_code = "ORIGINAL_PRICE_UNAVAILABLE"
+                return result
+            result.resolution_available = True
+            result.review_token = hashlib.sha256(json.dumps({
+                "original": PriceConflictReviewService.original(row, source), "work": work_context,
+                "review": result.model_dump(mode="json", exclude={"review_token"}),
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return result
