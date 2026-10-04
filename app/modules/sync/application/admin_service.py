@@ -36,6 +36,7 @@ def _problem_code(*, status: str | None, conflict_code: str | None, error: str |
     if raw_error in {
         "CONFLICT_ASSIGNMENT_CHANGED",
         "CONFLICT_INVALID_TRANSITION",
+        "CONFLICT_FACTORY_PRICE",
         "AUTH_REQUIRED",
     }:
         return raw_error
@@ -58,6 +59,14 @@ def _problem_code(*, status: str | None, conflict_code: str | None, error: str |
 
 def _problem_resolution(*, status: str, conflict_code: str | None, error: str | None) -> dict:
     code = _problem_code(status=status, conflict_code=conflict_code, error=error)
+    if code == "CONFLICT_FACTORY_PRICE":
+        return {
+            "problem_code": code,
+            "problem_title": "Factory price needs review",
+            "operator_action": "Review the original execution time and confirmed price history. Cold resync does not resolve a price conflict. Preserve the original work.",
+            "retry_allowed": False,
+            "manual_review_required": True,
+        }
     if code == "CONFLICT_ASSIGNMENT_CHANGED":
         return {
             "problem_code": code,
@@ -115,16 +124,18 @@ def _problem_resolution(*, status: str, conflict_code: str | None, error: str | 
 
 def _normalize_problem_status_filter(value: str | None) -> str:
     normalized = (value or "all").strip().lower()
-    if normalized in {"failed", "conflict", "pending", "auth_required"}:
+    if normalized in {"failed", "conflict", "pending", "auth_required", "price_conflict"}:
         return normalized
     return "all"
 
 
 def _include_failed_events(status_filter: str) -> bool:
-    return status_filter in {"all", "failed"}
+    return status_filter in {"all", "failed", "price_conflict"}
 
 
 def _queue_statuses_for_filter(status_filter: str) -> tuple[str, ...]:
+    if status_filter == "price_conflict":
+        return ("CONFLICT", "BLOCKED")
     if status_filter == "conflict":
         return ("CONFLICT",)
     if status_filter == "pending":
@@ -150,11 +161,13 @@ class AdminSyncStateService:
         normalized_status_filter = _normalize_problem_status_filter(status_filter)
         include_failed_events = _include_failed_events(normalized_status_filter)
         queue_statuses = _queue_statuses_for_filter(normalized_status_filter)
+        price_filter = {"error_code": "CONFLICT_FACTORY_PRICE"} if normalized_status_filter == "price_conflict" else {}
         events = (
             uow.sync_events.list_failed_with_installers(
                 company_id=company_id,
                 installer_id=installer_id,
                 limit=bounded_limit,
+                **price_filter,
             )
             if include_failed_events
             else []
@@ -165,6 +178,7 @@ class AdminSyncStateService:
                 installer_id=installer_id,
                 limit=bounded_limit,
                 statuses=queue_statuses,
+                **price_filter,
             )
             if queue_statuses
             else []
@@ -173,6 +187,7 @@ class AdminSyncStateService:
             uow.sync_events.count_failed(
                 company_id=company_id,
                 installer_id=installer_id,
+                **price_filter,
             )
             if include_failed_events
             else 0
@@ -181,6 +196,7 @@ class AdminSyncStateService:
                 company_id=company_id,
                 installer_id=installer_id,
                 statuses=queue_statuses,
+                **price_filter,
             )
             if queue_statuses
             else 0

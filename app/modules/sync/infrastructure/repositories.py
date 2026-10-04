@@ -27,6 +27,9 @@ class SyncEventRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def get_for_company(self, *, company_id: uuid.UUID, item_id: uuid.UUID) -> SyncEventORM | None:
+        return self.session.query(SyncEventORM).filter_by(company_id=company_id, id=item_id).one_or_none()
+
     def exists_client_event(
         self, *, company_id: uuid.UUID, client_event_id: str
     ) -> bool:
@@ -102,7 +105,7 @@ class SyncEventRepository:
         return {installer_id: int(count or 0) for installer_id, count in rows}
 
     def count_failed(
-        self, *, company_id: uuid.UUID, installer_id: uuid.UUID | None = None
+        self, *, company_id: uuid.UUID, installer_id: uuid.UUID | None = None, error_code: str | None = None
     ) -> int:
         query = self.session.query(func.count(SyncEventORM.id)).filter(
             SyncEventORM.company_id == company_id,
@@ -110,6 +113,8 @@ class SyncEventRepository:
         )
         if installer_id is not None:
             query = query.filter(SyncEventORM.installer_id == installer_id)
+        if error_code is not None:
+            query = query.filter(SyncEventORM.apply_error == error_code)
         return int(query.scalar() or 0)
 
     def list_failed_with_installers(
@@ -118,6 +123,7 @@ class SyncEventRepository:
         company_id: uuid.UUID,
         limit: int,
         installer_id: uuid.UUID | None = None,
+        error_code: str | None = None,
     ) -> list[tuple[SyncEventORM, InstallerORM | None]]:
         query = (
             self.session.query(SyncEventORM, InstallerORM)
@@ -136,6 +142,8 @@ class SyncEventRepository:
         )
         if installer_id is not None:
             query = query.filter(SyncEventORM.installer_id == installer_id)
+        if error_code is not None:
+            query = query.filter(SyncEventORM.apply_error == error_code)
         rows = (
             query.order_by(
                 nulls_last(desc(SyncEventORM.applied_at)),
@@ -461,6 +469,9 @@ class InstallerSyncQueueRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def get_for_company(self, *, company_id: uuid.UUID, item_id: uuid.UUID) -> SyncQueueItemORM | None:
+        return self.session.query(SyncQueueItemORM).filter_by(company_id=company_id, id=item_id).one_or_none()
+
     def get(
         self,
         *,
@@ -592,6 +603,7 @@ class InstallerSyncQueueRepository:
         limit: int,
         installer_id: uuid.UUID | None = None,
         statuses: tuple[str, ...] | None = None,
+        error_code: str | None = None,
     ) -> list[tuple[SyncQueueItemORM, InstallerORM | None]]:
         problem_statuses = statuses or ("PENDING", "CONFLICT", "BLOCKED", "AUTH_REQUIRED")
         query = (
@@ -611,6 +623,8 @@ class InstallerSyncQueueRepository:
         )
         if installer_id is not None:
             query = query.filter(InstallerORM.id == installer_id)
+        if error_code is not None:
+            query = query.filter(SyncQueueItemORM.conflict_code == error_code)
         rows = (
             query.order_by(
                 desc(SyncQueueItemORM.created_at),
@@ -627,12 +641,15 @@ class InstallerSyncQueueRepository:
         company_id: uuid.UUID,
         installer_id: uuid.UUID | None = None,
         statuses: tuple[str, ...] | None = None,
+        error_code: str | None = None,
     ) -> int:
         problem_statuses = statuses or ("PENDING", "CONFLICT", "BLOCKED", "AUTH_REQUIRED")
         query = self.session.query(func.count(SyncQueueItemORM.id)).filter(
             SyncQueueItemORM.company_id == company_id,
             SyncQueueItemORM.status.in_(problem_statuses),
         )
+        if error_code is not None:
+            query = query.filter(SyncQueueItemORM.conflict_code == error_code)
         if installer_id is not None:
             query = query.join(
                 InstallerORM,

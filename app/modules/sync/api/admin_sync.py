@@ -5,7 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_uow, require_admin
-from app.api.v1.deps import CurrentUser
+from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates
+from app.modules.sync.application.price_review_dto import PriceConflictReview, PriceConflictSource
+from app.modules.sync.application.price_review_service import PriceConflictReviewService
 from app.modules.sync.api.admin_schemas import (
     SyncProblemsResponseDTO,
     SyncResetLegacyResponse,
@@ -49,7 +51,7 @@ def list_sync_problems(
     status_filter: str | None = Query(
         default=None,
         alias="status",
-        pattern="^(all|failed|conflict|pending|auth_required)$",
+        pattern="^(all|failed|conflict|pending|auth_required|price_conflict)$",
     ),
     uow: SqlAlchemyUnitOfWork = Depends(get_uow),
     admin: CurrentUser = Depends(require_admin),
@@ -62,6 +64,16 @@ def list_sync_problems(
             limit=limit,
             status_filter=status_filter,
         )
+
+
+@router.get("/price-conflicts/{source}/{item_id}", response_model=PriceConflictReview)
+def review_price_conflict(
+    source: PriceConflictSource, item_id: UUID,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin),
+) -> PriceConflictReview:
+    with uow:
+        ensure_admin_can_view_rates(uow, admin)
+        return PriceConflictReviewService.get(uow, company_id=admin.company_id, source=source, item_id=item_id)
 
 
 @router.post(
