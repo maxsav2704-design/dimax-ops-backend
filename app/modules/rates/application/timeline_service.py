@@ -9,7 +9,7 @@ from app.modules.audit.application.service import AuditService
 from app.modules.rates.application.approval_service import approval_snapshot_matches
 from app.modules.rates.application.installer_price_dto import InstallerPriceItem, InstallerPriceSnapshot
 from app.modules.rates.application.reconciliation_service import FactoryPriceReconciliationService
-from app.modules.rates.application.timeline_dto import ActivatePriceVersion, EffectivePriceVersion, FactoryPriceQuote
+from app.modules.rates.application.timeline_dto import ActivatePriceVersion, CompanyPricingState, EffectivePriceVersion, FactoryPriceQuote
 from app.modules.rates.infrastructure.timeline_models import FactoryPriceActivationORM
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.shared.infrastructure.db.base import utcnow
@@ -17,6 +17,22 @@ from app.shared.infrastructure.db.base import utcnow
 
 class FactoryPriceTimelineService:
     """Price timeline and installer read model; activation stays internal pending rollout checks."""
+
+    @classmethod
+    def company_state(cls, uow, *, company_id: UUID) -> CompanyPricingState:
+        snapshot = cls.installer_snapshot(uow, company_id=company_id)
+        return CompanyPricingState(mode="FACTORY" if snapshot else "LEGACY", active_price=snapshot)
+
+    @staticmethod
+    def require_legacy_rate_writes(uow, *, company_id: UUID) -> None:
+        # Serialize with activation before reading or changing individual rates.
+        if not uow.price_lists.lock_company(company_id):
+            raise NotFound("Company not found")
+        activation = uow.price_lists.latest_activation(company_id)
+        if activation is not None:
+            raise Conflict("Individual rates are historical; use a new factory-confirmed price version",
+                field="price", meta={"reason": "FACTORY_PRICES_ACTIVE",
+                                      "price_list_id": str(activation.price_list_id)})
 
     @classmethod
     def installer_snapshot(cls, uow, *, company_id: UUID) -> InstallerPriceSnapshot | None:

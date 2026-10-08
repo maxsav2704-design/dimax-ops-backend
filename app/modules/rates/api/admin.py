@@ -10,6 +10,8 @@ from app.modules.rates.application.price_list_dto import (
 from app.modules.rates.application.price_lists_service import FactoryPriceListsService
 from app.modules.rates.application.reconciliation_dto import ReconciliationPage
 from app.modules.rates.application.reconciliation_service import FactoryPriceReconciliationService
+from app.modules.rates.application.timeline_dto import CompanyPricingState
+from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
 
 router = APIRouter(prefix="/admin/price-lists", tags=["Admin / Factory price lists"])
 
@@ -34,6 +36,13 @@ def reconcile_company_prices(
         ensure_admin_can_view_rates(uow, user)
         return FactoryPriceReconciliationService.get(uow, company_id=user.company_id, price_list_id=None,
             limit=limit, offset=offset, issues_only=issues_only, kind=kind)
+
+
+@router.get("/state", response_model=CompanyPricingState)
+def get_company_pricing_state(user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        return FactoryPriceTimelineService.company_state(uow, company_id=user.company_id)
 
 
 @router.get("/{price_list_id}", response_model=PriceListDetail)

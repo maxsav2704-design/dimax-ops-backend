@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, StrictBool, field_validator
 
 from app.modules.rates.application.price_list_dto import Reason
+from app.modules.rates.application.installer_price_dto import InstallerPriceSnapshot
 from app.shared.domain.errors import ValidationError
 
 
@@ -34,6 +35,11 @@ class EffectivePriceVersion(BaseModel):
     effective_from: datetime
     created_by: UUID
     reason: str
+
+
+class CompanyPricingState(BaseModel):
+    mode: Literal["LEGACY", "FACTORY"]
+    active_price: InstallerPriceSnapshot | None
 
 
 class FactoryPriceQuote(BaseModel):

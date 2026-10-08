@@ -25,6 +25,7 @@ from app.modules.companies.application.alerts_service import CompanyLimitAlertsS
 from app.modules.companies.application.limits_service import CompanyLimitsService
 from app.modules.companies.domain.errors import CompanyPlanLimitExceeded
 from app.modules.rates.infrastructure.models import InstallerRateORM
+from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
 from app.modules.installers.domain.errors import (
     DoorTypeNotFound,
     InstallerNotFound,
@@ -346,6 +347,7 @@ class InstallerRatesAdminApiService:
         actor_user_id: uuid.UUID,
         data: InstallerRateCreateDTO,
     ) -> InstallerRateDTO:
+        FactoryPriceTimelineService.require_legacy_rate_writes(uow, company_id=company_id)
         svc = RatesAdminService(uow.session)
         try:
             obj = svc.create(company_id, data)
@@ -382,6 +384,7 @@ class InstallerRatesAdminApiService:
         rate_id: uuid.UUID,
         data: InstallerRateUpdateDTO,
     ) -> InstallerRateDTO:
+        FactoryPriceTimelineService.require_legacy_rate_writes(uow, company_id=company_id)
         obj = uow.installer_rates.get(company_id, rate_id)
         if not obj:
             raise HTTPException(status_code=404, detail="installer rate not found")
@@ -415,6 +418,7 @@ class InstallerRatesAdminApiService:
         actor_user_id: uuid.UUID,
         rate_id: uuid.UUID,
     ) -> None:
+        FactoryPriceTimelineService.require_legacy_rate_writes(uow, company_id=company_id)
         obj = uow.installer_rates.get(company_id, rate_id)
         if not obj:
             raise HTTPException(status_code=404, detail="installer rate not found")
@@ -444,6 +448,7 @@ class InstallerRatesAdminApiService:
         price: Decimal | None,
         effective_from: datetime | None,
     ) -> dict:
+        FactoryPriceTimelineService.require_legacy_rate_writes(uow, company_id=company_id)
         if operation == "set_price" and price is None:
             raise HTTPException(status_code=422, detail="price is required for set_price")
         if operation == "delete" and price is not None:
