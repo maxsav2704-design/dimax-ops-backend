@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -274,7 +275,15 @@ class ProjectProfitResponse(BaseModel):
     missing_rates_installed_doors: int
 
 
-class ProjectPlanFactResponse(BaseModel):
+class ProjectPricingCoverage(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    price_list_id: UUID | None = None
+    price_list_version: int | None = None
+    missing_planned_rates_addons: int = 0
+    unrecorded_completed_works: int = 0
+
+
+class ProjectPlanFactResponse(ProjectPricingCoverage):
     project_id: UUID
     total_doors: int
     installed_doors: int
@@ -284,12 +293,12 @@ class ProjectPlanFactResponse(BaseModel):
     planned_revenue_total: Decimal
     actual_revenue_total: Decimal
     revenue_gap_total: Decimal
-    planned_payroll_total: Decimal
+    planned_payroll_total: Decimal | None
     actual_payroll_total: Decimal
-    payroll_gap_total: Decimal
-    planned_profit_total: Decimal
-    actual_profit_total: Decimal
-    profit_gap_total: Decimal
+    payroll_gap_total: Decimal | None
+    planned_profit_total: Decimal | None
+    actual_profit_total: Decimal | None
+    profit_gap_total: Decimal | None
     planned_addons_qty: Decimal
     actual_addons_qty: Decimal
     urgency_surcharges_count: int
@@ -350,7 +359,7 @@ class ProjectRiskDriverItem(BaseModel):
     code: str
     label: str
     severity: str
-    value: Decimal
+    value: Decimal | None
 
 
 class ProjectRiskReasonItem(BaseModel):
@@ -358,7 +367,7 @@ class ProjectRiskReasonItem(BaseModel):
     reason_name: str
     doors: int
     revenue_delayed_total: Decimal
-    profit_delayed_total: Decimal
+    profit_delayed_total: Decimal | None
 
 
 class ProjectRiskOrderItem(BaseModel):
@@ -370,11 +379,11 @@ class ProjectRiskOrderItem(BaseModel):
     planned_revenue_total: Decimal
     actual_revenue_total: Decimal
     revenue_gap_total: Decimal
-    actual_profit_total: Decimal
+    actual_profit_total: Decimal | None
     completion_pct: float
 
 
-class ProjectRiskDrilldownSummaryResponse(BaseModel):
+class ProjectRiskDrilldownSummaryResponse(ProjectPricingCoverage):
     total_doors: int
     installed_doors: int
     not_installed_doors: int
@@ -384,15 +393,15 @@ class ProjectRiskDrilldownSummaryResponse(BaseModel):
     planned_revenue_total: Decimal
     actual_revenue_total: Decimal
     revenue_gap_total: Decimal
-    planned_profit_total: Decimal
-    actual_profit_total: Decimal
-    profit_gap_total: Decimal
-    actual_margin_pct: float
+    planned_profit_total: Decimal | None
+    actual_profit_total: Decimal | None
+    profit_gap_total: Decimal | None
+    actual_margin_pct: float | None
     delayed_revenue_total: Decimal
-    delayed_profit_total: Decimal
-    blocked_issue_profit_at_risk: Decimal
+    delayed_profit_total: Decimal | None
+    blocked_issue_profit_at_risk: Decimal | None
     addon_revenue_total: Decimal
-    addon_profit_total: Decimal
+    addon_profit_total: Decimal | None
     urgency_surcharges_count: int
     urgency_order_surcharges_count: int
     urgency_client_total: Decimal

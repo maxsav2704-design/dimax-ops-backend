@@ -473,7 +473,7 @@ class ReportsAdminApiService:
                 )
             project_plan_fact_name = project.name
             project_plan_fact = ReportsService.project_plan_fact(
-                uow.session,
+                uow,
                 company_id=company_id,
                 project_id=project_plan_fact_project_id,
             )
@@ -492,7 +492,7 @@ class ReportsAdminApiService:
                 )
             project_risk_name = project.name
             project_risk = ReportsService.project_risk_drilldown(
-                uow.session,
+                uow,
                 company_id=company_id,
                 project_id=project_risk_project_id,
                 limit=5,
@@ -648,6 +648,15 @@ class ReportsAdminApiService:
                     project_plan_fact.get("completion_pct", 0),
                 ]
             )
+            writer.writerow(["project_plan_fact_payroll", project_plan_fact_name or "",
+                project_plan_fact["planned_payroll_total"], project_plan_fact["actual_payroll_total"],
+                project_plan_fact["payroll_gap_total"], "ledger_actuals" if project_plan_fact["pricing_mode"] == "FACTORY" else "legacy"])
+            writer.writerow(["project_plan_fact_pricing", project_plan_fact["pricing_mode"],
+                project_plan_fact["price_list_id"], project_plan_fact["price_list_version"],
+                "", ""])
+            writer.writerow(["project_plan_fact_coverage", "missing_data",
+                project_plan_fact["missing_planned_rates_doors"], project_plan_fact["missing_planned_rates_addons"],
+                project_plan_fact["unrecorded_completed_works"], project_plan_fact["missing_addon_plans_facts"]])
 
         if project_risk is not None:
             risk_summary = dict(project_risk.get("summary", {}))
@@ -661,6 +670,15 @@ class ReportsAdminApiService:
                     risk_summary.get("actual_margin_pct", 0),
                 ]
             )
+            writer.writerow([
+                "project_risk_pricing", risk_summary["pricing_mode"],
+                risk_summary["price_list_id"], risk_summary["price_list_version"], "", "",
+            ])
+            writer.writerow([
+                "project_risk_coverage", "missing_data",
+                risk_summary["missing_planned_rates_doors"], risk_summary["missing_planned_rates_addons"],
+                risk_summary["unrecorded_completed_works"], risk_summary["missing_addon_plans_facts"],
+            ])
 
         filename = "reports_executive_snapshot.csv"
         if project_plan_fact_name or project_risk_name:
@@ -844,7 +862,7 @@ class ReportsAdminApiService:
             )
 
         data = ReportsService.project_plan_fact(
-            uow.session,
+            uow,
             company_id=company_id,
             project_id=project_id,
         )
@@ -866,7 +884,7 @@ class ReportsAdminApiService:
             )
 
         data = ReportsService.project_risk_drilldown(
-            uow.session,
+            uow,
             company_id=company_id,
             project_id=project_id,
             limit=limit,
@@ -905,6 +923,9 @@ class ReportsAdminApiService:
                     int(summary.get("missing_planned_rates_doors", 0) or 0)
                     + int(summary.get("missing_actual_rates_doors", 0) or 0)
                     + int(summary.get("missing_addon_plans_facts", 0) or 0)
+                    + int(summary.get("missing_planned_rates_addons", 0) or 0)
+                    + max(int(summary.get("unrecorded_completed_works", 0) or 0)
+                          - int(summary.get("missing_actual_rates_doors", 0) or 0), 0)
                 ),
             },
         ]

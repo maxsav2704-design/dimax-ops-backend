@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from statistics import median
 
-from sqlalchemy import and_, case, func, not_, or_, select
+from sqlalchemy import Numeric, and_, case, cast, func, not_, null, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.addons.infrastructure.models import (
@@ -45,6 +45,18 @@ from app.modules.reasons.infrastructure.models import ReasonORM
 
 def _dec(v) -> Decimal:
     return Decimal(str(v or 0))
+
+
+def _factory_rate(rates, kind, target):
+    prices = {key[1]: rate for key, rate in rates.items() if key[0] == kind}
+    if not prices:
+        return cast(null(), Numeric(12, 2))
+    return case(prices, value=target, else_=None)
+
+
+def _complete_sum(value):
+    # SQL SUM ignores nulls; an unpriced row must invalidate the financial total.
+    return case((func.count() > func.count(value), None), else_=func.coalesce(func.sum(value), 0))
 
 
 def _payload_int(payload: dict | None, key: str, default: int = 0) -> int:
@@ -2759,6 +2771,7 @@ class ReportsRepository:
         *,
         company_id: uuid.UUID,
         project_id: uuid.UUID,
+        factory_rates: dict[tuple[str, uuid.UUID], Decimal] | None = None,
     ) -> dict:
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
@@ -2770,6 +2783,15 @@ class ReportsRepository:
             InstallerRateORM.price,
             0,
         )
+        factory_mode = factory_rates is not None
+        missing_planned_rate = and_(
+            DoorORM.installer_rate_snapshot.is_(None), InstallerRateORM.id.is_(None)
+        )
+        addon_plan_rate = func.coalesce(ProjectAddonPlanORM.installer_price, 0)
+        if factory_mode:
+            effective_installer_rate = _factory_rate(factory_rates, "DOOR", DoorORM.door_type_id)
+            missing_planned_rate = effective_installer_rate.is_(None)
+            addon_plan_rate = _factory_rate(factory_rates, "ADDON", ProjectAddonPlanORM.addon_type_id)
         effective_work = self._effective_completed_work_subquery(company_id=company_id)
         work_by_door = (
             self.session.query(
@@ -2836,21 +2858,7 @@ class ReportsRepository:
                     ),
                     0,
                 ).label("actual_profit"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    DoorORM.installer_rate_snapshot.is_(None),
-                                    InstallerRateORM.id.is_(None),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("missing_planned_rates"),
+                func.coalesce(func.sum(case((missing_planned_rate, 1), else_=0)), 0).label("missing_planned_rates"),
                 func.coalesce(
                     func.sum(
                         case(
@@ -2893,7 +2901,7 @@ class ReportsRepository:
                 func.coalesce(
                     func.sum(
                         ProjectAddonPlanORM.qty_planned
-                        * func.coalesce(ProjectAddonPlanORM.installer_price, 0)
+                        * addon_plan_rate
                     ),
                     0,
                 ).label("planned_payroll"),
@@ -2902,11 +2910,13 @@ class ReportsRepository:
                         ProjectAddonPlanORM.qty_planned
                         * (
                             func.coalesce(ProjectAddonPlanORM.client_price, 0)
-                            - func.coalesce(ProjectAddonPlanORM.installer_price, 0)
+                            - addon_plan_rate
                         )
                     ),
                     0,
                 ).label("planned_profit"),
+                func.coalesce(func.sum(case((and_(ProjectAddonPlanORM.qty_planned > 0,
+                    addon_plan_rate.is_(None)), 1), else_=0)), 0).label("missing_planned_rates"),
             )
             .select_from(ProjectAddonPlanORM)
             .filter(
@@ -2997,6 +3007,47 @@ class ReportsRepository:
             project_id=project_id,
         )
 
+        missing_addon_rates = int(plan_row.missing_planned_rates or 0)
+        unrecorded_works = 0
+        missing_actual_doors = int(door_row.missing_actual_rates or 0)
+        if factory_mode:
+            # Actual earnings are ledger movements, independent of today's prices or door status.
+            actual_payroll_total = _dec(
+                self.session.query(func.sum(CompletedWorkORM.amount_snapshot)).filter(
+                    CompletedWorkORM.company_id == company_id,
+                    CompletedWorkORM.project_id == project_id,
+                ).scalar()
+            )
+            recorded_doors = select(CompletedWorkORM.door_id).where(
+                CompletedWorkORM.company_id == company_id,
+                CompletedWorkORM.project_id == project_id,
+                CompletedWorkORM.work_kind == "DOOR",
+                CompletedWorkORM.door_id.is_not(None),
+            )
+            missing_actual_doors = (
+                self.session.query(func.count(DoorORM.id)).filter(
+                    DoorORM.company_id == company_id, DoorORM.project_id == project_id,
+                    DoorORM.status == DoorStatus.INSTALLED,
+                    not_(DoorORM.id.in_(recorded_doors)),
+                ).scalar() or 0
+            )
+            recorded_facts = select(CompletedWorkORM.addon_fact_id).where(
+                CompletedWorkORM.company_id == company_id, CompletedWorkORM.project_id == project_id,
+                CompletedWorkORM.work_kind == "ADDON", CompletedWorkORM.addon_fact_id.is_not(None),
+            )
+            missing_actual_addons = self.session.query(func.count(ProjectAddonFactORM.id)).filter(
+                ProjectAddonFactORM.company_id == company_id, ProjectAddonFactORM.project_id == project_id,
+                not_(ProjectAddonFactORM.id.in_(recorded_facts)),
+            ).scalar() or 0
+            unrecorded_works = missing_actual_doors + missing_actual_addons
+            if int(door_row.missing_planned_rates or 0) + missing_addon_rates:
+                planned_payroll_total = None
+                planned_profit_total = None
+            actual_profit_total = (
+                None if unrecorded_works or fact_row.missing_addon_plans_facts
+                else actual_revenue_total - actual_payroll_total
+            )
+
         return {
             "total_doors": total_doors,
             "installed_doors": installed_doors,
@@ -3008,16 +3059,19 @@ class ReportsRepository:
             "revenue_gap_total": planned_revenue_total - actual_revenue_total,
             "planned_payroll_total": planned_payroll_total,
             "actual_payroll_total": actual_payroll_total,
-            "payroll_gap_total": planned_payroll_total - actual_payroll_total,
+            "payroll_gap_total": planned_payroll_total - actual_payroll_total if planned_payroll_total is not None else None,
             "planned_profit_total": planned_profit_total,
             "actual_profit_total": actual_profit_total,
-            "profit_gap_total": planned_profit_total - actual_profit_total,
+            "profit_gap_total": (planned_profit_total - actual_profit_total
+                                 if planned_profit_total is not None and actual_profit_total is not None else None),
             "planned_addons_qty": _dec(plan_row.planned_qty),
             "actual_addons_qty": _dec(fact_row.actual_qty),
             **urgency_totals,
             "missing_planned_rates_doors": int(door_row.missing_planned_rates or 0),
-            "missing_actual_rates_doors": int(door_row.missing_actual_rates or 0),
+            "missing_actual_rates_doors": missing_actual_doors,
             "missing_addon_plans_facts": int(fact_row.missing_addon_plans_facts or 0),
+            "missing_planned_rates_addons": missing_addon_rates,
+            "unrecorded_completed_works": unrecorded_works,
         }
 
     def project_risk_drilldown(
@@ -3026,6 +3080,7 @@ class ReportsRepository:
         company_id: uuid.UUID,
         project_id: uuid.UUID,
         limit: int = 5,
+        factory_rates: dict[tuple[str, uuid.UUID], Decimal] | None = None,
     ) -> dict:
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
@@ -3037,10 +3092,15 @@ class ReportsRepository:
             InstallerRateORM.price,
             0,
         )
+        factory_mode = factory_rates is not None
+        if factory_mode:
+            effective_installer_rate = _factory_rate(factory_rates, "DOOR", DoorORM.door_type_id)
+        profit_sum = _complete_sum if factory_mode else lambda value: func.coalesce(func.sum(value), 0)
 
         plan_fact = self.project_plan_fact(
             company_id=company_id,
             project_id=project_id,
+            factory_rates=factory_rates,
         )
 
         blocked_open_issues = int(
@@ -3057,12 +3117,9 @@ class ReportsRepository:
             or 0
         )
 
-        blocked_issue_profit_at_risk = _dec(
+        blocked_issue_profit_at_risk = (
             self.session.query(
-                func.coalesce(
-                    func.sum(DoorORM.our_price - effective_installer_rate),
-                    0,
-                )
+                profit_sum(DoorORM.our_price - effective_installer_rate)
             )
             .select_from(IssueORM)
             .join(DoorORM, DoorORM.id == IssueORM.door_id)
@@ -3079,10 +3136,7 @@ class ReportsRepository:
         delayed_row = (
             self.session.query(
                 func.coalesce(func.sum(DoorORM.our_price), 0).label("delayed_revenue_total"),
-                func.coalesce(
-                    func.sum(DoorORM.our_price - effective_installer_rate),
-                    0,
-                ).label("delayed_profit_total"),
+                profit_sum(DoorORM.our_price - effective_installer_rate).label("delayed_profit_total"),
             )
             .select_from(DoorORM)
             .outerjoin(InstallerRateORM, rate_join)
@@ -3138,10 +3192,7 @@ class ReportsRepository:
             .one()
         )
 
-        reason_profit_expr = func.coalesce(
-            func.sum(DoorORM.our_price - effective_installer_rate),
-            0,
-        )
+        reason_profit_expr = profit_sum(DoorORM.our_price - effective_installer_rate)
         reason_name_expr = func.coalesce(ReasonORM.name, "No reason")
         reason_rows = (
             self.session.query(
@@ -3166,7 +3217,7 @@ class ReportsRepository:
                 DoorORM.status == DoorStatus.NOT_INSTALLED,
             )
             .group_by(DoorORM.reason_id, reason_name_expr)
-            .order_by(reason_profit_expr.desc(), func.count(DoorORM.id).desc())
+            .order_by(reason_profit_expr.desc().nullslast(), func.count(DoorORM.id).desc())
             .limit(limit)
             .all()
         )
@@ -3194,6 +3245,19 @@ class ReportsRepository:
             ),
             0,
         )
+        ledger_by_door = (
+            self.session.query(CompletedWorkORM.door_id,
+                func.sum(CompletedWorkORM.amount_snapshot).label("payroll_total"))
+            .filter(CompletedWorkORM.company_id == company_id,
+                CompletedWorkORM.project_id == project_id, CompletedWorkORM.work_kind == "DOOR")
+            .group_by(CompletedWorkORM.door_id).subquery()
+        )
+        if factory_mode:
+            order_actual_profit_expr = _complete_sum(case(
+                (and_(DoorORM.status == DoorStatus.INSTALLED, ledger_by_door.c.door_id.is_(None)), None),
+                else_=case((DoorORM.status == DoorStatus.INSTALLED, DoorORM.our_price), else_=0)
+                    - func.coalesce(ledger_by_door.c.payroll_total, 0),
+            ))
         order_issue_sub = (
             self.session.query(
                 DoorORM.order_number.label("order_number"),
@@ -3223,6 +3287,7 @@ class ReportsRepository:
             )
             .select_from(DoorORM)
             .outerjoin(InstallerRateORM, rate_join)
+            .outerjoin(ledger_by_door, ledger_by_door.c.door_id == DoorORM.id)
             .outerjoin(order_issue_sub, order_issue_sub.c.order_number == DoorORM.order_number)
             .filter(
                 DoorORM.company_id == company_id,
@@ -3246,7 +3311,7 @@ class ReportsRepository:
             .all()
         )
 
-        actual_margin_pct = (
+        actual_margin_pct = None if plan_fact["actual_profit_total"] is None else (
             round(
                 (
                     float(plan_fact["actual_profit_total"])
@@ -3259,16 +3324,28 @@ class ReportsRepository:
             else 0.0
         )
 
+        addon_profit_total = _dec(addon_row.addon_profit_total)
+        if factory_mode:
+            addon_payroll = _dec(self.session.query(func.sum(CompletedWorkORM.amount_snapshot)).filter(
+                CompletedWorkORM.company_id == company_id, CompletedWorkORM.project_id == project_id,
+                CompletedWorkORM.work_kind == "ADDON",
+            ).scalar())
+            unrecorded_addons = plan_fact["unrecorded_completed_works"] - plan_fact["missing_actual_rates_doors"]
+            addon_profit_total = (
+                None if plan_fact["missing_addon_plans_facts"] or unrecorded_addons
+                else _dec(addon_row.addon_revenue_total) - addon_payroll
+            )
+
         return {
             "summary": {
                 **plan_fact,
                 "blocked_open_issues": blocked_open_issues,
                 "actual_margin_pct": actual_margin_pct,
                 "delayed_revenue_total": _dec(delayed_row.delayed_revenue_total),
-                "delayed_profit_total": _dec(delayed_row.delayed_profit_total),
+                "delayed_profit_total": delayed_row.delayed_profit_total,
                 "blocked_issue_profit_at_risk": blocked_issue_profit_at_risk,
                 "addon_revenue_total": _dec(addon_row.addon_revenue_total),
-                "addon_profit_total": _dec(addon_row.addon_profit_total),
+                "addon_profit_total": addon_profit_total,
             },
             "top_reasons": [
                 {
@@ -3276,7 +3353,7 @@ class ReportsRepository:
                     "reason_name": row.reason_name,
                     "doors": int(row.doors or 0),
                     "revenue_delayed_total": _dec(row.revenue_delayed_total),
-                    "profit_delayed_total": _dec(row.profit_delayed_total),
+                    "profit_delayed_total": row.profit_delayed_total,
                 }
                 for row in reason_rows
             ],
@@ -3294,7 +3371,7 @@ class ReportsRepository:
                     "actual_revenue_total": _dec(row.actual_revenue_total),
                     "revenue_gap_total": _dec(row.planned_revenue_total)
                     - _dec(row.actual_revenue_total),
-                    "actual_profit_total": _dec(row.actual_profit_total),
+                    "actual_profit_total": row.actual_profit_total,
                     "completion_pct": round(
                         (int(row.installed_doors or 0) / int(row.total_doors or 1)) * 100.0,
                         2,

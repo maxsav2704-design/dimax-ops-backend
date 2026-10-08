@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.modules.reports.infrastructure.repositories import ReportsRepository
+from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
 
 
 class ReportsService:
@@ -194,29 +195,45 @@ class ReportsService:
 
     @staticmethod
     def project_plan_fact(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         project_id: uuid.UUID,
     ) -> dict:
-        return ReportsService._repo(session).project_plan_fact(
+        snapshot = FactoryPriceTimelineService.installer_snapshot(uow, company_id=company_id)
+        data = ReportsService._repo(uow.session).project_plan_fact(
             company_id=company_id,
             project_id=project_id,
+            factory_rates={(item.kind, item.target_id): item.rate for item in snapshot.items} if snapshot else None,
         )
+        return {
+            **data,
+            "pricing_mode": "FACTORY" if snapshot else "LEGACY",
+            "price_list_id": snapshot.price_list_id if snapshot else None,
+            "price_list_version": snapshot.version if snapshot else None,
+        }
 
     @staticmethod
     def project_risk_drilldown(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         project_id: uuid.UUID,
         limit: int = 5,
     ) -> dict:
-        return ReportsService._repo(session).project_risk_drilldown(
+        snapshot = FactoryPriceTimelineService.installer_snapshot(uow, company_id=company_id)
+        data = ReportsService._repo(uow.session).project_risk_drilldown(
             company_id=company_id,
             project_id=project_id,
             limit=limit,
+            factory_rates={(item.kind, item.target_id): item.rate for item in snapshot.items} if snapshot else None,
         )
+        data["summary"].update(
+            pricing_mode="FACTORY" if snapshot else "LEGACY",
+            price_list_id=snapshot.price_list_id if snapshot else None,
+            price_list_version=snapshot.version if snapshot else None,
+        )
+        return data
 
     @staticmethod
     def projects_margin(
