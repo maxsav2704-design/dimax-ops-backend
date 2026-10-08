@@ -14,7 +14,7 @@ from app.modules.projects.api.admin_addons_schemas import (
     CreateUrgencySurchargeBody,
     OkResponse,
     PlanBatchBody,
-    PlanItemDTO,
+    PlanItemBody,
     ProjectAddonPlanListResponse,
     ProjectAddonsResponse,
     UrgencySurchargeListResponse,
@@ -59,7 +59,7 @@ def get_project_addon_plan(
 @router.post("/{project_id}/addons/plan", response_model=ProjectAddonPlanListResponse)
 def upsert_plan_item(
     project_id: UUID,
-    body: PlanItemDTO,
+    body: PlanItemBody,
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
 ):

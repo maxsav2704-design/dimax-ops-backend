@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AddonTypeMini(BaseModel):
@@ -12,7 +12,7 @@ class AddonTypeMini(BaseModel):
     name: str
     unit: str
     default_client_price: Decimal
-    default_installer_price: Decimal
+    default_installer_price: Decimal | None
 
 
 class PlanItemDTO(BaseModel):
@@ -21,7 +21,7 @@ class PlanItemDTO(BaseModel):
     addon_name: str | None = None
     qty_planned: Decimal
     client_price: Decimal
-    installer_price: Decimal
+    installer_price: Decimal | None
     notes: str | None = None
 
 
@@ -53,8 +53,16 @@ class ProjectAddonsResponse(BaseModel):
     summary: list[AddonsSummaryItem]
 
 
+class PlanItemBody(BaseModel):
+    addon_type_id: UUID
+    qty_planned: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    client_price: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    installer_price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    notes: str | None = None
+
+
 class PlanBatchBody(BaseModel):
-    items: list[PlanItemDTO]
+    items: list[PlanItemBody]
 
 
 class ProjectAddonPlanListResponse(BaseModel):

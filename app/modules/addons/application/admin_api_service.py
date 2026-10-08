@@ -9,12 +9,14 @@ from app.modules.addons.api.admin_schemas import (
     ProjectPlanResponse,
 )
 from app.modules.addons.application.use_cases import AddonsUseCases
+from app.modules.addons.application.pricing import AddonPlanPricing
 
 
 class AddonsAdminApiService:
     @staticmethod
     def list_types(uow, *, company_id: uuid.UUID) -> AddonTypeListResponse:
         rows = uow.addon_types.list_active(company_id=company_id)
+        pricing = AddonPlanPricing(uow, company_id)
         return AddonTypeListResponse(
             items=[
                 AddonTypeDTO(
@@ -22,7 +24,7 @@ class AddonsAdminApiService:
                     name=r.name,
                     unit=r.unit,
                     default_client_price=r.default_client_price,
-                    default_installer_price=r.default_installer_price,
+                    default_installer_price=pricing.price(r.id, r.default_installer_price),
                     is_active=r.is_active,
                 )
                 for r in rows
@@ -48,12 +50,13 @@ class AddonsAdminApiService:
             default_installer_price=default_installer_price,
         )
         uow.session.flush()
+        pricing = AddonPlanPricing(uow, company_id)
         return AddonTypeDTO(
             id=r.id,
             name=r.name,
             unit=r.unit,
             default_client_price=r.default_client_price,
-            default_installer_price=r.default_installer_price,
+            default_installer_price=pricing.price(r.id, r.default_installer_price),
             is_active=r.is_active,
         )
 
@@ -80,6 +83,7 @@ class AddonsAdminApiService:
             notes=notes,
         )
         uow.session.flush()
+        pricing = AddonPlanPricing(uow, company_id)
         rows = uow.addon_plans.list_by_project(
             company_id=company_id, project_id=project_id
         )
@@ -100,7 +104,7 @@ class AddonsAdminApiService:
                     ),
                     qty_planned=x.qty_planned,
                     client_price=x.client_price,
-                    installer_price=x.installer_price,
+                    installer_price=pricing.price(x.addon_type_id, x.installer_price),
                     notes=x.notes,
                 )
                 for x in rows

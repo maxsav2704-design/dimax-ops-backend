@@ -194,7 +194,7 @@ def test_uploaded_unpaid_fact_is_not_repriced_by_plan_edit_after_cutover(case, d
     activate(case)
     with SqlAlchemyUnitOfWork() as uow:
         AddonsUseCases.admin_set_project_plan(uow, company_id=case.company, project_id=case.project,
-            addon_type_id=case.addon, qty_planned=Decimal("3"), client_price=Decimal("20"), installer_price=Decimal("900"))
+            addon_type_id=case.addon, qty_planned=Decimal("3"), client_price=Decimal("20"), installer_price=None)
     assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
 
 

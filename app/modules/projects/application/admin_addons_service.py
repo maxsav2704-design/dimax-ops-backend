@@ -4,6 +4,7 @@ import uuid
 from decimal import Decimal
 
 from app.modules.addons.application.use_cases import AddonsUseCases
+from app.modules.addons.application.pricing import AddonPlanPricing
 from app.modules.projects.api.admin_addons_schemas import (
     AddonTypeMini,
     AddonsSummaryItem,
@@ -41,6 +42,8 @@ class ProjectAdminAddonsService:
 
         plan_map = {x.addon_type_id: x for x in plan}
         type_map = {x.id: x for x in types}
+        pricing = AddonPlanPricing(uow, company_id)
+        earned = uow.addon_facts.earned_by_type(company_id=company_id, project_id=project_id) if pricing.factory_active else {}
 
         done_qty: dict[uuid.UUID, Decimal] = {}
         for f in facts:
@@ -66,6 +69,9 @@ class ProjectAdminAddonsService:
                 missing = q_done > 0
                 q_planned = Decimal("0")
 
+            if pricing.factory_active:
+                payroll = earned.get(addon_type_id, Decimal("0"))
+                profit = revenue - payroll
             summary.append(
                 AddonsSummaryItem(
                     addon_type_id=addon_type_id,
@@ -86,7 +92,7 @@ class ProjectAdminAddonsService:
                     name=t.name,
                     unit=t.unit,
                     default_client_price=t.default_client_price,
-                    default_installer_price=t.default_installer_price,
+                    default_installer_price=pricing.price(t.id, t.default_installer_price),
                 )
                 for t in types
             ],
@@ -101,7 +107,7 @@ class ProjectAdminAddonsService:
                     ),
                     qty_planned=x.qty_planned,
                     client_price=x.client_price,
-                    installer_price=x.installer_price,
+                    installer_price=pricing.price(x.addon_type_id, x.installer_price),
                     notes=x.notes,
                 )
                 for x in plan
@@ -147,6 +153,7 @@ class ProjectAdminAddonsService:
 
         types = uow.addon_types.list_active(company_id=company_id)
         type_map = {x.id: x for x in types}
+        pricing = AddonPlanPricing(uow, company_id)
         rows = uow.addon_plans.list_by_project(
             company_id=company_id,
             project_id=project_id,
@@ -163,7 +170,7 @@ class ProjectAdminAddonsService:
                     ),
                     qty_planned=row.qty_planned,
                     client_price=row.client_price,
-                    installer_price=row.installer_price,
+                    installer_price=pricing.price(row.addon_type_id, row.installer_price),
                     notes=row.notes,
                 )
                 for row in rows
@@ -198,7 +205,7 @@ class ProjectAdminAddonsService:
             addon_type_id=item["addon_type_id"],
             qty_planned=item["qty_planned"],
             client_price=item["client_price"],
-            installer_price=item["installer_price"],
+            installer_price=item.get("installer_price"),
             notes=item.get("notes"),
         )
         uow.session.flush()

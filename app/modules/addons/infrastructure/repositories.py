@@ -4,6 +4,8 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from app.modules.earnings.infrastructure.models import CompletedWorkORM
 
 from app.modules.addons.infrastructure.models import (
     AddonTypeORM,
@@ -146,6 +148,15 @@ class ProjectAddonFactRepository:
 
     def create(self, row: ProjectAddonFactORM) -> None:
         self.session.add(row)
+
+    def earned_by_type(self, *, company_id: uuid.UUID, project_id: uuid.UUID) -> dict[uuid.UUID, Decimal]:
+        rows = (self.session.query(ProjectAddonFactORM.addon_type_id, func.sum(CompletedWorkORM.amount_snapshot))
+            .join(CompletedWorkORM, CompletedWorkORM.addon_fact_id == ProjectAddonFactORM.id)
+            .filter(ProjectAddonFactORM.company_id == company_id, ProjectAddonFactORM.project_id == project_id,
+                    CompletedWorkORM.company_id == company_id, CompletedWorkORM.project_id == project_id,
+                    CompletedWorkORM.work_kind == "ADDON")
+            .group_by(ProjectAddonFactORM.addon_type_id).all())
+        return dict(rows)
 
     def get_by_client_event(self, *, company_id: uuid.UUID, client_event_id: str) -> ProjectAddonFactORM | None:
         return self.session.query(ProjectAddonFactORM).filter(

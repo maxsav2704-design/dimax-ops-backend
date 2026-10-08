@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import IntegrityError
 
 from app.modules.addons.domain.enums import AddonFactSource
+from app.modules.addons.application.pricing import AddonPlanPricing
 from app.modules.doors.application.completion import enum_value
 from app.modules.addons.infrastructure.models import (
     AddonTypeORM,
@@ -155,6 +156,9 @@ class AddonsUseCases:
         default_client_price: Decimal,
         default_installer_price: Decimal,
     ) -> AddonTypeORM:
+        FactoryEarningsPricing.lock_company(uow, company_id)
+        if FactoryEarningsPricing.is_active(uow, company_id) and default_installer_price != 0:
+            AddonPlanPricing.reject_override()
         row = AddonTypeORM(
             company_id=company_id,
             name=name.strip(),
@@ -175,7 +179,7 @@ class AddonsUseCases:
         addon_type_id: uuid.UUID,
         qty_planned: Decimal,
         client_price: Decimal,
-        installer_price: Decimal,
+        installer_price: Decimal | None,
         notes: str | None = None,
     ):
         FactoryEarningsPricing.lock_company(uow, company_id)
@@ -188,6 +192,8 @@ class AddonsUseCases:
         if not at:
             raise NotFound("Addon type not found")
 
+        installer_price = AddonPlanPricing.plan_write_price(uow, company_id=company_id,
+            project_id=project_id, addon_type_id=addon_type_id, submitted=installer_price)
         row = uow.addon_plans.upsert(
             company_id=company_id,
             project_id=project_id,
@@ -238,13 +244,17 @@ class AddonsUseCases:
             raise NotFound("Project not found")
 
         for it in items:
+            if not uow.addon_types.get(company_id=company_id, addon_type_id=it["addon_type_id"]):
+                raise NotFound("Addon type not found")
+            installer_price = AddonPlanPricing.plan_write_price(uow, company_id=company_id,
+                project_id=project_id, addon_type_id=it["addon_type_id"], submitted=it.get("installer_price"))
             row = uow.addon_plans.upsert(
                 company_id=company_id,
                 project_id=project_id,
                 addon_type_id=it["addon_type_id"],
                 qty_planned=it["qty_planned"],
                 client_price=it["client_price"],
-                installer_price=it["installer_price"],
+                installer_price=installer_price,
                 notes=clean_optional_text(it.get("notes")),
             )
             uow.session.flush()
@@ -284,6 +294,7 @@ class AddonsUseCases:
         project_id: uuid.UUID,
         addon_type_id: uuid.UUID,
     ) -> None:
+        FactoryEarningsPricing.lock_company(uow, company_id)
         p = uow.projects.get(company_id=company_id, project_id=project_id, for_update=True)
         if not p:
             raise NotFound("Project not found")
@@ -321,6 +332,10 @@ class AddonsUseCases:
         effective_date: date | None,
         notes: str | None,
     ) -> ProjectUrgencySurchargeORM:
+        FactoryEarningsPricing.lock_company(uow, company_id)
+        if FactoryEarningsPricing.is_active(uow, company_id):
+            raise Conflict("Use additional work with a confirmed factory price instead of a manual surcharge",
+                field="installer_amount", meta={"reason": "FACTORY_URGENCY_REQUIRES_ADDON"})
         p = uow.projects.get(company_id=company_id, project_id=project_id)
         if not p:
             raise NotFound("Project not found")
