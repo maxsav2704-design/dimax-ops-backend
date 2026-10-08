@@ -388,7 +388,7 @@ class ReportsAdminApiService:
         limit: int,
     ) -> RiskConcentrationResponse:
         data = ReportsService.risk_concentration(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=limit,
         )
@@ -499,7 +499,7 @@ class ReportsAdminApiService:
             )
 
         risk_concentration = ReportsService.risk_concentration(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=5,
         )
@@ -509,7 +509,7 @@ class ReportsAdminApiService:
             limit=5,
         )
         top_projects = ReportsService.projects_margin(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=5,
             offset=0,
@@ -517,7 +517,7 @@ class ReportsAdminApiService:
             sort_dir="desc",
         )
         risk_projects = ReportsService.projects_margin(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=5,
             offset=0,
@@ -600,6 +600,10 @@ class ReportsAdminApiService:
                     item.get("open_issues", 0),
                 ]
             )
+            writer.writerow([
+                "top_projects_coverage", item["project_name"], item["project_id"],
+                item["pricing_mode"], item["unrecorded_completed_works"], item["missing_addon_plans_facts"],
+            ])
 
         for item in risk_projects.get("items", []):
             writer.writerow(
@@ -612,6 +616,16 @@ class ReportsAdminApiService:
                     item.get("open_issues", 0),
                 ]
             )
+            writer.writerow([
+                "risk_projects_coverage", item["project_name"], item["project_id"],
+                item["pricing_mode"], item["unrecorded_completed_works"], item["missing_addon_plans_facts"],
+            ])
+
+        writer.writerow([
+            "projects_margin_basis", top_projects["pricing_mode"],
+            "ledger_actuals" if top_projects["pricing_mode"] == "FACTORY" else "legacy",
+            top_projects["incomplete_projects"], top_projects["total"], "",
+        ])
 
         for item in installers_matrix.get("items", []):
             writer.writerow(
@@ -958,7 +972,7 @@ class ReportsAdminApiService:
         sort_dir: str,
     ) -> ProjectsMarginResponse:
         data = ReportsService.projects_margin(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=limit,
             offset=offset,
@@ -967,6 +981,8 @@ class ReportsAdminApiService:
         )
         return ProjectsMarginResponse(
             total=int(data.get("total", 0)),
+            pricing_mode=data["pricing_mode"],
+            incomplete_projects=data["incomplete_projects"],
             limit=limit,
             offset=offset,
             items=[ProjectMarginItem(**item) for item in data.get("items", [])],

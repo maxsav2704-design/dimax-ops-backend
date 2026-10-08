@@ -1896,6 +1896,7 @@ class ReportsRepository:
         *,
         company_id: uuid.UUID,
         limit: int = 5,
+        factory_mode: bool = False,
     ) -> dict:
         margin_risk = self.projects_margin(
             company_id=company_id,
@@ -1903,6 +1904,7 @@ class ReportsRepository:
             offset=0,
             sort_by="profit_total",
             sort_dir="asc",
+            factory_mode=factory_mode,
         )
         order_risk = self.order_numbers_kpi(
             company_id=company_id,
@@ -1941,10 +1943,11 @@ class ReportsRepository:
                     leakage_summary.get("delayed_profit_total")
                 ),
                 "risky_projects": len(project_items),
+                "incomplete_projects": margin_risk["incomplete_projects"],
                 "risky_orders": len(order_items),
                 "risky_installers": len(installer_items),
-                "worst_project_profit_total": _dec(
-                    project_items[0]["profit_total"] if project_items else 0
+                "worst_project_profit_total": (
+                    project_items[0]["profit_total"] if project_items else Decimal("0")
                 ),
                 "worst_order_profit_total": _dec(
                     order_items[0]["profit_total"] if order_items else 0
@@ -3391,6 +3394,7 @@ class ReportsRepository:
         offset: int = 0,
         sort_by: str = "profit_total",
         sort_dir: str = "desc",
+        factory_mode: bool = False,
     ) -> dict:
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
@@ -3401,6 +3405,35 @@ class ReportsRepository:
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
             0,
+        )
+        missing_door_rate = and_(
+            DoorORM.installer_rate_snapshot.is_(None),
+            InstallerRateORM.id.is_(None),
+        )
+        recorded_addon = select(CompletedWorkORM.id).where(
+            CompletedWorkORM.company_id == company_id,
+            CompletedWorkORM.project_id == ProjectAddonFactORM.project_id,
+            CompletedWorkORM.work_kind == "ADDON",
+            CompletedWorkORM.addon_fact_id == ProjectAddonFactORM.id,
+        ).exists()
+        if factory_mode:
+            missing_door_rate = not_(select(CompletedWorkORM.id).where(
+                CompletedWorkORM.company_id == company_id,
+                CompletedWorkORM.project_id == DoorORM.project_id,
+                CompletedWorkORM.work_kind == "DOOR",
+                CompletedWorkORM.door_id == DoorORM.id,
+            ).exists())
+
+        # Aggregate movements before joining operational rows: neither multiple
+        # facts nor issues may multiply payroll, including reversals/corrections.
+        ledger_sub = (
+            self.session.query(
+                CompletedWorkORM.project_id.label("project_id"),
+                func.sum(CompletedWorkORM.amount_snapshot).label("payroll_total"),
+            )
+            .filter(CompletedWorkORM.company_id == company_id)
+            .group_by(CompletedWorkORM.project_id)
+            .subquery()
         )
 
         door_sub = (
@@ -3444,8 +3477,7 @@ class ReportsRepository:
                             (
                                 and_(
                                     DoorORM.status == DoorStatus.INSTALLED,
-                                    DoorORM.installer_rate_snapshot.is_(None),
-                                    InstallerRateORM.id.is_(None),
+                                    missing_door_rate,
                                 ),
                                 1,
                             ),
@@ -3517,6 +3549,9 @@ class ReportsRepository:
                     func.sum(case((ProjectAddonPlanORM.id.is_(None), 1), else_=0)),
                     0,
                 ).label("missing_addon_plans_facts"),
+                func.sum(case((not_(recorded_addon), 1), else_=0)).label(
+                    "unrecorded_addons"
+                ),
             )
             .select_from(ProjectAddonFactORM)
             .outerjoin(ProjectAddonPlanORM, addon_plan_join)
@@ -3548,6 +3583,16 @@ class ReportsRepository:
         profit_expr = func.coalesce(door_sub.c.profit_total, 0) + func.coalesce(
             addon_sub.c.addon_profit_total, 0
         )
+        unrecorded_expr = (
+            func.coalesce(door_sub.c.missing_rates_installed_doors, 0)
+            + func.coalesce(addon_sub.c.unrecorded_addons, 0)
+        ) if factory_mode else cast(0, Numeric)
+        if factory_mode:
+            payroll_expr = func.coalesce(ledger_sub.c.payroll_total, 0)
+            profit_expr = case(
+                (or_(unrecorded_expr > 0, func.coalesce(addon_sub.c.missing_addon_plans_facts, 0) > 0), None),
+                else_=revenue_expr - payroll_expr,
+            )
         completion_expr = case(
             (
                 func.coalesce(door_sub.c.total_doors, 0) > 0,
@@ -3559,6 +3604,7 @@ class ReportsRepository:
             else_=0.0,
         )
         margin_expr = case(
+            (profit_expr.is_(None), None),
             (revenue_expr > 0, (profit_expr * 100.0 / revenue_expr)),
             else_=0.0,
         )
@@ -3571,8 +3617,9 @@ class ReportsRepository:
         }
         sort_expr = sort_map.get(sort_by, profit_expr)
         sort_clause = sort_expr.asc() if sort_dir == "asc" else sort_expr.desc()
+        sort_clause = sort_clause.nulls_last()
 
-        rows = (
+        base_query = (
             self.session.query(
                 ProjectORM.id.label("project_id"),
                 ProjectORM.name.label("project_name"),
@@ -3585,6 +3632,7 @@ class ReportsRepository:
                 payroll_expr.label("payroll_total"),
                 profit_expr.label("profit_total"),
                 margin_expr.label("margin_pct"),
+                unrecorded_expr.label("unrecorded_completed_works"),
                 func.coalesce(
                     door_sub.c.missing_rates_installed_doors,
                     0,
@@ -3599,11 +3647,17 @@ class ReportsRepository:
             .outerjoin(door_sub, door_sub.c.project_id == ProjectORM.id)
             .outerjoin(issue_sub, issue_sub.c.project_id == ProjectORM.id)
             .outerjoin(addon_sub, addon_sub.c.project_id == ProjectORM.id)
+            .outerjoin(ledger_sub, ledger_sub.c.project_id == ProjectORM.id)
             .filter(
                 ProjectORM.company_id == company_id,
                 ProjectORM.deleted_at.is_(None),
             )
-            .order_by(sort_clause, ProjectORM.name.asc())
+        )
+        incomplete_projects = int(
+            base_query.with_entities(func.count(ProjectORM.id)).filter(profit_expr.is_(None)).scalar() or 0
+        ) if factory_mode else 0
+        rows = (
+            base_query.order_by(sort_clause, ProjectORM.name.asc(), ProjectORM.id.asc())
             .limit(limit)
             .offset(offset)
             .all()
@@ -3611,9 +3665,13 @@ class ReportsRepository:
 
         return {
             "total": total,
+            "pricing_mode": "FACTORY" if factory_mode else "LEGACY",
+            "incomplete_projects": incomplete_projects,
             "items": [
                 {
                     "project_id": row.project_id,
+                    "pricing_mode": "FACTORY" if factory_mode else "LEGACY",
+                    "unrecorded_completed_works": int(row.unrecorded_completed_works),
                     "project_name": row.project_name,
                     "project_status": (
                         row.project_status.value
@@ -3626,8 +3684,8 @@ class ReportsRepository:
                     "open_issues": int(row.open_issues or 0),
                     "revenue_total": _dec(row.revenue_total),
                     "payroll_total": _dec(row.payroll_total),
-                    "profit_total": _dec(row.profit_total),
-                    "margin_pct": round(float(row.margin_pct or 0), 2),
+                    "profit_total": _dec(row.profit_total) if row.profit_total is not None else None,
+                    "margin_pct": round(float(row.margin_pct), 2) if row.margin_pct is not None else None,
                     "missing_rates_installed_doors": int(
                         row.missing_rates_installed_doors or 0
                     ),

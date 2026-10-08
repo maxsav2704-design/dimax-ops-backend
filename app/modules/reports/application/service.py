@@ -133,14 +133,16 @@ class ReportsService:
 
     @staticmethod
     def risk_concentration(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         limit: int = 5,
     ) -> dict:
-        return ReportsService._repo(session).risk_concentration(
+        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
+        return ReportsService._repo(uow.session).risk_concentration(
             company_id=company_id,
             limit=limit,
+            factory_mode=state.mode == "FACTORY",
         )
 
     @staticmethod
@@ -237,7 +239,7 @@ class ReportsService:
 
     @staticmethod
     def projects_margin(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         limit: int = 10,
@@ -245,12 +247,14 @@ class ReportsService:
         sort_by: str = "profit_total",
         sort_dir: str = "desc",
     ) -> dict:
-        return ReportsService._repo(session).projects_margin(
+        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
+        return ReportsService._repo(uow.session).projects_margin(
             company_id=company_id,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            factory_mode=state.mode == "FACTORY",
         )
 
     @staticmethod

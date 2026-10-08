@@ -312,6 +312,8 @@ class ProjectPlanFactResponse(ProjectPricingCoverage):
 
 
 class ProjectMarginItem(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    unrecorded_completed_works: int = 0
     project_id: UUID
     project_name: str
     project_status: str
@@ -321,14 +323,16 @@ class ProjectMarginItem(BaseModel):
     open_issues: int
     revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
-    margin_pct: float
+    profit_total: Decimal | None
+    margin_pct: float | None
     missing_rates_installed_doors: int
     missing_addon_plans_facts: int
     last_installed_at: datetime | None
 
 
 class ProjectsMarginResponse(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    incomplete_projects: int = 0
     total: int
     limit: int
     offset: int
@@ -336,13 +340,14 @@ class ProjectsMarginResponse(BaseModel):
 
 
 class RiskConcentrationSummaryResponse(BaseModel):
+    incomplete_projects: int = 0
     open_issue_profit_at_risk: Decimal
     blocked_issue_profit_at_risk: Decimal
     delayed_profit_total: Decimal
     risky_projects: int
     risky_orders: int
     risky_installers: int
-    worst_project_profit_total: Decimal
+    worst_project_profit_total: Decimal | None
     worst_order_profit_total: Decimal
     worst_installer_profit_total: Decimal
 
