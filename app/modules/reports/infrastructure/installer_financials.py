@@ -19,6 +19,8 @@ def _metric_row(installer_id, project_id, **values):
     fields = {
         "installer_id": installer_id,
         "project_id": project_id,
+        "work_kind": literal(None),
+        "door_id": cast(null(), DoorORM.id.type),
         "revenue_total": cast(0, Numeric(12, 2)),
         "payroll_total": cast(0, Numeric(12, 2)),
         "installed_doors": literal(0),
@@ -37,7 +39,8 @@ def _work_rows(company_id: UUID):
     work, door, fact, plan = CompletedWorkORM, DoorORM, ProjectAddonFactORM, ProjectAddonPlanORM
     is_door = work.work_kind == "DOOR"
     client_revenue = case((is_door, door.our_price), else_=plan.client_price) * work.quantity
-    movements = _metric_row(work.installer_id, work.project_id, payroll_total=work.amount_snapshot).where(
+    movements = _metric_row(work.installer_id, work.project_id, work_kind=work.work_kind,
+                            door_id=work.door_id, payroll_total=work.amount_snapshot).where(
         work.company_id == company_id
     )
     # Performance belongs to the surviving ledger work, not today's assignee.
@@ -45,6 +48,7 @@ def _work_rows(company_id: UUID):
     completed = (
         _metric_row(
             work.installer_id, work.project_id,
+            work_kind=work.work_kind, door_id=work.door_id,
             revenue_total=func.coalesce(client_revenue, 0),
             installed_doors=case((is_door, 1), else_=0),
             addons_done_qty=case((is_door, 0), else_=work.quantity),
@@ -65,6 +69,7 @@ def _work_rows(company_id: UUID):
     ).exists()
     missing_doors = _metric_row(
         door.installer_id, door.project_id,
+        work_kind=literal("DOOR"), door_id=door.id,
         unrecorded_completed_works=literal(1), missing_rates_installed_doors=literal(1),
     ).where(door.company_id == company_id, door.status == DoorStatus.INSTALLED, ~recorded_door)
     # A reversed addon fact is not an unrecorded new job.
@@ -73,9 +78,85 @@ def _work_rows(company_id: UUID):
         work.project_id == fact.project_id, work.addon_fact_id == fact.id,
     ).exists()
     missing_addons = _metric_row(
-        fact.installer_id, fact.project_id, unrecorded_completed_works=literal(1),
+        fact.installer_id, fact.project_id, work_kind=literal("ADDON"),
+        unrecorded_completed_works=literal(1),
     ).where(fact.company_id == company_id, ~recorded_fact)
     return union_all(movements, completed, missing_doors, missing_addons).subquery()
+
+
+def installer_financial_details(session: Session, *, company_id: UUID, installer_id: UUID) -> dict:
+    raw = _work_rows(company_id)
+    metrics = {name: func.coalesce(func.sum(raw.c[name]), 0) for name in (
+        "revenue_total", "payroll_total", "installed_doors", "addons_done_qty",
+        "unrecorded_completed_works", "missing_rates_installed_doors",
+        "missing_addon_plans_facts", "missing_client_prices",
+    )}
+    for source, target in (
+        ("revenue_total", "addon_revenue_total"), ("payroll_total", "addon_payroll_total"),
+        ("unrecorded_completed_works", "addon_unrecorded_completed_works"),
+        ("missing_client_prices", "addon_missing_client_prices"),
+    ):
+        metrics[target] = func.coalesce(func.sum(case(
+            (raw.c.work_kind == "ADDON", raw.c[source]), else_=0,
+        )), 0)
+    metrics["profit_total"] = case(
+        (metrics["unrecorded_completed_works"] + metrics["missing_client_prices"] > 0, None),
+        else_=metrics["revenue_total"] - metrics["payroll_total"],
+    )
+    metrics["addon_profit_total"] = case(
+        (metrics["addon_unrecorded_completed_works"] + metrics["addon_missing_client_prices"] > 0, None),
+        else_=metrics["addon_revenue_total"] - metrics["addon_payroll_total"],
+    )
+    metrics["last_installed_at"] = func.max(raw.c.last_installed_at)
+    columns = [value.label(name) for name, value in metrics.items()]
+    # Project/order labels are current metadata, always scoped to this company.
+    order_number = func.nullif(func.trim(DoorORM.order_number), "")
+    query = (
+        session.query(*columns).select_from(raw)
+        .outerjoin(ProjectORM, and_(ProjectORM.id == raw.c.project_id, ProjectORM.company_id == company_id))
+        .outerjoin(DoorORM, and_(DoorORM.id == raw.c.door_id, DoorORM.company_id == company_id))
+        .filter(raw.c.installer_id == installer_id)
+    )
+    summary = query.add_columns(
+        func.count(func.distinct(case(
+            (or_(raw.c.installed_doors > 0, raw.c.addons_done_qty > 0), ProjectORM.id), else_=None,
+        ))).label("active_projects"),
+        func.count(func.distinct(case(
+            (raw.c.installed_doors > 0, order_number), else_=None,
+        ))).label("order_numbers"),
+    ).one()
+    present = or_(metrics["installed_doors"] > 0, metrics["addons_done_qty"] > 0,
+                  metrics["payroll_total"] != 0, metrics["unrecorded_completed_works"] > 0)
+    projects = query.add_columns(ProjectORM.id.label("project_id"), ProjectORM.name.label("project_name")).group_by(
+        ProjectORM.id, ProjectORM.name,
+    ).having(present)
+    orders = query.filter(raw.c.work_kind == "DOOR", order_number.isnot(None)).add_columns(
+        order_number.label("order_number"),
+    ).group_by(order_number).having(present)
+
+    # Open issues remain the current assignee's operational responsibility.
+    issue_rows = (
+        session.query(ProjectORM.id.label("project_id"), func.count(IssueORM.id).label("open_issues"))
+        .select_from(IssueORM)
+        .join(DoorORM, and_(DoorORM.id == IssueORM.door_id, DoorORM.company_id == company_id))
+        .outerjoin(ProjectORM, and_(ProjectORM.id == DoorORM.project_id, ProjectORM.company_id == company_id))
+        .filter(IssueORM.company_id == company_id, IssueORM.status == IssueStatus.OPEN,
+                DoorORM.installer_id == installer_id)
+        .group_by(ProjectORM.id).all()
+    )
+    issues = {row.project_id: int(row.open_issues) for row in issue_rows}
+    project_rows = projects.order_by(
+        metrics["installed_doors"].desc(), metrics["profit_total"].desc().nulls_last(),
+        ProjectORM.name.asc().nulls_last(), ProjectORM.id.asc().nulls_last(),
+    ).limit(5).all()
+    order_rows = orders.order_by(metrics["installed_doors"].desc(), order_number.asc()).limit(8).all()
+    return {
+        **dict(summary._mapping), "pricing_mode": "FACTORY", "open_issues": sum(issues.values()),
+        "project_rows_total": projects.count(), "order_rows_total": orders.count(),
+        "top_projects": [{**dict(row._mapping), "pricing_mode": "FACTORY",
+                          "open_issues": issues.get(row.project_id, 0)} for row in project_rows],
+        "order_breakdown": [{**dict(row._mapping), "pricing_mode": "FACTORY"} for row in order_rows],
+    }
 
 
 def installer_financial_matrix(session: Session, *, company_id: UUID, by_project: bool = False,

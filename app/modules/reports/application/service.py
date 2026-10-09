@@ -153,14 +153,16 @@ class ReportsService:
 
     @staticmethod
     def installer_kpi_details(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         installer_id: uuid.UUID,
     ) -> dict:
-        return ReportsService._repo(session).installer_kpi_details(
+        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
+        return ReportsService._repo(uow.session).installer_kpi_details(
             company_id=company_id,
             installer_id=installer_id,
+            factory_mode=state.mode == "FACTORY",
         )
 
     @staticmethod

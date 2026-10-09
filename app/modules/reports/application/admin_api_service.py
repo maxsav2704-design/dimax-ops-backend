@@ -428,11 +428,18 @@ class ReportsAdminApiService:
             )
 
         data = ReportsService.installer_kpi_details(
-            uow.session,
+            uow,
             company_id=company_id,
             installer_id=installer_id,
         )
         return InstallerKpiDetailsResponse(
+            pricing_mode=data.get("pricing_mode", "LEGACY"),
+            unrecorded_completed_works=data.get("unrecorded_completed_works", 0),
+            missing_client_prices=data.get("missing_client_prices", 0),
+            addon_unrecorded_completed_works=data.get("addon_unrecorded_completed_works", 0),
+            addon_missing_client_prices=data.get("addon_missing_client_prices", 0),
+            project_rows_total=data.get("project_rows_total"),
+            order_rows_total=data.get("order_rows_total"),
             installer_id=installer_id,
             installer_name=installer.full_name,
             installed_doors=int(data.get("installed_doors", 0)),

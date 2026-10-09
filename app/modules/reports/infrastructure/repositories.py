@@ -40,7 +40,7 @@ from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectImportRunORM, ProjectORM
 from app.modules.rates.infrastructure.models import InstallerRateORM
-from app.modules.reports.infrastructure.installer_financials import installer_financial_matrix
+from app.modules.reports.infrastructure.installer_financials import installer_financial_details, installer_financial_matrix
 from app.modules.reasons.infrastructure.models import ReasonORM
 
 
@@ -2015,7 +2015,10 @@ class ReportsRepository:
         *,
         company_id: uuid.UUID,
         installer_id: uuid.UUID,
+        factory_mode: bool = False,
     ) -> dict:
+        if factory_mode:
+            return installer_financial_details(self.session, company_id=company_id, installer_id=installer_id)
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
             InstallerRateORM.installer_id == DoorORM.installer_id,

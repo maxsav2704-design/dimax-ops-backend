@@ -224,26 +224,29 @@ class InstallerProjectProfitabilityResponse(InstallerMatrixCoverage):
     items: list[InstallerProjectProfitabilityItem]
 
 
-class InstallerKpiProjectItem(BaseModel):
-    project_id: UUID
-    project_name: str
+class InstallerKpiProjectItem(InstallerFinancialCoverage):
+    project_id: UUID | None
+    project_name: str | None
     installed_doors: int
     open_issues: int
     revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
+    profit_total: Decimal | None
     last_installed_at: datetime | None
+    missing_rates_installed_doors: int = 0
+    missing_addon_plans_facts: int = 0
 
 
-class InstallerKpiOrderItem(BaseModel):
+class InstallerKpiOrderItem(InstallerFinancialCoverage):
     order_number: str
     installed_doors: int
     revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
+    profit_total: Decimal | None
+    missing_rates_installed_doors: int = 0
 
 
-class InstallerKpiDetailsResponse(BaseModel):
+class InstallerKpiDetailsResponse(InstallerFinancialCoverage):
     installer_id: UUID
     installer_name: str
     installed_doors: int
@@ -253,15 +256,19 @@ class InstallerKpiDetailsResponse(BaseModel):
     addons_done_qty: Decimal
     addon_revenue_total: Decimal
     addon_payroll_total: Decimal
-    addon_profit_total: Decimal
+    addon_profit_total: Decimal | None
+    addon_unrecorded_completed_works: int = 0
+    addon_missing_client_prices: int = 0
     revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
+    profit_total: Decimal | None
     missing_rates_installed_doors: int
     missing_addon_plans_facts: int
     last_installed_at: datetime | None
     top_projects: list[InstallerKpiProjectItem]
     order_breakdown: list[InstallerKpiOrderItem]
+    project_rows_total: int | None = None
+    order_rows_total: int | None = None
 
 
 class OrderNumberKpiItem(BaseModel):

@@ -38,7 +38,7 @@ class InstallerRepository:
         if q:
             like = f"%{q.strip()}%"
             stmt = stmt.where(InstallerORM.full_name.ilike(like))
-        stmt = stmt.order_by(InstallerORM.full_name.asc()).limit(limit).offset(offset)
+        stmt = stmt.order_by(InstallerORM.full_name.asc(), InstallerORM.id.asc()).limit(limit).offset(offset)
         return list(self.session.execute(stmt).scalars().all())
 
     def add(self, obj: InstallerORM) -> None:
