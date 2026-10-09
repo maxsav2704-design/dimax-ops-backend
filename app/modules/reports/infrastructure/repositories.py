@@ -1151,7 +1151,8 @@ class ReportsRepository:
         offset: int = 0,
         sort_by: str = "installed_doors",
         sort_dir: str = "desc",
-    ) -> list[dict]:
+        factory_mode: bool = False,
+    ) -> dict:
         installed_filter = [DoorORM.status == DoorStatus.INSTALLED]
         if date_from is not None:
             installed_filter.append(DoorORM.installed_at >= date_from)
@@ -1166,6 +1167,17 @@ class ReportsRepository:
         completed_work_door_ids = self._completed_work_door_ids_subquery(
             company_id=company_id
         )
+        client_price = func.coalesce(ClientPriceSnapshotORM.final_client_rate, DoorORM.our_price)
+        missing_work = not_(DoorORM.id.in_(completed_work_door_ids))
+        if factory_mode:
+            # Reconciliation is independent of the period's ledger slice.
+            missing_work = ~select(CompletedWorkORM.id).where(
+                CompletedWorkORM.company_id == company_id,
+                CompletedWorkORM.work_kind == "DOOR",
+                CompletedWorkORM.door_id == DoorORM.id,
+                CompletedWorkORM.project_id == DoorORM.project_id,
+                active_completed_work_filter(company_id),
+            ).exists()
 
         ledger_rows = (
             self.session.query(
@@ -1173,26 +1185,15 @@ class ReportsRepository:
                 InstallerORM.full_name.label("installer_name"),
                 func.count(effective_work.c.completed_work_id).label("installed_doors"),
                 func.coalesce(
-                    func.sum(
-                        func.coalesce(
-                            ClientPriceSnapshotORM.final_client_rate,
-                            DoorORM.our_price,
-                            0,
-                        )
-                    ),
+                    func.sum(func.coalesce(client_price, 0)),
                     0,
                 ).label("revenue_total"),
                 func.coalesce(func.sum(effective_work.c.payroll_total), 0).label("payroll_total"),
                 func.coalesce(
-                    func.sum(
-                        func.coalesce(
-                            ClientPriceSnapshotORM.final_client_rate,
-                            DoorORM.our_price,
-                            0,
-                        ) - effective_work.c.payroll_total
-                    ),
+                    func.sum(func.coalesce(client_price, 0) - effective_work.c.payroll_total),
                     0,
                 ).label("profit_total"),
+                func.sum(case((client_price.is_(None), 1), else_=0)).label("missing_client_prices"),
             )
             .select_from(effective_work)
             .join(
@@ -1235,10 +1236,11 @@ class ReportsRepository:
             self.session.query(
                 InstallerORM.id.label("installer_id"),
                 InstallerORM.full_name.label("installer_name"),
-                func.count(DoorORM.id).label("installed_doors"),
-                func.coalesce(func.sum(DoorORM.our_price), 0).label("revenue_total"),
-                func.coalesce(func.sum(effective_installer_rate), 0).label("payroll_total"),
-                func.coalesce(func.sum(DoorORM.our_price - effective_installer_rate), 0).label("profit_total"),
+                func.count(DoorORM.id).label("work_count"),
+                func.count(null() if factory_mode else DoorORM.id).label("installed_doors"),
+                func.coalesce(func.sum(0 if factory_mode else DoorORM.our_price), 0).label("revenue_total"),
+                func.coalesce(func.sum(0 if factory_mode else effective_installer_rate), 0).label("payroll_total"),
+                func.coalesce(func.sum(0 if factory_mode else DoorORM.our_price - effective_installer_rate), 0).label("profit_total"),
                 func.coalesce(
                     func.sum(
                         case(
@@ -1268,7 +1270,7 @@ class ReportsRepository:
                 DoorORM.company_id == company_id,
                 DoorORM.installer_id.isnot(None),
                 *installed_filter,
-                not_(DoorORM.id.in_(completed_work_door_ids)),
+                missing_work,
             )
             .group_by(InstallerORM.id, InstallerORM.full_name)
             .all()
@@ -1284,6 +1286,8 @@ class ReportsRepository:
                     "revenue_total": _dec(row.revenue_total),
                     "profit_total": _dec(row.profit_total),
                     "missing_rates_installed_doors": 0,
+                    "unrecorded_completed_works": 0,
+                    "missing_client_prices": int(row.missing_client_prices or 0) if factory_mode else 0,
                 }
                 for row in ledger_rows
             ],
@@ -1295,17 +1299,37 @@ class ReportsRepository:
                     "payroll_total": _dec(row.payroll_total),
                     "revenue_total": _dec(row.revenue_total),
                     "profit_total": _dec(row.profit_total),
-                    "missing_rates_installed_doors": int(row.missing_rates_installed_doors or 0),
+                    "missing_rates_installed_doors": int(row.work_count if factory_mode else row.missing_rates_installed_doors or 0),
+                    "unrecorded_completed_works": int(row.work_count) if factory_mode else 0,
+                    "missing_client_prices": 0,
                 }
                 for row in fallback_rows
             ],
             key_field="installer_id",
             numeric_fields=("payroll_total", "revenue_total", "profit_total"),
-            int_fields=("installed_doors", "missing_rates_installed_doors"),
+            int_fields=(
+                "installed_doors", "missing_rates_installed_doors",
+                "unrecorded_completed_works", "missing_client_prices",
+            ),
         )
 
+        for row in merged:
+            row["pricing_mode"] = "FACTORY" if factory_mode else "LEGACY"
+            if factory_mode and (row["unrecorded_completed_works"] or row["missing_client_prices"]):
+                row["profit_total"] = None
+
         reverse = sort_dir != "asc"
-        if sort_by == "installer_name":
+        if factory_mode:
+            # Stable ties and unknown profit last, in either direction.
+            merged.sort(key=lambda row: (row["installer_name"].lower(), row["installer_id"]))
+            available = [row for row in merged if row.get(sort_by) is not None]
+            unavailable = [row for row in merged if row.get(sort_by) is None]
+            available.sort(
+                key=lambda row: row[sort_by].lower() if sort_by == "installer_name" else row[sort_by],
+                reverse=reverse,
+            )
+            merged = available + unavailable
+        elif sort_by == "installer_name":
             merged.sort(key=lambda x: (str(x.get("installer_name") or "").lower(), x["installer_id"]))
             if reverse:
                 merged.reverse()
@@ -1315,7 +1339,19 @@ class ReportsRepository:
                 reverse=reverse,
             )
 
-        return merged[offset : offset + limit]
+        unassigned = 0
+        if factory_mode:
+            unassigned = self.session.query(func.count(DoorORM.id)).filter(
+                DoorORM.company_id == company_id, DoorORM.installer_id.is_(None),
+                *installed_filter, missing_work,
+            ).scalar()
+        return {
+            "pricing_mode": "FACTORY" if factory_mode else "LEGACY",
+            "total": len(merged),
+            "incomplete_items": sum(row["profit_total"] is None for row in merged),
+            "unassigned_completed_works": int(unassigned or 0),
+            "items": merged[offset : offset + limit],
+        }
 
     def installer_profitability_matrix(
         self,

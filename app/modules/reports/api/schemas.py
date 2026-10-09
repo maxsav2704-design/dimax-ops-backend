@@ -144,14 +144,21 @@ class InstallerKpiItem(BaseModel):
     installed_doors: int
     payroll_total: Decimal
     revenue_total: Decimal
-    profit_total: Decimal
+    profit_total: Decimal | None
     missing_rates_installed_doors: int
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    unrecorded_completed_works: int = 0
+    missing_client_prices: int = 0
 
 
 class InstallersKpiResponse(BaseModel):
     period_from: datetime | None
     period_to: datetime | None
     items: list[InstallerKpiItem]
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    total: int = 0
+    incomplete_items: int = 0
+    unassigned_completed_works: int = 0
 
 
 class InstallerFinancialCoverage(BaseModel):

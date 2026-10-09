@@ -308,8 +308,8 @@ class ReportsAdminApiService:
         sort_by: str,
         sort_dir: str,
     ) -> InstallersKpiResponse:
-        items = ReportsService.installers_kpi(
-            uow.session,
+        data = ReportsService.installers_kpi(
+            uow,
             company_id=company_id,
             date_from=date_from,
             date_to=date_to,
@@ -321,7 +321,11 @@ class ReportsAdminApiService:
         return InstallersKpiResponse(
             period_from=date_from,
             period_to=date_to,
-            items=[InstallerKpiItem(**x) for x in items],
+            items=[InstallerKpiItem(**x) for x in data["items"]],
+            pricing_mode=data["pricing_mode"],
+            total=data["total"],
+            incomplete_items=data["incomplete_items"],
+            unassigned_completed_works=data["unassigned_completed_works"],
         )
 
     @staticmethod
@@ -730,8 +734,8 @@ class ReportsAdminApiService:
         sort_by: str,
         sort_dir: str,
     ) -> str:
-        items = ReportsService.installers_kpi(
-            uow.session,
+        data = ReportsService.installers_kpi(
+            uow,
             company_id=company_id,
             date_from=date_from,
             date_to=date_to,
@@ -751,9 +755,17 @@ class ReportsAdminApiService:
                 "revenue_total",
                 "profit_total",
                 "missing_rates_installed_doors",
+                "record_type", "pricing_mode", "unrecorded_completed_works",
+                "missing_client_prices", "total_installers", "incomplete_items",
+                "unassigned_completed_works", "period_from", "period_to", "accounting_basis",
             ]
         )
-        for row in items:
+        basis = "active_door_work_by_completion_time" if data["pricing_mode"] == "FACTORY" else "legacy_door_kpi"
+        metadata = [data["total"], data["incomplete_items"], data["unassigned_completed_works"],
+                    date_from.isoformat() if date_from else "", date_to.isoformat() if date_to else "", basis]
+        if data["pricing_mode"] == "FACTORY":
+            writer.writerow(["", "", "", "", "", "", "", "summary", "FACTORY", "", "", *metadata])
+        for row in data["items"]:
             writer.writerow(
                 [
                     str(row.get("installer_id", "")),
@@ -763,6 +775,8 @@ class ReportsAdminApiService:
                     row.get("revenue_total", 0),
                     row.get("profit_total", 0),
                     int(row.get("missing_rates_installed_doors", 0)),
+                    "installer", data["pricing_mode"], row.get("unrecorded_completed_works", 0),
+                    row.get("missing_client_prices", 0), *metadata,
                 ]
             )
         return output.getvalue()

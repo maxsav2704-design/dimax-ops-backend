@@ -75,7 +75,7 @@ class ReportsService:
 
     @staticmethod
     def installers_kpi(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         date_from: datetime | None,
@@ -84,8 +84,9 @@ class ReportsService:
         offset: int = 0,
         sort_by: str = "installed_doors",
         sort_dir: str = "desc",
-    ) -> list[dict]:
-        return ReportsService._repo(session).installers_kpi(
+    ) -> dict:
+        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
+        return ReportsService._repo(uow.session).installers_kpi(
             company_id=company_id,
             date_from=date_from,
             date_to=date_to,
@@ -93,6 +94,7 @@ class ReportsService:
             offset=offset,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            factory_mode=state.mode == "FACTORY",
         )
 
     @staticmethod
