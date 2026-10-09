@@ -272,6 +272,10 @@ class InstallerKpiDetailsResponse(InstallerFinancialCoverage):
 
 
 class OrderNumberKpiItem(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    unrecorded_completed_works: int = 0
+    missing_client_prices: int = 0
+    recorded_installations: int | None = None
     order_number: str
     total_doors: int
     installed_doors: int
@@ -280,12 +284,14 @@ class OrderNumberKpiItem(BaseModel):
     planned_revenue_total: Decimal
     installed_revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
+    profit_total: Decimal | None
     missing_rates_installed_doors: int
     completion_pct: float
 
 
 class OrderNumbersKpiResponse(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    incomplete_orders: int = 0
     total: int
     limit: int
     offset: int
@@ -366,6 +372,9 @@ class ProjectsMarginResponse(BaseModel):
 
 
 class RiskConcentrationSummaryResponse(BaseModel):
+    order_pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    incomplete_orders: int = 0
+    order_rows_total: int = 0
     installer_pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
     incomplete_projects: int = 0
     incomplete_installers: int = 0
@@ -377,7 +386,7 @@ class RiskConcentrationSummaryResponse(BaseModel):
     risky_orders: int
     risky_installers: int
     worst_project_profit_total: Decimal | None
-    worst_order_profit_total: Decimal
+    worst_order_profit_total: Decimal | None
     worst_installer_profit_total: Decimal | None
 
 

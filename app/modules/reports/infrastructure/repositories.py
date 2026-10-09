@@ -41,6 +41,7 @@ from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectImportRunORM, ProjectORM
 from app.modules.rates.infrastructure.models import InstallerRateORM
 from app.modules.reports.infrastructure.installer_financials import installer_financial_details, installer_financial_matrix
+from app.modules.reports.infrastructure.order_financials import order_financials
 from app.modules.reasons.infrastructure.models import ReasonORM
 
 
@@ -1959,6 +1960,7 @@ class ReportsRepository:
             offset=0,
             sort_by="profit_total",
             sort_dir="asc",
+            factory_mode=factory_mode,
         )
         installer_risk = self.installer_profitability_matrix(
             company_id=company_id,
@@ -1994,12 +1996,15 @@ class ReportsRepository:
                 "installer_pricing_mode": installer_risk.get("pricing_mode", "LEGACY"),
                 "unassigned_completed_works": installer_risk.get("unassigned_completed_works", 0),
                 "risky_orders": len(order_items),
+                "order_pricing_mode": order_risk.get("pricing_mode", "LEGACY"),
+                "incomplete_orders": order_risk.get("incomplete_orders", 0),
+                "order_rows_total": order_risk["total"],
                 "risky_installers": len(installer_items),
                 "worst_project_profit_total": (
                     project_items[0]["profit_total"] if project_items else Decimal("0")
                 ),
-                "worst_order_profit_total": _dec(
-                    order_items[0]["profit_total"] if order_items else 0
+                "worst_order_profit_total": (
+                    order_items[0]["profit_total"] if order_items else Decimal("0")
                 ),
                 "worst_installer_profit_total": (
                     installer_items[0]["profit_total"] if installer_items else Decimal("0")
@@ -2374,7 +2379,14 @@ class ReportsRepository:
         offset: int = 0,
         sort_by: str = "total_doors",
         sort_dir: str = "desc",
+        factory_mode: bool = False,
     ) -> dict:
+        if factory_mode:
+            return order_financials(
+                self.session, company_id=company_id, project_id=project_id, q=q,
+                effective_work=self._effective_completed_work_subquery(company_id=company_id),
+                limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir,
+            )
         filters = [
             DoorORM.company_id == company_id,
             DoorORM.order_number.isnot(None),

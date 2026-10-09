@@ -74,6 +74,12 @@ from app.modules.sync.application.health_service import SyncHealthService
 from app.shared.domain.errors import NotFound, ValidationError
 
 
+def _csv_order_label(value: str) -> str:
+    if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+
 class ReportsAdminApiService:
     ALLOWED_AUDIT_CATALOG_ENTITIES = {
         "door_type",
@@ -595,6 +601,18 @@ class ReportsAdminApiService:
         )
 
         leakage_summary = dict(issues_addons_impact.get("summary", {}))
+        writer.writerow([
+            "order_financial_basis", summary.get("order_pricing_mode", "LEGACY"),
+            "current_door_metadata;status_progress;net_recorded_payroll;client_snapshot_or_current;doors_only"
+            if summary.get("order_pricing_mode") == "FACTORY" else "legacy",
+            summary.get("incomplete_orders", 0), summary.get("order_rows_total", 0), len(risk_concentration.get("orders", [])),
+        ])
+        for item in risk_concentration.get("orders", []):
+            writer.writerow(["order_financials", _csv_order_label(item["order_number"]),
+                             item["payroll_total"], item["installed_revenue_total"], item["profit_total"], item["completion_pct"]])
+            writer.writerow(["order_financial_coverage", _csv_order_label(item["order_number"]),
+                             item.get("pricing_mode", "LEGACY"), item.get("unrecorded_completed_works", 0),
+                             item.get("missing_client_prices", 0), item.get("recorded_installations")])
         writer.writerow(
             [
                 "margin_leakage",
@@ -801,7 +819,7 @@ class ReportsAdminApiService:
         sort_dir: str,
     ) -> OrderNumbersKpiResponse:
         data = ReportsService.order_numbers_kpi(
-            uow.session,
+            uow,
             company_id=company_id,
             project_id=project_id,
             q=q,
@@ -811,6 +829,8 @@ class ReportsAdminApiService:
             sort_dir=sort_dir,
         )
         return OrderNumbersKpiResponse(
+            pricing_mode=data.get("pricing_mode", "LEGACY"),
+            incomplete_orders=data.get("incomplete_orders", 0),
             total=int(data.get("total", 0)),
             limit=int(data.get("limit", limit)),
             offset=int(data.get("offset", offset)),
@@ -830,7 +850,7 @@ class ReportsAdminApiService:
         sort_dir: str,
     ) -> str:
         data = ReportsService.order_numbers_kpi(
-            uow.session,
+            uow,
             company_id=company_id,
             project_id=project_id,
             q=q,
@@ -854,12 +874,20 @@ class ReportsAdminApiService:
                 "profit_total",
                 "missing_rates_installed_doors",
                 "completion_pct",
+                "record_type", "pricing_mode", "unrecorded_completed_works", "missing_client_prices",
+                "recorded_installations", "incomplete_orders", "total_orders", "limit", "offset", "accounting_basis",
             ]
         )
+        mode = data.get("pricing_mode", "LEGACY")
+        metadata = [data.get("incomplete_orders", 0), data["total"], limit, offset,
+                    "current_door_metadata;status_progress;net_recorded_payroll;client_snapshot_or_current;doors_only"
+                    if mode == "FACTORY" else "legacy"]
+        if mode == "FACTORY":
+            writer.writerow([*[""] * 11, "summary", mode, "", "", "", *metadata])
         for row in data.get("items", []):
             writer.writerow(
                 [
-                    row.get("order_number", ""),
+                    _csv_order_label(row.get("order_number", "")),
                     int(row.get("total_doors", 0)),
                     int(row.get("installed_doors", 0)),
                     int(row.get("not_installed_doors", 0)),
@@ -870,6 +898,8 @@ class ReportsAdminApiService:
                     row.get("profit_total", 0),
                     int(row.get("missing_rates_installed_doors", 0)),
                     float(row.get("completion_pct", 0.0)),
+                    "order", mode, row.get("unrecorded_completed_works", 0), row.get("missing_client_prices", 0),
+                    row.get("recorded_installations"), *metadata,
                 ]
             )
         return output.getvalue()

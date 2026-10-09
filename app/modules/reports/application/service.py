@@ -167,7 +167,7 @@ class ReportsService:
 
     @staticmethod
     def order_numbers_kpi(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         project_id: uuid.UUID | None,
@@ -177,7 +177,8 @@ class ReportsService:
         sort_by: str = "total_doors",
         sort_dir: str = "desc",
     ) -> dict:
-        return ReportsService._repo(session).order_numbers_kpi(
+        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
+        return ReportsService._repo(uow.session).order_numbers_kpi(
             company_id=company_id,
             project_id=project_id,
             q=q,
@@ -185,6 +186,7 @@ class ReportsService:
             offset=offset,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            factory_mode=state.mode == "FACTORY",
         )
 
     @staticmethod
