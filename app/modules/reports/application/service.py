@@ -144,12 +144,16 @@ class ReportsService:
         company_id: uuid.UUID,
         limit: int = 5,
     ) -> dict:
-        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
-        return ReportsService._repo(uow.session).risk_concentration(
+        snapshot = FactoryPriceTimelineService.installer_snapshot(uow, company_id=company_id)
+        data = ReportsService._repo(uow.session).risk_concentration(
             company_id=company_id,
             limit=limit,
-            factory_mode=state.mode == "FACTORY",
+            factory_rates={(item.kind, item.target_id): item.rate for item in snapshot.items} if snapshot else None,
         )
+        for summary in (data["summary"], data["issues_addons_impact"]["summary"]):
+            summary.update(price_list_id=snapshot.price_list_id if snapshot else None,
+                           price_list_version=snapshot.version if snapshot else None)
+        return data
 
     @staticmethod
     def installer_kpi_details(
@@ -269,15 +273,20 @@ class ReportsService:
 
     @staticmethod
     def issues_addons_impact(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         limit: int = 10,
     ) -> dict:
-        return ReportsService._repo(session).issues_addons_impact(
+        snapshot = FactoryPriceTimelineService.installer_snapshot(uow, company_id=company_id)
+        data = ReportsService._repo(uow.session).issues_addons_impact(
             company_id=company_id,
             limit=limit,
+            factory_rates={(item.kind, item.target_id): item.rate for item in snapshot.items} if snapshot else None,
         )
+        data["summary"].update(price_list_id=snapshot.price_list_id if snapshot else None,
+                               price_list_version=snapshot.version if snapshot else None)
+        return data
 
     @staticmethod
     def delivery_stats(

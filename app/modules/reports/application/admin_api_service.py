@@ -526,11 +526,7 @@ class ReportsAdminApiService:
             company_id=company_id,
             limit=5,
         )
-        issues_addons_impact = ReportsService.issues_addons_impact(
-            uow.session,
-            company_id=company_id,
-            limit=5,
-        )
+        issues_addons_impact = risk_concentration["issues_addons_impact"]
         top_projects = ReportsService.projects_margin(
             uow,
             company_id=company_id,
@@ -601,6 +597,18 @@ class ReportsAdminApiService:
         )
 
         leakage_summary = dict(issues_addons_impact.get("summary", {}))
+        writer.writerow(["issue_exposure_basis", leakage_summary.get("pricing_mode", "LEGACY"),
+                         "current_client_prices;current_confirmed_rates;overlapping_populations_not_additive"
+                         if leakage_summary.get("pricing_mode") == "FACTORY" else "legacy_rates;overlapping_populations_not_additive",
+                         leakage_summary.get("price_list_id"), leakage_summary.get("price_list_version"), "forecast_not_earnings"])
+        writer.writerow(["issue_exposure_total", "unique_doors", leakage_summary.get("exposure_doors"),
+                         leakage_summary.get("exposure_profit_total"), leakage_summary.get("unpriced_exposure_doors"), ""])
+        writer.writerow(["issue_exposure_coverage", "unpriced_doors", leakage_summary.get("unpriced_open_issue_doors", 0),
+                         leakage_summary.get("unpriced_blocked_issue_doors", 0), leakage_summary.get("unpriced_delayed_doors", 0), ""])
+        writer.writerow(["addon_impact_basis", leakage_summary.get("pricing_mode", "LEGACY"),
+                         "net_ledger_movements;surviving_work;current_client_prices" if leakage_summary.get("pricing_mode") == "FACTORY" else "legacy",
+                         leakage_summary.get("addon_unrecorded_completed_works", 0), leakage_summary.get("addon_missing_client_prices", 0),
+                         leakage_summary.get("incomplete_addon_rows", 0)])
         writer.writerow([
             "order_financial_basis", summary.get("order_pricing_mode", "LEGACY"),
             "current_door_metadata;status_progress;net_recorded_payroll;client_snapshot_or_current;doors_only"
@@ -1065,7 +1073,7 @@ class ReportsAdminApiService:
     ) -> IssuesAddonsImpactResponse:
         now = datetime.now(timezone.utc)
         data = ReportsService.issues_addons_impact(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=limit,
         )

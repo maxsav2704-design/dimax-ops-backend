@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import DateTime, Numeric, and_, case, cast, func, literal, null, or_, select, union_all
 from sqlalchemy.orm import Session
 
-from app.modules.addons.infrastructure.models import ProjectAddonFactORM, ProjectAddonPlanORM
+from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM, ProjectAddonPlanORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.infrastructure.ledger_queries import active_completed_work_filter
@@ -21,6 +21,7 @@ def _metric_row(installer_id, project_id, **values):
         "project_id": project_id,
         "work_kind": literal(None),
         "door_id": cast(null(), DoorORM.id.type),
+        "addon_fact_id": cast(null(), ProjectAddonFactORM.id.type),
         "revenue_total": cast(0, Numeric(12, 2)),
         "payroll_total": cast(0, Numeric(12, 2)),
         "installed_doors": literal(0),
@@ -40,7 +41,8 @@ def _work_rows(company_id: UUID):
     is_door = work.work_kind == "DOOR"
     client_revenue = case((is_door, door.our_price), else_=plan.client_price) * work.quantity
     movements = _metric_row(work.installer_id, work.project_id, work_kind=work.work_kind,
-                            door_id=work.door_id, payroll_total=work.amount_snapshot).where(
+                            door_id=work.door_id, addon_fact_id=work.addon_fact_id,
+                            payroll_total=work.amount_snapshot).where(
         work.company_id == company_id
     )
     # Performance belongs to the surviving ledger work, not today's assignee.
@@ -48,7 +50,7 @@ def _work_rows(company_id: UUID):
     completed = (
         _metric_row(
             work.installer_id, work.project_id,
-            work_kind=work.work_kind, door_id=work.door_id,
+            work_kind=work.work_kind, door_id=work.door_id, addon_fact_id=work.addon_fact_id,
             revenue_total=func.coalesce(client_revenue, 0),
             installed_doors=case((is_door, 1), else_=0),
             addons_done_qty=case((is_door, 0), else_=work.quantity),
@@ -78,10 +80,48 @@ def _work_rows(company_id: UUID):
         work.project_id == fact.project_id, work.addon_fact_id == fact.id,
     ).exists()
     missing_addons = _metric_row(
-        fact.installer_id, fact.project_id, work_kind=literal("ADDON"),
+        fact.installer_id, fact.project_id, work_kind=literal("ADDON"), addon_fact_id=fact.id,
         unrecorded_completed_works=literal(1),
     ).where(fact.company_id == company_id, ~recorded_fact)
     return union_all(movements, completed, missing_doors, missing_addons).subquery()
+
+
+def addon_financial_impact(session: Session, *, company_id: UUID, limit: int) -> dict:
+    raw = _work_rows(company_id)
+    metrics = {name: func.coalesce(func.sum(raw.c[source]), 0) for name, source in (
+        ("qty_done", "addons_done_qty"), ("revenue_total", "revenue_total"),
+        ("payroll_total", "payroll_total"), ("missing_plan_facts", "missing_addon_plans_facts"),
+        ("unrecorded_completed_works", "unrecorded_completed_works"), ("missing_client_prices", "missing_client_prices"),
+    )}
+    metrics["profit_total"] = case(
+        (metrics["unrecorded_completed_works"] + metrics["missing_client_prices"] > 0, None),
+        else_=metrics["revenue_total"] - metrics["payroll_total"],
+    )
+    query = session.query(*(value.label(name) for name, value in metrics.items())).select_from(raw).filter(raw.c.work_kind == "ADDON")
+    summary = query.one()
+    name = func.coalesce(AddonTypeORM.name, "Unknown add-on")
+    groups = query.outerjoin(ProjectAddonFactORM, and_(
+        ProjectAddonFactORM.company_id == company_id, ProjectAddonFactORM.id == raw.c.addon_fact_id,
+        ProjectAddonFactORM.project_id == raw.c.project_id,
+    )).outerjoin(AddonTypeORM, and_(
+        AddonTypeORM.company_id == company_id, AddonTypeORM.id == ProjectAddonFactORM.addon_type_id,
+    )).add_columns(AddonTypeORM.id.label("addon_type_id"), name.label("addon_name")).group_by(AddonTypeORM.id, name).having(or_(
+        metrics["qty_done"] > 0, metrics["payroll_total"] != 0, metrics["unrecorded_completed_works"] > 0,
+    ))
+    group_rows = groups.subquery()
+    coverage = session.query(func.count(), func.coalesce(func.sum(case(
+        (group_rows.c.profit_total.is_(None), 1), else_=0,
+    )), 0)).select_from(group_rows).one()
+    rows = groups.order_by(metrics["profit_total"].desc().nulls_last(), metrics["qty_done"].desc(),
+                           name.asc(), AddonTypeORM.id.asc().nulls_last()).limit(limit).all()
+    return {
+        "summary": {"addon_revenue_total": summary.revenue_total, "addon_payroll_total": summary.payroll_total,
+                    "addon_profit_total": summary.profit_total, "missing_addon_plans_facts": summary.missing_plan_facts,
+                    "addon_unrecorded_completed_works": summary.unrecorded_completed_works,
+                    "addon_missing_client_prices": summary.missing_client_prices,
+                    "addon_rows_total": int(coverage[0]), "incomplete_addon_rows": int(coverage[1])},
+        "addon_impact": [{**dict(row._mapping), "pricing_mode": "FACTORY"} for row in rows],
+    }
 
 
 def installer_financial_details(session: Session, *, company_id: UUID, installer_id: UUID) -> dict:

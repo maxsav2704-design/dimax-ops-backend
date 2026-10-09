@@ -40,25 +40,15 @@ from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectImportRunORM, ProjectORM
 from app.modules.rates.infrastructure.models import InstallerRateORM
-from app.modules.reports.infrastructure.installer_financials import installer_financial_details, installer_financial_matrix
+from app.modules.reports.infrastructure.installer_financials import addon_financial_impact, installer_financial_details, installer_financial_matrix
+from app.modules.reports.infrastructure.financial_sql import complete_sum as _complete_sum, factory_rate as _factory_rate
+from app.modules.reports.infrastructure.issue_financials import issue_exposure
 from app.modules.reports.infrastructure.order_financials import order_financials
 from app.modules.reasons.infrastructure.models import ReasonORM
 
 
 def _dec(v) -> Decimal:
     return Decimal(str(v or 0))
-
-
-def _factory_rate(rates, kind, target):
-    prices = {key[1]: rate for key, rate in rates.items() if key[0] == kind}
-    if not prices:
-        return cast(null(), Numeric(12, 2))
-    return case(prices, value=target, else_=None)
-
-
-def _complete_sum(value):
-    # SQL SUM ignores nulls; an unpriced row must invalidate the financial total.
-    return case((func.count() > func.count(value), None), else_=func.coalesce(func.sum(value), 0))
 
 
 def _payload_int(payload: dict | None, key: str, default: int = 0) -> int:
@@ -1942,8 +1932,9 @@ class ReportsRepository:
         *,
         company_id: uuid.UUID,
         limit: int = 5,
-        factory_mode: bool = False,
+        factory_rates: dict[tuple[str, uuid.UUID], Decimal] | None = None,
     ) -> dict:
+        factory_mode = factory_rates is not None
         margin_risk = self.projects_margin(
             company_id=company_id,
             limit=limit,
@@ -1973,6 +1964,7 @@ class ReportsRepository:
         leakage = self.issues_addons_impact(
             company_id=company_id,
             limit=limit,
+            factory_rates=factory_rates,
         )
         leakage_summary = dict(leakage.get("summary", {}))
         project_items = list(margin_risk.get("items", []))
@@ -1981,15 +1973,11 @@ class ReportsRepository:
 
         return {
             "summary": {
-                "open_issue_profit_at_risk": _dec(
-                    leakage_summary.get("open_issue_profit_at_risk")
-                ),
-                "blocked_issue_profit_at_risk": _dec(
-                    leakage_summary.get("blocked_issue_profit_at_risk")
-                ),
-                "delayed_profit_total": _dec(
-                    leakage_summary.get("delayed_profit_total")
-                ),
+                **{key: leakage_summary[key] for key in (
+                    "pricing_mode", "open_issue_profit_at_risk", "blocked_issue_profit_at_risk", "delayed_profit_total",
+                    "exposure_profit_total", "exposure_doors", "unpriced_exposure_doors",
+                    "unpriced_open_issue_doors", "unpriced_blocked_issue_doors", "unpriced_delayed_doors",
+                )},
                 "risky_projects": len(project_items),
                 "incomplete_projects": margin_risk["incomplete_projects"],
                 "incomplete_installers": installer_risk.get("incomplete_items", 0),
@@ -2013,6 +2001,7 @@ class ReportsRepository:
             "projects": project_items,
             "orders": order_items,
             "installers": installer_items,
+            "issues_addons_impact": leakage,
         }
 
     def installer_kpi_details(
@@ -3767,122 +3756,22 @@ class ReportsRepository:
         *,
         company_id: uuid.UUID,
         limit: int = 10,
+        factory_rates: dict[tuple[str, uuid.UUID], Decimal] | None = None,
     ) -> dict:
-        rate_join = and_(
+        factory_mode = factory_rates is not None
+        legacy_rate = select(InstallerRateORM.price).where(
             InstallerRateORM.company_id == DoorORM.company_id,
             InstallerRateORM.installer_id == DoorORM.installer_id,
             InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
-        effective_installer_rate = func.coalesce(
-            DoorORM.installer_rate_snapshot,
-            InstallerRateORM.price,
-            0,
-        )
-
-        open_issue_row = (
-            self.session.query(
-                func.count(IssueORM.id).label("open_issues"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (IssueORM.workflow_state == IssueWorkflowState.BLOCKED, 1),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("blocked_open_issues"),
-                func.coalesce(func.sum(DoorORM.our_price), 0).label(
-                    "open_issue_revenue_at_risk"
-                ),
-                func.coalesce(func.sum(effective_installer_rate), 0).label(
-                    "open_issue_payroll_at_risk"
-                ),
-                func.coalesce(
-                    func.sum(DoorORM.our_price - effective_installer_rate),
-                    0,
-                ).label("open_issue_profit_at_risk"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                IssueORM.workflow_state == IssueWorkflowState.BLOCKED,
-                                DoorORM.our_price - effective_installer_rate,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("blocked_issue_profit_at_risk"),
-            )
-            .select_from(IssueORM)
-            .join(DoorORM, DoorORM.id == IssueORM.door_id)
-            .outerjoin(InstallerRateORM, rate_join)
-            .filter(
-                IssueORM.company_id == company_id,
-                IssueORM.status == IssueStatus.OPEN,
-            )
-            .one()
-        )
-
-        not_installed_row = (
-            self.session.query(
-                func.count(DoorORM.id).label("not_installed_doors"),
-                func.coalesce(func.sum(DoorORM.our_price), 0).label(
-                    "delayed_revenue_total"
-                ),
-                func.coalesce(func.sum(effective_installer_rate), 0).label(
-                    "delayed_payroll_total"
-                ),
-                func.coalesce(
-                    func.sum(DoorORM.our_price - effective_installer_rate),
-                    0,
-                ).label("delayed_profit_total"),
-            )
-            .select_from(DoorORM)
-            .outerjoin(InstallerRateORM, rate_join)
-            .filter(
-                DoorORM.company_id == company_id,
-                DoorORM.status == DoorStatus.NOT_INSTALLED,
-            )
-            .one()
-        )
-
-        reason_name_expr = func.coalesce(ReasonORM.name, "No reason")
-        reason_profit_expr = func.coalesce(
-            func.sum(DoorORM.our_price - effective_installer_rate),
-            0,
-        )
-        reason_rows = (
-            self.session.query(
-                DoorORM.reason_id.label("reason_id"),
-                reason_name_expr.label("reason_name"),
-                func.count(DoorORM.id).label("doors"),
-                func.coalesce(func.sum(DoorORM.our_price), 0).label(
-                    "revenue_delayed_total"
-                ),
-                func.coalesce(func.sum(effective_installer_rate), 0).label(
-                    "payroll_delayed_total"
-                ),
-                reason_profit_expr.label("profit_delayed_total"),
-            )
-            .select_from(DoorORM)
-            .outerjoin(InstallerRateORM, rate_join)
-            .outerjoin(
-                ReasonORM,
-                and_(
-                    ReasonORM.company_id == DoorORM.company_id,
-                    ReasonORM.id == DoorORM.reason_id,
-                ),
-            )
-            .filter(
-                DoorORM.company_id == company_id,
-                DoorORM.status == DoorStatus.NOT_INSTALLED,
-            )
-            .group_by(DoorORM.reason_id, reason_name_expr)
-            .order_by(reason_profit_expr.desc(), func.count(DoorORM.id).desc())
-            .limit(limit)
-            .all()
-        )
+        ).correlate(DoorORM).scalar_subquery()
+        rate = (_factory_rate(factory_rates, "DOOR", DoorORM.door_type_id) if factory_mode
+                else func.coalesce(DoorORM.installer_rate_snapshot, legacy_rate, 0))
+        exposure = issue_exposure(self.session, company_id=company_id, rate=rate,
+                                  factory_mode=factory_mode, limit=limit)
+        if factory_mode:
+            addons = addon_financial_impact(self.session, company_id=company_id, limit=limit)
+            return {"summary": {**exposure["summary"], **addons["summary"], "pricing_mode": "FACTORY"},
+                    "top_reasons": exposure["top_reasons"], "addon_impact": addons["addon_impact"]}
 
         addon_plan_join = and_(
             ProjectAddonPlanORM.company_id == ProjectAddonFactORM.company_id,
@@ -3978,24 +3867,7 @@ class ReportsRepository:
 
         return {
             "summary": {
-                "open_issues": int(open_issue_row.open_issues or 0),
-                "blocked_open_issues": int(open_issue_row.blocked_open_issues or 0),
-                "not_installed_doors": int(not_installed_row.not_installed_doors or 0),
-                "open_issue_revenue_at_risk": _dec(
-                    open_issue_row.open_issue_revenue_at_risk
-                ),
-                "open_issue_payroll_at_risk": _dec(
-                    open_issue_row.open_issue_payroll_at_risk
-                ),
-                "open_issue_profit_at_risk": _dec(
-                    open_issue_row.open_issue_profit_at_risk
-                ),
-                "blocked_issue_profit_at_risk": _dec(
-                    open_issue_row.blocked_issue_profit_at_risk
-                ),
-                "delayed_revenue_total": _dec(not_installed_row.delayed_revenue_total),
-                "delayed_payroll_total": _dec(not_installed_row.delayed_payroll_total),
-                "delayed_profit_total": _dec(not_installed_row.delayed_profit_total),
+                **exposure["summary"], "pricing_mode": "LEGACY",
                 "addon_revenue_total": _dec(addon_summary_row.addon_revenue_total),
                 "addon_payroll_total": _dec(addon_summary_row.addon_payroll_total),
                 "addon_profit_total": _dec(addon_summary_row.addon_profit_total),
@@ -4003,17 +3875,7 @@ class ReportsRepository:
                     addon_summary_row.missing_addon_plans_facts or 0
                 ),
             },
-            "top_reasons": [
-                {
-                    "reason_id": row.reason_id,
-                    "reason_name": row.reason_name,
-                    "doors": int(row.doors or 0),
-                    "revenue_delayed_total": _dec(row.revenue_delayed_total),
-                    "payroll_delayed_total": _dec(row.payroll_delayed_total),
-                    "profit_delayed_total": _dec(row.profit_delayed_total),
-                }
-                for row in reason_rows
-            ],
+            "top_reasons": exposure["top_reasons"],
             "addon_impact": [
                 {
                     "addon_type_id": row.addon_type_id,

@@ -371,7 +371,19 @@ class ProjectsMarginResponse(BaseModel):
     items: list[ProjectMarginItem]
 
 
-class RiskConcentrationSummaryResponse(BaseModel):
+class IssueExposureCoverage(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    price_list_id: UUID | None = None
+    price_list_version: int | None = None
+    unpriced_open_issue_doors: int = 0
+    unpriced_blocked_issue_doors: int = 0
+    unpriced_delayed_doors: int = 0
+    unpriced_exposure_doors: int = 0
+    exposure_doors: int = 0
+    exposure_profit_total: Decimal | None = None
+
+
+class RiskConcentrationSummaryResponse(IssueExposureCoverage):
     order_pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
     incomplete_orders: int = 0
     order_rows_total: int = 0
@@ -379,9 +391,9 @@ class RiskConcentrationSummaryResponse(BaseModel):
     incomplete_projects: int = 0
     incomplete_installers: int = 0
     unassigned_completed_works: int = 0
-    open_issue_profit_at_risk: Decimal
-    blocked_issue_profit_at_risk: Decimal
-    delayed_profit_total: Decimal
+    open_issue_profit_at_risk: Decimal | None
+    blocked_issue_profit_at_risk: Decimal | None
+    delayed_profit_total: Decimal | None
     risky_projects: int
     risky_orders: int
     risky_installers: int
@@ -465,39 +477,49 @@ class ProjectRiskDrilldownResponse(BaseModel):
     risky_orders: list[ProjectRiskOrderItem]
 
 
-class IssuesAddonsImpactSummaryResponse(BaseModel):
+class IssuesAddonsImpactSummaryResponse(IssueExposureCoverage):
+    reason_rows_total: int = 0
+    addon_rows_total: int | None = None
+    incomplete_addon_rows: int = 0
+    addon_unrecorded_completed_works: int = 0
+    addon_missing_client_prices: int = 0
     open_issues: int
     blocked_open_issues: int
     not_installed_doors: int
     open_issue_revenue_at_risk: Decimal
-    open_issue_payroll_at_risk: Decimal
-    open_issue_profit_at_risk: Decimal
-    blocked_issue_profit_at_risk: Decimal
+    open_issue_payroll_at_risk: Decimal | None
+    open_issue_profit_at_risk: Decimal | None
+    blocked_issue_profit_at_risk: Decimal | None
     delayed_revenue_total: Decimal
-    delayed_payroll_total: Decimal
-    delayed_profit_total: Decimal
+    delayed_payroll_total: Decimal | None
+    delayed_profit_total: Decimal | None
     addon_revenue_total: Decimal
     addon_payroll_total: Decimal
-    addon_profit_total: Decimal
+    addon_profit_total: Decimal | None
     missing_addon_plans_facts: int
 
 
 class IssuesAddonsImpactReasonItem(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    unpriced_doors: int = 0
     reason_id: UUID | None
     reason_name: str
     doors: int
     revenue_delayed_total: Decimal
-    payroll_delayed_total: Decimal
-    profit_delayed_total: Decimal
+    payroll_delayed_total: Decimal | None
+    profit_delayed_total: Decimal | None
 
 
 class IssuesAddonsImpactAddonItem(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    unrecorded_completed_works: int = 0
+    missing_client_prices: int = 0
     addon_type_id: UUID | None
     addon_name: str
     qty_done: Decimal
     revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
+    profit_total: Decimal | None
     missing_plan_facts: int
 
 
