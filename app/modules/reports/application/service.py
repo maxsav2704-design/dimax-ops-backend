@@ -97,7 +97,7 @@ class ReportsService:
 
     @staticmethod
     def installer_profitability_matrix(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         limit: int = 20,
@@ -105,17 +105,19 @@ class ReportsService:
         sort_by: str = "profit_total",
         sort_dir: str = "desc",
     ) -> dict:
-        return ReportsService._repo(session).installer_profitability_matrix(
+        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
+        return ReportsService._repo(uow.session).installer_profitability_matrix(
             company_id=company_id,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            factory_mode=state.mode == "FACTORY",
         )
 
     @staticmethod
     def installer_project_profitability(
-        session: Session,
+        uow,
         *,
         company_id: uuid.UUID,
         limit: int = 20,
@@ -123,12 +125,14 @@ class ReportsService:
         sort_by: str = "profit_total",
         sort_dir: str = "desc",
     ) -> dict:
-        return ReportsService._repo(session).installer_project_profitability(
+        state = FactoryPriceTimelineService.company_state(uow, company_id=company_id)
+        return ReportsService._repo(uow.session).installer_project_profitability(
             company_id=company_id,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            factory_mode=state.mode == "FACTORY",
         )
 
     @staticmethod

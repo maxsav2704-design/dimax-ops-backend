@@ -335,7 +335,7 @@ class ReportsAdminApiService:
         sort_dir: str,
     ) -> InstallerProfitabilityMatrixResponse:
         data = ReportsService.installer_profitability_matrix(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=limit,
             offset=offset,
@@ -343,6 +343,9 @@ class ReportsAdminApiService:
             sort_dir=sort_dir,
         )
         return InstallerProfitabilityMatrixResponse(
+            pricing_mode=data.get("pricing_mode", "LEGACY"),
+            incomplete_items=data.get("incomplete_items", 0),
+            unassigned_completed_works=data.get("unassigned_completed_works", 0),
             total=int(data.get("total", 0)),
             limit=limit,
             offset=offset,
@@ -363,7 +366,7 @@ class ReportsAdminApiService:
         sort_dir: str,
     ) -> InstallerProjectProfitabilityResponse:
         data = ReportsService.installer_project_profitability(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=limit,
             offset=offset,
@@ -371,6 +374,9 @@ class ReportsAdminApiService:
             sort_dir=sort_dir,
         )
         return InstallerProjectProfitabilityResponse(
+            pricing_mode=data.get("pricing_mode", "LEGACY"),
+            incomplete_items=data.get("incomplete_items", 0),
+            unassigned_completed_works=data.get("unassigned_completed_works", 0),
             total=int(data.get("total", 0)),
             limit=limit,
             offset=offset,
@@ -525,7 +531,7 @@ class ReportsAdminApiService:
             sort_dir="asc",
         )
         installers_matrix = ReportsService.installer_profitability_matrix(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=8,
             offset=0,
@@ -533,7 +539,7 @@ class ReportsAdminApiService:
             sort_dir="desc",
         )
         installer_project = ReportsService.installer_project_profitability(
-            uow.session,
+            uow,
             company_id=company_id,
             limit=10,
             offset=0,
@@ -638,6 +644,17 @@ class ReportsAdminApiService:
                     item.get("open_issues", 0),
                 ]
             )
+
+        for section, data in (("installers_matrix", installers_matrix), ("installer_project_cross_view", installer_project)):
+            writer.writerow([f"{section}_basis", data.get("pricing_mode", "LEGACY"),
+                "ledger_actuals" if data.get("pricing_mode") == "FACTORY" else "legacy",
+                data.get("incomplete_items", 0), data.get("unassigned_completed_works", 0), ""])
+            for item in data.get("items", []):
+                writer.writerow([f"{section}_coverage", item.get("installer_id"), item.get("project_id", ""),
+                    item.get("pricing_mode", "LEGACY"), item.get("unrecorded_completed_works", 0),
+                    item.get("missing_client_prices", 0)])
+                writer.writerow([f"{section}_earnings", item.get("installer_id"), item.get("project_id", ""),
+                    item.get("payroll_total", 0), item.get("revenue_total", 0), item.get("profit_total")])
 
         for item in installer_project.get("items", []):
             writer.writerow(

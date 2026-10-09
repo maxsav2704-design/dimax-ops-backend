@@ -40,6 +40,7 @@ from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectImportRunORM, ProjectORM
 from app.modules.rates.infrastructure.models import InstallerRateORM
+from app.modules.reports.infrastructure.installer_financials import installer_financial_matrix
 from app.modules.reasons.infrastructure.models import ReasonORM
 
 
@@ -1324,7 +1325,11 @@ class ReportsRepository:
         offset: int = 0,
         sort_by: str = "profit_total",
         sort_dir: str = "desc",
+        factory_mode: bool = False,
     ) -> dict:
+        if factory_mode:
+            return installer_financial_matrix(self.session, company_id=company_id,
+                limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir)
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
             InstallerRateORM.installer_id == DoorORM.installer_id,
@@ -1611,7 +1616,11 @@ class ReportsRepository:
         offset: int = 0,
         sort_by: str = "profit_total",
         sort_dir: str = "desc",
+        factory_mode: bool = False,
     ) -> dict:
+        if factory_mode:
+            return installer_financial_matrix(self.session, company_id=company_id, by_project=True,
+                limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir)
         rate_join = and_(
             InstallerRateORM.company_id == DoorORM.company_id,
             InstallerRateORM.installer_id == DoorORM.installer_id,
@@ -1921,6 +1930,7 @@ class ReportsRepository:
             offset=0,
             sort_by="profit_total",
             sort_dir="asc",
+            factory_mode=factory_mode,
         )
         leakage = self.issues_addons_impact(
             company_id=company_id,
@@ -1944,6 +1954,9 @@ class ReportsRepository:
                 ),
                 "risky_projects": len(project_items),
                 "incomplete_projects": margin_risk["incomplete_projects"],
+                "incomplete_installers": installer_risk.get("incomplete_items", 0),
+                "installer_pricing_mode": installer_risk.get("pricing_mode", "LEGACY"),
+                "unassigned_completed_works": installer_risk.get("unassigned_completed_works", 0),
                 "risky_orders": len(order_items),
                 "risky_installers": len(installer_items),
                 "worst_project_profit_total": (
@@ -1952,8 +1965,8 @@ class ReportsRepository:
                 "worst_order_profit_total": _dec(
                     order_items[0]["profit_total"] if order_items else 0
                 ),
-                "worst_installer_profit_total": _dec(
-                    installer_items[0]["profit_total"] if installer_items else 0
+                "worst_installer_profit_total": (
+                    installer_items[0]["profit_total"] if installer_items else Decimal("0")
                 ),
             },
             "projects": project_items,

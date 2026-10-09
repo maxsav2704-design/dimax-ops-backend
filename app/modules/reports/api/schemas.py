@@ -154,7 +154,19 @@ class InstallersKpiResponse(BaseModel):
     items: list[InstallerKpiItem]
 
 
-class InstallerProfitabilityMatrixItem(BaseModel):
+class InstallerFinancialCoverage(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    unrecorded_completed_works: int = 0
+    missing_client_prices: int = 0
+
+
+class InstallerMatrixCoverage(BaseModel):
+    pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
+    incomplete_items: int = 0
+    unassigned_completed_works: int = 0
+
+
+class InstallerProfitabilityMatrixItem(InstallerFinancialCoverage):
     installer_id: UUID
     installer_name: str
     performance_band: str
@@ -164,41 +176,41 @@ class InstallerProfitabilityMatrixItem(BaseModel):
     addons_done_qty: Decimal
     revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
-    margin_pct: float
-    avg_profit_per_door: Decimal
+    profit_total: Decimal | None
+    margin_pct: float | None
+    avg_profit_per_door: Decimal | None
     missing_rates_installed_doors: int
     missing_addon_plans_facts: int
     last_installed_at: datetime | None
 
 
-class InstallerProfitabilityMatrixResponse(BaseModel):
+class InstallerProfitabilityMatrixResponse(InstallerMatrixCoverage):
     total: int
     limit: int
     offset: int
     items: list[InstallerProfitabilityMatrixItem]
 
 
-class InstallerProjectProfitabilityItem(BaseModel):
+class InstallerProjectProfitabilityItem(InstallerFinancialCoverage):
     installer_id: UUID
     installer_name: str
-    project_id: UUID
-    project_name: str
+    project_id: UUID | None
+    project_name: str | None
     performance_band: str
     installed_doors: int
     open_issues: int
     addons_done_qty: Decimal
     revenue_total: Decimal
     payroll_total: Decimal
-    profit_total: Decimal
-    margin_pct: float
-    avg_profit_per_door: Decimal
+    profit_total: Decimal | None
+    margin_pct: float | None
+    avg_profit_per_door: Decimal | None
     missing_rates_installed_doors: int
     missing_addon_plans_facts: int
     last_installed_at: datetime | None
 
 
-class InstallerProjectProfitabilityResponse(BaseModel):
+class InstallerProjectProfitabilityResponse(InstallerMatrixCoverage):
     total: int
     limit: int
     offset: int
@@ -340,7 +352,10 @@ class ProjectsMarginResponse(BaseModel):
 
 
 class RiskConcentrationSummaryResponse(BaseModel):
+    installer_pricing_mode: Literal["LEGACY", "FACTORY"] = "LEGACY"
     incomplete_projects: int = 0
+    incomplete_installers: int = 0
+    unassigned_completed_works: int = 0
     open_issue_profit_at_risk: Decimal
     blocked_issue_profit_at_risk: Decimal
     delayed_profit_total: Decimal
@@ -349,7 +364,7 @@ class RiskConcentrationSummaryResponse(BaseModel):
     risky_installers: int
     worst_project_profit_total: Decimal | None
     worst_order_profit_total: Decimal
-    worst_installer_profit_total: Decimal
+    worst_installer_profit_total: Decimal | None
 
 
 class RiskConcentrationResponse(BaseModel):
