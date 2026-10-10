@@ -16,6 +16,7 @@ class IssueApproval(BaseModel):
     recipient_name: Name
     recipient_email: EmailStr = Field(max_length=320)
     expires_in_hours: int = Field(default=72, ge=1, le=168, strict=True)
+    send_email: StrictBool = False
 
 
 class ApprovalSummary(BaseModel):
@@ -38,6 +39,7 @@ class ApprovalSummary(BaseModel):
 class IssuedApproval(BaseModel):
     invitation: ApprovalSummary
     confirmation_url: str
+    email_outbox_id: UUID | None = None
 
 
 class ApprovalPage(BaseModel):

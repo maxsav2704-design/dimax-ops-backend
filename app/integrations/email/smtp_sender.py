@@ -15,6 +15,7 @@ class SmtpEmailSender:
         cc_emails: list[str] | None = None,
         subject: str,
         body_text: str,
+        body_html: str | None = None,
         attachment_path: str | None = None,
         attachment_name: str | None = None,
     ) -> None:
@@ -25,6 +26,8 @@ class SmtpEmailSender:
             msg["Cc"] = ", ".join(cc_emails)
         msg["Subject"] = subject
         msg.set_content(body_text)
+        if body_html is not None:
+            msg.add_alternative(body_html, subtype="html")
 
         if attachment_path:
             p = Path(attachment_path)

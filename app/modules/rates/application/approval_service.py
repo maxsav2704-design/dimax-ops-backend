@@ -14,6 +14,7 @@ from app.modules.rates.application.approval_dto import (
     IssuedApproval, PublicApproval, PublicApprovalLine,
 )
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
+from app.modules.rates.application.approval_email import enqueue_invitation, validate_email_delivery
 from app.shared.domain.errors import Conflict, NotFound
 from app.shared.infrastructure.db.base import utcnow
 
@@ -47,6 +48,7 @@ def approval_snapshot_matches(uow, price_list, invitation) -> bool:
 class FactoryPriceApprovalService:
     @staticmethod
     def issue(uow, *, company_id: UUID, price_list_id: UUID, actor_user_id: UUID, body: IssueApproval):
+        email_base = validate_email_delivery() if body.send_email else None
         if not uow.price_lists.lock_company(company_id):
             raise NotFound("Price list not found")
         price_list = uow.price_lists.get(company_id, price_list_id)
@@ -70,6 +72,7 @@ class FactoryPriceApprovalService:
             recipient_email=str(body.recipient_email),
         )
         uow.price_lists.add_approval(invitation)
+        message = enqueue_invitation(uow, invitation, token, email_base) if email_base else None
         AuditService.add(
             uow, company_id=company_id, actor_user_id=actor_user_id, entity_type="FACTORY_PRICE_APPROVAL",
             entity_id=invitation.id, action="INVITE", after={"price_list_id": str(price_list_id),
@@ -79,6 +82,7 @@ class FactoryPriceApprovalService:
         return IssuedApproval(
             invitation=ApprovalSummary.model_validate(invitation),
             confirmation_url=f"{settings.PUBLIC_APP_BASE_URL.rstrip('/')}/price-approval#{token}",
+            email_outbox_id=message.id if message else None,
         )
 
     @staticmethod
