@@ -79,6 +79,15 @@ Expected contract:
 
 ## Factory Price Authority (Open)
 
+Current mailbox-verification update (October 10): new decisions additionally
+require an emailed one-time code; migration 0069 preserves legacy decisions
+without inventing verification evidence. Production env validation now requires
+an independent `FACTORY_APPROVAL_EMAIL_KEY`. Deploy the API, worker and public
+approval page together. See `FACTORY_APPROVAL_EMAIL.md` for limits, key rotation
+and recovery. This closes the link-only confirmation gap, not the price
+activation E2E or external delivery gates below. Earlier dated notes describe
+their original checkpoints.
+
 The October 2 business requirement is not yet a release PASS. Migration 0063 and
 `/api/v1/admin/price-lists` add company-wide immutable versions. Migration 0064
 adds expiring/revocable invitations and explicit, version-bound factory decisions

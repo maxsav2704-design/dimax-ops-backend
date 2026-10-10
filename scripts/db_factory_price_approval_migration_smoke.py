@@ -6,7 +6,8 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
+from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from scripts.db_factory_price_list_migration_smoke import main as verify_drafts
@@ -17,7 +18,6 @@ def main():
         raise RuntimeError("Explicit factory approval migration check required")
     # The preceding check enforces APP_ENV, the exact database host/name and an empty database.
     verify_drafts()
-    from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
     from app.modules.rates.infrastructure.price_list_models import FactoryPriceListORM
     from app.shared.infrastructure.db.base import Base, utcnow
     engine = create_engine(os.environ["DATABASE_URL"])
@@ -37,7 +37,7 @@ def main():
         context = MigrationContext.configure(connection, opts={
             "include_object": lambda obj, name, type_, reflected, compare_to:
                 name in new_tables if type_ == "table" else (
-                    obj.table.name in new_tables and name not in {
+                    obj.table.name in new_tables and not name.startswith("mailbox_") and name not in {
                         "uq_factory_approvals_tenant_list_id", "uq_factory_price_items_tenant_list_id"}),
         })
         assert compare_metadata(context, Base.metadata) == []
@@ -48,10 +48,11 @@ def main():
     with Session(engine) as session:
         price_list = session.scalar(select(FactoryPriceListORM))
         now = utcnow()
-        session.add(FactoryPriceApprovalORM(company_id=price_list.company_id, price_list_id=price_list.id,
+        approvals = Table("factory_price_approvals", MetaData(), autoload_with=engine)
+        session.execute(approvals.insert().values(id=uuid4(), company_id=price_list.company_id, price_list_id=price_list.id,
             created_by=price_list.created_by, token_hash="1" * 64, snapshot_hash="2" * 64, snapshot={},
             factory_name="QA Factory", recipient_name="QA Recipient", recipient_email="qa@example.com",
-            created_at=now, expires_at=now + timedelta(hours=1)))
+            created_at=now, updated_at=now, expires_at=now + timedelta(hours=1)))
         session.commit()
     try:
         command.downgrade(config, "0063_factory_price_lists")

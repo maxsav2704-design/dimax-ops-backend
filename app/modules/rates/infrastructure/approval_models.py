@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,17 @@ class FactoryPriceApprovalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             ondelete="CASCADE", name="fk_factory_approvals_tenant_list",
         ),
         CheckConstraint("expires_at > created_at", name="ck_factory_approvals_expiry"),
+        CheckConstraint("mailbox_requests BETWEEN 0 AND 10 AND mailbox_attempts BETWEEN 0 AND 5",
+                        name="ck_factory_approvals_mailbox_limits"),
+        CheckConstraint(
+            "(mailbox_code_hash IS NULL AND mailbox_challenge_id IS NULL AND mailbox_code_expires_at IS NULL "
+            "AND mailbox_requested_at IS NULL) OR (mailbox_code_hash IS NOT NULL AND mailbox_challenge_id IS NOT NULL "
+            "AND mailbox_code_expires_at IS NOT NULL AND mailbox_requested_at IS NOT NULL "
+            "AND mailbox_code_expires_at > mailbox_requested_at AND mailbox_requests > 0)",
+            name="ck_factory_approvals_mailbox_challenge"),
+        CheckConstraint("mailbox_verified_at IS NULL OR (confirmed_at IS NOT NULL "
+                        "AND mailbox_code_hash IS NOT NULL AND mailbox_verified_at = confirmed_at)",
+                        name="ck_factory_approvals_mailbox_verified"),
         CheckConstraint(
             "btrim(factory_name) <> '' AND btrim(recipient_name) <> '' AND btrim(recipient_email) <> ''",
             name="ck_factory_approvals_recipient",
@@ -60,3 +71,10 @@ class FactoryPriceApprovalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     revocation_reason: Mapped[str | None] = mapped_column(String(1000))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_name: Mapped[str | None] = mapped_column(String(160))
+    mailbox_challenge_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    mailbox_code_hash: Mapped[str | None] = mapped_column(String(64))
+    mailbox_code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mailbox_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mailbox_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    mailbox_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    mailbox_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -12,6 +12,7 @@ from app.modules.projects.infrastructure.models import ProjectORM
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
 from app.modules.rates.infrastructure.models import InstallerRateORM
 from app.shared.infrastructure.db.base import utcnow
+from factory_mailbox_helpers import TEST_CODE, mailbox_settings
 
 URL = "/api/v1/admin/price-lists"
 PUBLIC = "/api/v1/public/price-approvals"
@@ -28,8 +29,12 @@ def confirm_version(client, items, expected=0):
     token = urlsplit(issued.json()["confirmation_url"]).fragment
     preview = client.post(f"{PUBLIC}/preview", json={"token": token})
     assert preview.status_code == 200, preview.text
-    response = client.post(f"{PUBLIC}/confirm", json={"token": token, "expected_version": version["version"],
-        "snapshot_hash": preview.json()["snapshot_hash"], "signer_name": "QA Representative", "accepted": True})
+    with mailbox_settings():
+        requested = client.post(f"{PUBLIC}/request-code", json={"token": token})
+        assert requested.status_code == 200, requested.text
+        response = client.post(f"{PUBLIC}/confirm", json={"token": token, "expected_version": version["version"],
+            "snapshot_hash": preview.json()["snapshot_hash"], "signer_name": "QA Representative", "accepted": True,
+            "verification_code": TEST_CODE})
     assert response.status_code == 200, response.text
     return {"id": version["id"], "token": token, "receipt_id": issued.json()["invitation"]["id"]}
 
@@ -96,6 +101,9 @@ def test_exact_confirmed_snapshot_is_required(client, priced, db_session, tamper
 def test_expired_link_does_not_expire_the_recorded_decision(client, priced, db_session):
     receipt = db_session.get(FactoryPriceApprovalORM, UUID(priced["receipt_id"]))
     receipt.created_at, receipt.confirmed_at, receipt.expires_at = utcnow() - timedelta(days=3), utcnow() - timedelta(days=2), utcnow() - timedelta(days=1)
+    receipt.mailbox_verified_at = receipt.confirmed_at
+    receipt.mailbox_requested_at = receipt.confirmed_at - timedelta(minutes=1)
+    receipt.mailbox_code_expires_at = receipt.confirmed_at + timedelta(minutes=9)
     db_session.commit()
     assert check(client, priced)["status"] == "VERIFIED"
     assert client.post(f"{PUBLIC}/preview", json={"token": priced["token"]}).status_code == 404

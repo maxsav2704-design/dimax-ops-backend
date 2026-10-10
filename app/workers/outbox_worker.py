@@ -14,7 +14,9 @@ from app.modules.journal.infrastructure.repositories import JournalRepository
 from app.modules.outbox.domain.enums import OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.outbox.infrastructure.repositories import OutboxRepository
-from app.modules.rates.application.approval_email import KIND as FACTORY_INVITATION, UnavailableInvitation, deliver_invitation
+from app.modules.rates.application.approval_email import (
+    KIND as FACTORY_INVITATION, CODE_KIND as FACTORY_CODE, UnavailableInvitation, deliver_invitation, deliver_code,
+)
 from app.shared.infrastructure.db.session import SessionLocal
 from app.shared.infrastructure.observability import get_logger, log_event
 
@@ -83,6 +85,8 @@ def run_once(limit: int = 20) -> int:
 
                 if m.channel == OutboxChannel.EMAIL and payload.get("kind") == FACTORY_INVITATION:
                     deliver_invitation(m, email_sender)
+                elif m.channel == OutboxChannel.EMAIL and payload.get("kind") == FACTORY_CODE:
+                    deliver_code(m, email_sender)
                 elif m.channel == OutboxChannel.EMAIL:
                     attachment_path = None
                     object_key = payload.get("object_key")
@@ -160,7 +164,7 @@ def run_once(limit: int = 20) -> int:
 
             except Exception as e:
                 payload = m.payload if isinstance(m.payload, dict) else {}
-                factory_invitation = payload.get("kind") == FACTORY_INVITATION
+                factory_invitation = payload.get("kind") in {FACTORY_INVITATION, FACTORY_CODE}
                 err = "Factory invitation email could not be submitted" if factory_invitation else str(e)
                 if factory_invitation and isinstance(e, UnavailableInvitation):
                     err = "Factory invitation is unavailable; create a new invitation if needed"

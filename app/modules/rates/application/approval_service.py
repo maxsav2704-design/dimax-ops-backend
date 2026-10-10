@@ -15,6 +15,7 @@ from app.modules.rates.application.approval_dto import (
 )
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
 from app.modules.rates.application.approval_email import enqueue_invitation, validate_email_delivery
+from app.modules.rates.application.approval_verification import VerificationRejected, request_code, verify_code
 from app.shared.domain.errors import Conflict, NotFound
 from app.shared.infrastructure.db.base import utcnow
 
@@ -141,6 +142,7 @@ class FactoryPriceApprovalService:
             snapshot_hash=invitation.snapshot_hash, expires_at=invitation.expires_at,
             status="CONFIRMED" if invitation.confirmed_at else "PENDING",
             confirmed_at=invitation.confirmed_at, confirmed_name=invitation.confirmed_name,
+            mailbox_verified_at=invitation.mailbox_verified_at,
         )
 
     @classmethod
@@ -149,10 +151,17 @@ class FactoryPriceApprovalService:
         return cls._public(invitation)
 
     @classmethod
+    def request_code(cls, uow, *, token: str):
+        invitation, _, now = cls._resolve(uow, token)
+        return request_code(uow, invitation, token, now)
+
+    @classmethod
     def confirm(cls, uow, *, body: ConfirmApproval):
         invitation, price_list, now = cls._resolve(uow, body.token)
         if body.expected_version != price_list.version or not compare_digest(body.snapshot_hash, invitation.snapshot_hash):
             raise Conflict("Confirmation does not match the displayed price list")
+        if not verify_code(invitation, body.verification_code, now):
+            return VerificationRejected()
         if invitation.confirmed_at is not None:
             if body.signer_name != invitation.confirmed_name:
                 raise Conflict("This version already has an immutable factory decision")
@@ -160,6 +169,7 @@ class FactoryPriceApprovalService:
         if price_list.status != "DRAFT":
             raise Conflict("This price list cannot be confirmed")
         invitation.confirmed_at, invitation.confirmed_name = now, body.signer_name
+        invitation.mailbox_verified_at = now
         price_list.status = "CONFIRMED"
         # The external decision belongs to this recipient record, never to the issuing admin's user ID.
         return cls._public(invitation)

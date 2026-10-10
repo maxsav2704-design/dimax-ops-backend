@@ -13,13 +13,18 @@ from app.modules.rates.application.approval_service import FactoryPriceApprovalS
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
 from app.shared.infrastructure.db.base import utcnow
 from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
+from factory_mailbox_helpers import TEST_CODE, TEST_KEY, mailbox_settings
 
 ADMIN = "/api/v1/admin/price-lists"
 PUBLIC = "/api/v1/public/price-approvals"
 
 
 @pytest.fixture()
-def approval_case(client, make_door_type):
+def approval_case(client, make_door_type, monkeypatch):
+    from app.core.config import settings
+    from app.modules.rates.application.approval_email import email_settings
+    monkeypatch.setattr(settings, "EMAIL_ENABLED", True)
+    monkeypatch.setattr(email_settings, "FACTORY_APPROVAL_EMAIL_KEY", TEST_KEY)
     door_type = make_door_type(name="Entrance")
     draft = {"request_id": str(uuid4()), "expected_latest_version": 0, "reason": "Factory offer",
              "agreement_reference": "Offer 42", "items": [
@@ -43,8 +48,12 @@ def preview(client, case):
 def confirmation(client, case):
     response = preview(client, case)
     assert response.status_code == 200, response.text
+    with mailbox_settings():
+        requested = client.post(f"{PUBLIC}/request-code", json={"token": case["token"]})
+    assert requested.status_code == 200, requested.text
     return {"token": case["token"], "expected_version": response.json()["version"],
-            "snapshot_hash": response.json()["snapshot_hash"], "signer_name": "Test Representative", "accepted": True}
+            "snapshot_hash": response.json()["snapshot_hash"], "signer_name": "Test Representative", "accepted": True,
+            "verification_code": TEST_CODE}
 
 
 def test_public_confirmation_is_explicit_private_and_repeat_safe(client, client_raw, approval_case, db_session):

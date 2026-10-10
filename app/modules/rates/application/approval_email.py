@@ -17,6 +17,7 @@ from app.shared.domain.errors import Conflict, NotFound, ValidationError
 from app.shared.infrastructure.db.base import utcnow
 
 KIND = "FACTORY_PRICE_INVITATION"
+CODE_KIND = "FACTORY_PRICE_MAILBOX_CODE"
 
 
 class ApprovalEmailSettings(BaseSettings):
@@ -37,10 +38,14 @@ def _key() -> bytes:
         raise ValidationError("Factory invitation email encryption is not configured") from None
 
 
-def validate_email_delivery() -> str:
+def validate_mailbox_delivery() -> None:
     if not settings.EMAIL_ENABLED:
         raise ValidationError("Email delivery is disabled")
     _key()
+
+
+def validate_email_delivery() -> str:
+    validate_mailbox_delivery()
     base = settings.PUBLIC_APP_BASE_URL.rstrip("/")
     try:
         url = urlsplit(base)
@@ -75,8 +80,71 @@ def enqueue_invitation(uow, invitation, token: str, base: str) -> OutboxMessageO
     return message
 
 
+def enqueue_code(uow, invitation, token: str, code: str) -> OutboxMessageORM:
+    cipher = AES.new(_key(), AES.MODE_GCM)
+    cipher.update(f"{CODE_KIND}:{invitation.company_id}:{invitation.id}".encode())
+    ciphertext, tag = cipher.encrypt_and_digest(json.dumps({
+        "token": token, "code": code, "challenge_id": str(invitation.mailbox_challenge_id),
+    }).encode())
+    message = OutboxMessageORM(
+        company_id=invitation.company_id, channel=OutboxChannel.EMAIL, status=OutboxStatus.PENDING,
+        correlation_id=None, attempts=0, max_attempts=5, scheduled_at=utcnow(),
+        payload={"kind": CODE_KIND, "approval_id": str(invitation.id), "to_email": invitation.recipient_email,
+                 "subject": "DIMAX: price confirmation code", "body_text": "Factory mailbox verification",
+                 "sealed_code": base64.b64encode(cipher.nonce + tag + ciphertext).decode()},
+    )
+    uow.outbox.enqueue(message)
+    uow.session.flush()
+    return message
+
+
 class UnavailableInvitation(Exception):
     pass
+
+
+def deliver_code(message, sender) -> None:
+    from hmac import compare_digest
+    from app.modules.rates.application.approval_service import FactoryPriceApprovalService
+    from app.modules.rates.application.approval_verification import MAX_ATTEMPTS, code_digest
+    from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
+
+    validate_mailbox_delivery()
+    payload = message.payload
+    try:
+        sealed = base64.b64decode(payload["sealed_code"], validate=True)
+        cipher = AES.new(_key(), AES.MODE_GCM, nonce=sealed[:16])
+        cipher.update(f'{CODE_KIND}:{message.company_id}:{payload["approval_id"]}'.encode())
+        data = json.loads(cipher.decrypt_and_verify(sealed[32:], sealed[16:32]))
+        token, code, challenge_id = data["token"], data["code"], data["challenge_id"]
+    except (KeyError, ValueError, TypeError):
+        raise UnavailableInvitation("Invalid sealed verification code") from None
+    with SqlAlchemyUnitOfWork() as uow:
+        try:
+            invitation, _, now = FactoryPriceApprovalService._resolve(uow, token)
+        except (NotFound, Conflict):
+            raise UnavailableInvitation("Invitation is no longer pending") from None
+        if (invitation.company_id != message.company_id or str(invitation.id) != payload["approval_id"]
+                or invitation.recipient_email != payload["to_email"] or invitation.confirmed_at
+                or str(invitation.mailbox_challenge_id) != challenge_id
+                or invitation.mailbox_attempts >= MAX_ATTEMPTS
+                or not invitation.mailbox_code_expires_at or invitation.mailbox_code_expires_at <= now
+                or not compare_digest(code_digest(invitation, code), invitation.mailbox_code_hash or "")):
+            raise UnavailableInvitation("Verification code is no longer available")
+        # No invitation link in this message: forwarding the original link alone cannot confirm.
+        title = f'DIMAX: confirmation code for price list v{invitation.snapshot["version"]}'
+        body = (f'{invitation.recipient_name},\n\n{invitation.snapshot["company_name"]} / {invitation.factory_name}\n'
+                f'Agreement: {invitation.snapshot["agreement_reference"]}\n\n'
+                f'Confirmation code: {code}\nValid until: {invitation.mailbox_code_expires_at.isoformat()}\n\n'
+                'Enter this code only on the DIMAX price confirmation page you opened. Do not share it. '
+                'The code alone does not approve prices. If you did not request it, ignore this email.')
+        html = (f'<html><body style="font-family:Arial,sans-serif;color:#191919"><h1>DIMAX</h1>'
+                f'<h2>{escape(title)}</h2><p>{escape(invitation.snapshot["company_name"])} / '
+                f'{escape(invitation.factory_name)}</p><p>Agreement: {escape(invitation.snapshot["agreement_reference"])}</p>'
+                f'<p style="font-size:28px;font-weight:bold">{code}</p>'
+                f'<p>Valid until: {escape(invitation.mailbox_code_expires_at.isoformat())}</p>'
+                '<p>Do not share this code. Enter it only on the DIMAX price confirmation page you opened. '
+                'If you did not request it, ignore this email.</p></body></html>')
+        sender.send(to_email=invitation.recipient_email, subject=title, body_text=body, body_html=html)
 
 
 def deliver_invitation(message, sender) -> None:

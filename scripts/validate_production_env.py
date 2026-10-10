@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import re
 import sys
@@ -33,6 +34,7 @@ EXPLICIT_BOOLEAN_KEYS = (
 RUNTIME_REQUIRED_KEYS = (
     "DATABASE_URL",
     "JWT_SECRET",
+    "FACTORY_APPROVAL_EMAIL_KEY",
     "PUBLIC_BASE_URL",
     "PUBLIC_APP_BASE_URL",
     "CORS_ALLOW_ORIGINS",
@@ -345,6 +347,14 @@ def _validate_environment(
     jwt_secret = value_of(env, "JWT_SECRET")
     if len(jwt_secret) < 32 or has_placeholder_value(jwt_secret):
         errors.append("JWT_SECRET must be at least 32 characters and non-placeholder")
+
+    mailbox_key = value_of(env, "FACTORY_APPROVAL_EMAIL_KEY")
+    try:
+        decoded_key = base64.b64decode(mailbox_key, validate=True)
+        if len(decoded_key) != 32 or decoded_key == jwt_secret.encode() or mailbox_key == jwt_secret:
+            raise ValueError()
+    except ValueError:
+        errors.append("FACTORY_APPROVAL_EMAIL_KEY must encode 32 random bytes in base64 and be independent of JWT_SECRET")
 
     if include_release_metadata:
         admin_password = value_of(env, "SEED_ADMIN_PASSWORD")

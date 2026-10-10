@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import base64
 from pathlib import Path
 
 from scripts import validate_production_env
@@ -14,6 +15,7 @@ def _valid_env() -> dict[str, str]:
             "dimax?sslmode=require"
         ),
         "JWT_SECRET": "a" * 64,
+        "FACTORY_APPROVAL_EMAIL_KEY": base64.b64encode(bytes(range(32))).decode(),
         "SEED_ADMIN_EMAIL": "owner@dimax.co.il",
         "SEED_ADMIN_PASSWORD": "StrongAdminPass!2026",
         "PUBLIC_BASE_URL": "https://api.dimax.co.il",
@@ -42,6 +44,16 @@ def test_valid_production_environment_passes() -> None:
 
     assert errors == []
     assert warnings == []
+
+
+def test_mailbox_key_is_required_well_formed_and_separate_from_jwt() -> None:
+    for key in ("", "not-base64", base64.b64encode(b"short").decode(), "a" * 64):
+        env = {**_valid_env(), "FACTORY_APPROVAL_EMAIL_KEY": key}
+        for validate in (validate_production_env.validate_environment, validate_production_env.validate_runtime_environment):
+            errors, _ = validate(env)
+            assert any("FACTORY_APPROVAL_EMAIL_KEY" in error for error in errors)
+    env = {**_valid_env(), "JWT_SECRET": "b" * 32, "FACTORY_APPROVAL_EMAIL_KEY": base64.b64encode(b"b" * 32).decode()}
+    assert any("FACTORY_APPROVAL_EMAIL_KEY" in error for error in validate_production_env.validate_environment(env)[0])
 
 
 def test_database_requires_tls() -> None:

@@ -24,6 +24,7 @@ from app.modules.rates.infrastructure.timeline_models import FactoryPriceActivat
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.shared.infrastructure.db.base import utcnow
 from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
+from factory_mailbox_helpers import TEST_CODE, mailbox_settings
 
 
 def confirmed(company_id, actor, items, expected=0, *, confirm=True):
@@ -36,12 +37,13 @@ def confirmed(company_id, actor, items, expected=0, *, confirm=True):
             issued = FactoryPriceApprovalService.issue(uow, company_id=company_id, actor_user_id=actor,
                 price_list_id=version.id, body=IssueApproval(factory_name="QA Factory",
                     recipient_name="QA Representative", recipient_email="qa@example.com"))
-        with SqlAlchemyUnitOfWork() as uow:
+        with mailbox_settings(), SqlAlchemyUnitOfWork() as uow:
             token = issued.confirmation_url.split("#")[1]
             preview = FactoryPriceApprovalService.preview(uow, token=token)
+            FactoryPriceApprovalService.request_code(uow, token=token)
             FactoryPriceApprovalService.confirm(uow, body=ConfirmApproval(token=token,
                 expected_version=version.version, snapshot_hash=preview.snapshot_hash,
-                signer_name="QA Representative", accepted=True))
+                signer_name="QA Representative", accepted=True, verification_code=TEST_CODE))
     return version
 
 
@@ -261,6 +263,9 @@ def test_historical_quote_requires_unchanged_evidence(book, company_id, admin_us
 def test_expired_link_and_catalog_rename_do_not_reprice_historical_work(book, company_id, admin_user, db_session):
     receipt = db_session.scalar(select(FactoryPriceApprovalORM).where(FactoryPriceApprovalORM.price_list_id == book[3].id))
     receipt.created_at, receipt.confirmed_at, receipt.expires_at = utcnow() - timedelta(days=3), utcnow() - timedelta(days=2), utcnow() - timedelta(days=1)
+    receipt.mailbox_verified_at = receipt.confirmed_at
+    receipt.mailbox_requested_at = receipt.confirmed_at - timedelta(minutes=1)
+    receipt.mailbox_code_expires_at = receipt.confirmed_at + timedelta(minutes=9)
     db_session.commit()
     at = transition(company_id, admin_user.id, book[3]).effective_from
     book[1].name, book[1].unit = "New catalog name", "hour"

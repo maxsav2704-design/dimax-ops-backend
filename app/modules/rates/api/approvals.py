@@ -6,10 +6,12 @@ from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates, get_uow, r
 from app.api.v1.rate_limit import rate_limit_factory_prices
 from app.modules.rates.application.approval_dto import (
     ApprovalPage, ApprovalSummary, ConfirmApproval, IssueApproval, IssuedApproval,
-    PreviewApproval, PublicApproval,
+    PreviewApproval, PublicApproval, RequestedApprovalCode,
 )
 from app.modules.rates.application.approval_service import FactoryPriceApprovalService
 from app.modules.rates.application.price_list_dto import CancelPriceList
+from app.modules.rates.application.approval_verification import VerificationRejected
+from app.shared.domain.errors import Forbidden
 
 admin_router = APIRouter(prefix="/admin/price-lists", tags=["Admin / Factory price lists"])
 public_router = APIRouter(prefix="/public/price-approvals", tags=["Public / Factory prices"],
@@ -55,4 +57,14 @@ def preview_approval(body: PreviewApproval, response: Response, uow=Depends(get_
 def confirm_approval(body: ConfirmApproval, response: Response, uow=Depends(get_uow)):
     response.headers["Cache-Control"] = "no-store"
     with uow:
-        return FactoryPriceApprovalService.confirm(uow, body=body)
+        result = FactoryPriceApprovalService.confirm(uow, body=body)
+    if isinstance(result, VerificationRejected):
+        raise Forbidden("A valid mailbox code is required; request a new invitation if the attempt limit was reached")
+    return result
+
+
+@public_router.post("/request-code", response_model=RequestedApprovalCode)
+def request_approval_code(body: PreviewApproval, response: Response, uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return FactoryPriceApprovalService.request_code(uow, token=body.token)

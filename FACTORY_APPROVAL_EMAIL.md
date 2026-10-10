@@ -20,8 +20,42 @@ and not factory-confirmed. No price is activated by sending or opening email.
   application without changing unrelated configuration.
 - Run the existing outbox worker. API requests do not call SMTP synchronously.
 - Keep the same key while invitations await delivery. Replacing the key makes
-  queued ciphertext unreadable; drain the queue or deliberately revoke/reissue
+  queued ciphertext unreadable and invalidates outstanding mailbox codes. Drain
+  the queue and revoke/reissue pending verification invitations before rotation;
+  do not rotate with pending code challenges. Deliberately revoke/reissue
   affected invitations before rotation. Do not recover links from public logs.
+
+## Mailbox Verification
+
+New confirmations require a six-digit code requested explicitly using
+`POST /api/v1/public/price-approvals/request-code` with the invitation token.
+The code goes only to the invitation's stored recipient, never an address from
+the public request. The response means QUEUED, not delivered, and has expiry and
+resend timestamps. No code or full recipient address is returned to the browser.
+
+`POST /confirm` now requires a valid `verification_code` in addition to the
+existing version, snapshot, name and explicit consent. Missing/wrong/expired
+codes return 403 without approving prices. Deploy the API and approval page
+together. There is no production or development bypass for legacy clients.
+
+Codes live for at most ten minutes (never beyond invitation expiry). The shared
+database/company lock enforces sixty seconds between requests, ten requests and
+five wrong attempts per invitation, across processes. Resending invalidates the
+old challenge, not the attempt counter. Failed attempts commit before returning
+403. Request limits require an admin to verify the contact and issue a new link.
+
+The database stores a keyed HMAC bound to tenant, invitation, recipient, snapshot
+and challenge. The outbox stores an AES-GCM sealed token/code/challenge with a
+different payload kind. Workers reject old, expired, revoked, locked, altered or
+cross-tenant challenges; generic previews and SMTP errors never expose the code.
+Code messages contain no invitation link. API and worker must share the key.
+
+The new `mailbox_verified_at` is recorded atomically with the factory decision.
+Existing decisions remain unchanged with NULL evidence, including their past
+earnings. Exact confirmation retries remain idempotent after code expiry while
+the invitation itself is valid; preview can recover an ambiguous result.
+Migration 0069 refuses rollback after any challenge request, protecting evidence
+and attempt budgets. Never roll an active API back to link-only confirmation.
 
 ## Delivery and Recovery
 
@@ -51,9 +85,10 @@ separate workflows.
 
 ## Remaining Security and Release Gates
 
-Possession of the link still authorizes confirmation. Email delivery does not
-verify the representative's identity; mailbox OTP/account verification is a
-separate required review before external rollout. Public HTTPS/DNS, real SMTP
+Possession of the link reveals the proposed prices but no longer authorizes a
+new confirmation on its own. A code verifies control of the named mailbox, not
+legal identity, signing authority or a certified electronic signature. Admins
+must independently check that the contact represents the factory. Public HTTPS/DNS, real SMTP
 delivery, sender authentication and recipient contact verification must be
 accepted before production use. No production credentials are created here.
 

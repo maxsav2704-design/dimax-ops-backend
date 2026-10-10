@@ -34,6 +34,7 @@ class ApprovalSummary(BaseModel):
     revocation_reason: str | None
     confirmed_at: datetime | None
     confirmed_name: str | None
+    mailbox_verified_at: datetime | None
 
 
 class IssuedApproval(BaseModel):
@@ -57,6 +58,7 @@ class ConfirmApproval(PreviewApproval):
     snapshot_hash: Digest
     signer_name: Name
     accepted: StrictBool
+    verification_code: Annotated[str, StringConstraints(pattern=r"^[0-9]{6}$", min_length=6, max_length=6)] | None = None
 
     @field_validator("accepted")
     @classmethod
@@ -71,6 +73,12 @@ class PublicApprovalLine(BaseModel):
     name: str
     unit: str
     installer_price: Decimal
+
+
+class RequestedApprovalCode(BaseModel):
+    status: Literal["QUEUED"] = "QUEUED"
+    expires_at: datetime
+    resend_after: datetime
 
 
 class PublicApproval(BaseModel):
@@ -88,3 +96,4 @@ class PublicApproval(BaseModel):
     confirmed_at: datetime | None
     confirmed_name: str | None
     affects_earnings: Literal[False] = False
+    mailbox_verified_at: datetime | None = None
