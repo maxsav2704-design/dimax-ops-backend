@@ -1,7 +1,7 @@
 from uuid import UUID
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates, get_uow, require_admin
 from app.modules.rates.application.price_list_dto import (
@@ -10,7 +10,7 @@ from app.modules.rates.application.price_list_dto import (
 from app.modules.rates.application.price_lists_service import FactoryPriceListsService
 from app.modules.rates.application.reconciliation_dto import ReconciliationPage
 from app.modules.rates.application.reconciliation_service import FactoryPriceReconciliationService
-from app.modules.rates.application.timeline_dto import CompanyPricingState
+from app.modules.rates.application.timeline_dto import ActivatePriceVersion, CompanyPricingState, EffectivePriceVersion
 from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
 
 router = APIRouter(prefix="/admin/price-lists", tags=["Admin / Factory price lists"])
@@ -80,3 +80,15 @@ def cancel_price_list(
         ensure_admin_can_view_rates(uow, user)
         return FactoryPriceListsService.cancel(uow, company_id=user.company_id, actor_user_id=user.id,
                                                price_list_id=price_list_id, reason=body.reason)
+
+
+@router.post("/{price_list_id}/activate", response_model=EffectivePriceVersion)
+def activate_price_list(
+    price_list_id: UUID, body: ActivatePriceVersion, response: Response,
+    user: CurrentUser = Depends(require_admin), uow=Depends(get_uow),
+):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        return FactoryPriceTimelineService.activate(uow, company_id=user.company_id, actor_user_id=user.id,
+                                                    price_list_id=price_list_id, body=body)

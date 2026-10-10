@@ -16,7 +16,7 @@ from app.shared.infrastructure.db.base import utcnow
 
 
 class FactoryPriceTimelineService:
-    """Price timeline and installer read model; activation stays internal pending rollout checks."""
+    """Reviewed company-wide transitions and execution-time price selection."""
 
     @classmethod
     def company_state(cls, uow, *, company_id: UUID) -> CompanyPricingState:

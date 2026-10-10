@@ -79,13 +79,26 @@ Expected contract:
 
 ## Factory Price Authority (Open)
 
+Current reviewed-activation update (October 10): an authorized OWNER/OPERATIONS
+with rate access can call `POST /api/v1/admin/price-lists/{id}/activate` after
+reviewing reconciliation. The admin UI exposes an explicit company-wide
+transition with a reason, observed active version and consent. The service
+serializes/rechecks prerequisites and records an idempotent, audited activation
+at server time. New transitions reject confirmations without mailbox evidence;
+already effective historical receipts and earnings remain readable and unchanged.
+No new schema is needed beyond migrations 0065/0069. See
+`FACTORY_PRICE_ACTIVATION.md` for the rollout and recovery contract. The older
+"internal only" checkpoint below is superseded, not a current API limitation.
+Native-device acceptance, actual factory delivery and production rollout are
+still separate gates; UI/API availability is not production approval.
+
 Current mailbox-verification update (October 10): new decisions additionally
 require an emailed one-time code; migration 0069 preserves legacy decisions
 without inventing verification evidence. Production env validation now requires
 an independent `FACTORY_APPROVAL_EMAIL_KEY`. Deploy the API, worker and public
 approval page together. See `FACTORY_APPROVAL_EMAIL.md` for limits, key rotation
 and recovery. This closes the link-only confirmation gap, not the price
-activation E2E or external delivery gates below. Earlier dated notes describe
+external delivery gates below. Earlier dated notes describe
 their original checkpoints.
 
 The October 2 business requirement is not yet a release PASS. Migration 0063 and

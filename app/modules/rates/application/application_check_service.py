@@ -21,6 +21,9 @@ class FactoryPriceApplicationCheckService:
         elif (receipt.confirmed_at < receipt.created_at or receipt.confirmed_at > at
               or not approval_snapshot_matches(uow, price_list, receipt)):
             block("CONFIRMATION_MISMATCH")
+        elif receipt.mailbox_verified_at is None:
+            # New transitions require verified evidence; historic quotes keep their original receipt.
+            block("MAILBOX_NOT_VERIFIED")
         # An expired sharing link does not undo an already recorded factory decision.
         latest = uow.price_lists.latest_confirmed_version(price_list.company_id)
         if price_list.status == "CONFIRMED" and price_list.version < latest:
