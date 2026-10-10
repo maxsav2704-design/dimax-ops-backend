@@ -14,6 +14,10 @@
 - `MINIO_SECURE=true` in production.
 - `EMAIL_ENABLED`, `WHATSAPP_ENABLED`, `WHATSAPP_FALLBACK_TO_EMAIL`, and `TWILIO_WEBHOOK_VALIDATE` are set explicitly.
 - `EMAIL_ENABLED=true`; SMTP points to a real provider, TLS is enabled, and `SMTP_FROM` is a real address. Signed journal PDF delivery is a required production workflow.
+- API and outbox worker share the same protected `FACTORY_APPROVAL_EMAIL_KEY`.
+  The key is backed up separately from DB dumps and not rotated with pending
+  invitations/code challenges. Worker health and pending/failed queue monitoring
+  are checked independently; SMTP SENT does not prove recipient receipt.
 - If `WHATSAPP_ENABLED=true`, configure the complete Twilio set and signature validation, or explicitly enable email fallback with working SMTP.
 - Empty `OUTBOX_WEBHOOK_TOKEN` disables the generic provider webhook. Enabling it requires a random token of at least 32 characters.
 

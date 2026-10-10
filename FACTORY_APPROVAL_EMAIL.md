@@ -19,6 +19,15 @@ and not factory-confirmed. No price is activated by sending or opening email.
   is supplied. The rates email settings read the same `.env` convention as the
   application without changing unrelated configuration.
 - Run the existing outbox worker. API requests do not call SMTP synchronously.
+- The production compose supervises the worker with `restart: unless-stopped`
+  and `python -m app.workers.outbox_health`. The marker is refreshed only after
+  a queue pass commits, including an empty pass. The probe rejects missing,
+  malformed, stale, future or dead-process markers. The ten-minute freshness
+  window accommodates a batch of twenty SMTP operations; it is not an email
+  delivery deadline. Alert on unhealthy status: Docker restart policy restarts
+  exited processes, not a live process that merely reports unhealthy. Inspect
+  queue failures and pending age separately; a healthy worker can still have
+  SMTP/provider failures.
 - Keep the same key while invitations await delivery. Replacing the key makes
   queued ciphertext unreadable and invalidates outstanding mailbox codes. Drain
   the queue and revoke/reissue pending verification invitations before rotation;
@@ -92,5 +101,45 @@ must independently check that the contact represents the factory. Public HTTPS/D
 delivery, sender authentication and recipient contact verification must be
 accepted before production use. No production credentials are created here.
 
-Tests use only `dimax_acceptance_tests`; the opt-in `DIMAX_FACTORY_MAILPIT=1`
+Integration tests use only `dimax_acceptance_tests`; the opt-in `DIMAX_FACTORY_MAILPIT=1`
 case asserts the Mailpit SMTP host/port and removes only its own test message.
+
+## Local Process-Level Acceptance
+
+The workspace `docker-compose.acceptance.delivery.yml` is an opt-in overlay for
+local Mailpit capture, not production SMTP. From the workspace root, using
+PowerShell 7:
+
+```powershell
+.\scripts\prepare-acceptance-mail.ps1
+docker compose -f docker-compose.acceptance.yml -f docker-compose.acceptance.delivery.yml --profile delivery up -d --wait api outbox-worker
+$env:DIMAX_FACTORY_DELIVERY_CHECK = '1'
+node --test scripts/factory-delivery.test.mjs
+```
+
+Before enabling the main local worker, inspect any existing acceptance outbox:
+enabling the worker processes all eligible messages in that local database.
+The preparation script creates a random 32-byte key in the ignored
+`acceptance/.factory-mail/shared.env`, restricts access to the current Windows
+user and SYSTEM, rejects reparse paths, reuses an existing valid key and refuses
+to replace an invalid key automatically. API and worker mount the same file
+read-only; the key is not emitted, committed or placed in Docker command-line
+arguments. Do not delete this directory as cache: existing queued mail and
+verification challenges depend on it. Back up the key in an approved secret
+store separately from database dumps.
+
+The opt-in process test uses its own `dimax_factory_delivery_<random>` database,
+migrations from zero, labeled disposable API/worker containers and Mailpit-only
+SMTP. It logs in through real HTTP, queues an invitation, extracts the link from
+the captured multipart email, queues a real random code with the worker stopped,
+restarts API/worker and confirms the exact version using the delivered code.
+It verifies replay safety, no activation/earnings and an unchanged main ledger.
+It stops its worker and removes only its messages, containers and database.
+Transient authentication state lives only in the disposable container's `/tmp`.
+No mocked sender, fixed verification code or authentication bypass is used.
+
+The reserved HTTPS name `factory.example.test` exists only in these disposable
+test containers. Requests use the internal API; this proves the process/SMTP
+chain, not public DNS/TLS reachability or actual mailbox receipt. The normal
+localhost acceptance UI retains its production-style HTTPS invitation guard.
+It is intentionally unable to email a localhost invitation to a real factory.

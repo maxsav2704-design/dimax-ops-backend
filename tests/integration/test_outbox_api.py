@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import pytest
+
 from app.core.config import settings
 from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
@@ -15,6 +17,13 @@ from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, Outbo
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
+
+
+@pytest.fixture()
+def enabled_queue_channels(monkeypatch):
+    # These tests enqueue only; no delivery worker or external provider is started.
+    monkeypatch.setattr(settings, "EMAIL_ENABLED", True)
+    monkeypatch.setattr(settings, "WHATSAPP_ENABLED", True)
 
 
 def _login(client_raw, *, company_id: str, email: str, password: str) -> str:
@@ -75,7 +84,7 @@ def _create_journal(client_admin_real_uow, *, project_id: uuid.UUID) -> str:
     return resp.json()["id"]
 
 
-def test_outbox_admin_list_and_get(client_admin_real_uow, db_session, company_id):
+def test_outbox_admin_list_and_get(client_admin_real_uow, db_session, company_id, enabled_queue_channels):
     project = _create_project(
         db_session,
         company_id=company_id,
@@ -122,6 +131,7 @@ def test_outbox_admin_filters_and_summary(
     client_admin_real_uow,
     db_session,
     company_id,
+    enabled_queue_channels,
 ):
     project = _create_project(
         db_session,
@@ -346,6 +356,7 @@ def test_outbox_admin_bulk_retry_and_retry_audits(
     client_admin_real_uow,
     db_session,
     company_id,
+    enabled_queue_channels,
     admin_user,
 ):
     project = _create_project(

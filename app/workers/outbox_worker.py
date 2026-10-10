@@ -19,6 +19,7 @@ from app.modules.rates.application.approval_email import (
 )
 from app.shared.infrastructure.db.session import SessionLocal
 from app.shared.infrastructure.observability import get_logger, log_event
+from app.workers.outbox_health import record_heartbeat
 
 
 email_sender = SmtpEmailSender()
@@ -238,6 +239,7 @@ def run_once(limit: int = 20) -> int:
 def main() -> None:
     while True:
         processed = run_once(limit=20)
+        record_heartbeat()
         time.sleep(1 if processed > 0 else 3)
 
 

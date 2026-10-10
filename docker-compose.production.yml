@@ -76,6 +76,13 @@ services:
   outbox-worker:
     <<: *backend-service
     command: python -m app.workers.outbox_worker
+    stop_grace_period: 60s
+    healthcheck:
+      test: [CMD, python, -m, app.workers.outbox_health]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
     depends_on:
       api:
         condition: service_healthy
