@@ -212,6 +212,23 @@ jobs:
           -e DIMAX_LEGACY_MIGRATION_SMOKE=1
           api python scripts/db_legacy_product_library_migration_smoke.py
 
+      - name: Create isolated offline-evidence migration database
+        id: offline-evidence-db
+        run: docker compose exec -T db createdb -U postgres dimax_offline_evidence_migration_tests
+
+      - name: Historical offline evidence migration and rollback guards
+        run: >
+          docker compose run --rm --no-deps
+          -e APP_ENV=test
+          -e DIMAX_OFFLINE_EVIDENCE_MIGRATION=1
+          -e DATABASE_URL=postgresql+psycopg2://postgres:postgres@db:5432/dimax_offline_evidence_migration_tests
+          -e "PGOPTIONS=-c statement_timeout=30000 -c lock_timeout=5000"
+          api python -m scripts.db_offline_evidence_migration_smoke
+
+      - name: Remove owned offline-evidence migration database
+        if: always() && steps.offline-evidence-db.outcome == 'success'
+        run: docker compose exec -T db dropdb -U postgres dimax_offline_evidence_migration_tests
+
       - name: Teardown
         if: always()
         run: docker compose down -v
