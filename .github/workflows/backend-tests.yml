@@ -175,6 +175,7 @@ jobs:
           tests/integration/test_factory_price_activation_api.py
           tests/integration/test_factory_price_review.py
           tests/integration/test_price_conflict_resolution.py
+          tests/integration/test_work_price_proposals.py
 
       - name: Run integration tests
         run: >

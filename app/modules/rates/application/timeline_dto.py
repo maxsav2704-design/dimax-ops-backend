@@ -65,15 +65,20 @@ class FactoryPriceQuote(FactoryWorkPriceContext):
     rate: Decimal
 
     def amount(self, quantity: Decimal) -> Decimal:
-        try:
-            quantity = Decimal(str(quantity))
-            if not quantity.is_finite() or not 0 < quantity <= Decimal("9999999999.99") or quantity != quantity.quantize(Decimal("0.01")):
-                raise ValueError
-            if self.kind == "DOOR" and quantity != 1:
-                raise ValueError
-            amount = (quantity * self.rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            if not 0 < amount <= Decimal("9999999999.99"):
-                raise ValueError
-            return amount
-        except (InvalidOperation, ValueError, TypeError):
-            raise ValidationError("Invalid quantity or resulting factory work amount", field="quantity") from None
+        return work_price_amount(self.kind, self.rate, quantity)
+
+
+def work_price_amount(kind: str, rate: Decimal, quantity: Decimal) -> Decimal:
+    """Same decimal limits and rounding for a price quote and a proposed work price."""
+    try:
+        quantity = Decimal(str(quantity))
+        if not quantity.is_finite() or not 0 < quantity <= Decimal("9999999999.99") or quantity != quantity.quantize(Decimal("0.01")):
+            raise ValueError
+        if kind not in ("DOOR", "ADDON") or (kind == "DOOR" and quantity != 1):
+            raise ValueError
+        amount = (quantity * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if not 0 < amount <= Decimal("9999999999.99"):
+            raise ValueError
+        return amount
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValidationError("Invalid quantity or resulting factory work amount", field="quantity") from None

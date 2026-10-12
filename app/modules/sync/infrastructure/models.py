@@ -222,3 +222,34 @@ class SyncPriceResolutionORM(Base, UUIDPrimaryKeyMixin):
     quote_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class WorkPriceProposalORM(Base, UUIDPrimaryKeyMixin):
+    __tablename__ = "work_price_proposals"
+    __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_work_price_proposal_tenant"),
+        UniqueConstraint("company_id", "request_id", name="uq_work_price_proposal_request"),
+        UniqueConstraint("company_id", "sync_event_id", "version", name="uq_work_price_proposal_event_version"),
+        UniqueConstraint("company_id", "sync_queue_item_id", "version", name="uq_work_price_proposal_queue_version"),
+        ForeignKeyConstraint(["company_id", "sync_event_id"], ["sync_events.company_id", "sync_events.id"],
+                             ondelete="RESTRICT", name="fk_work_price_proposal_event"),
+        ForeignKeyConstraint(["company_id", "sync_queue_item_id"], ["sync_queue_items.company_id", "sync_queue_items.id"],
+                             ondelete="RESTRICT", name="fk_work_price_proposal_queue"),
+        CheckConstraint("(sync_event_id IS NULL) <> (sync_queue_item_id IS NULL)", name="ck_work_price_proposal_source"),
+        CheckConstraint("version > 0 AND rate > 0 AND amount > 0", name="ck_work_price_proposal_values"),
+        CheckConstraint("length(request_fingerprint) = 64 AND length(snapshot_hash) = 64",
+                        name="ck_work_price_proposal_hashes"),
+    )
+
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    sync_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    sync_queue_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)

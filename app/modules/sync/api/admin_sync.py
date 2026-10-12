@@ -10,6 +10,10 @@ from app.modules.sync.application.price_review_dto import ExecutionTimeCorrectio
 from app.modules.sync.application.price_review_service import PriceConflictReviewService
 from app.modules.sync.application.price_review_dto import PriceConflictResolution, ResolvePriceConflict
 from app.modules.sync.application.price_resolution_service import PriceConflictResolutionService
+from app.modules.sync.application.work_price_proposal_dto import (
+    CreateWorkPriceProposal, ReviewWorkPriceProposal, WorkPriceProposal, WorkPriceProposalReview,
+)
+from app.modules.sync.application.work_price_proposal_service import WorkPriceProposalService
 from app.modules.sync.api.admin_schemas import (
     SyncProblemsResponseDTO,
     SyncResetLegacyResponse,
@@ -98,6 +102,28 @@ def resolve_price_conflict(
     with uow:
         ensure_admin_can_view_rates(uow, admin)
         return PriceConflictResolutionService.resolve(uow, company_id=admin.company_id,
+            actor_user_id=admin.id, source=source, item_id=item_id, body=body)
+
+
+@router.post("/price-conflicts/{source}/{item_id}/work-price-proposals/review", response_model=WorkPriceProposalReview)
+def review_work_price_proposal(
+    source: PriceConflictSource, item_id: UUID, body: ReviewWorkPriceProposal,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin),
+) -> WorkPriceProposalReview:
+    with uow:
+        ensure_admin_can_view_rates(uow, admin)
+        return WorkPriceProposalService.review(uow, company_id=admin.company_id,
+            actor_user_id=admin.id, source=source, item_id=item_id, body=body)
+
+
+@router.post("/price-conflicts/{source}/{item_id}/work-price-proposals", response_model=WorkPriceProposal)
+def create_work_price_proposal(
+    source: PriceConflictSource, item_id: UUID, body: CreateWorkPriceProposal,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin),
+) -> WorkPriceProposal:
+    with uow:
+        ensure_admin_can_view_rates(uow, admin)
+        return WorkPriceProposalService.create(uow, company_id=admin.company_id,
             actor_user_id=admin.id, source=source, item_id=item_id, body=body)
 
 
