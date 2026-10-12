@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -51,3 +51,19 @@ def test_empty_disposable_database_is_accepted():
     connection = Mock()
     connection.execute.side_effect = [Mock(scalar_one=lambda: smoke.DATABASE), Mock(scalar_one=lambda: False)]
     smoke._require_empty_database(connection)
+
+
+def test_history_fixture_accepts_named_rows_and_seeds_both_sync_protocols():
+    tables = {name: Mock(c={"created_at", "updated_at"}) for name in (
+        "companies", "users", "installers", "door_types", "projects", "doors",
+        "completed_work", "client_price_snapshots", "sync_events", "sync_queue_items",
+    )}
+    fixtures = smoke._seed_history(MagicMock(), tables)
+    assert len(fixtures) == 2
+    assert fixtures[0]["door_values"]["company_id"] != fixtures[1]["door_values"]["company_id"]
+    companies = tables["companies"].insert.return_value.values.call_args_list
+    assert [call.kwargs["name"] for call in companies] == ["Offline migration QA A", "Offline migration QA B"]
+    for name in ("sync_events", "sync_queue_items"):
+        rows = tables[name].insert.return_value.values.call_args_list
+        assert len(rows) == 8
+        assert all("client_time_has_timezone" not in call.kwargs for call in rows)

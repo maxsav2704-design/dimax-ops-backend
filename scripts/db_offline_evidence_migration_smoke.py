@@ -76,8 +76,8 @@ def _seed_history(engine, tables):
     at = datetime.now(timezone.utc) - timedelta(days=3)
     fixtures = []
     with engine.begin() as connection:
-        def insert(name, **values):
-            table = tables[name]
+        def insert(table_name, /, **values):
+            table = tables[table_name]
             row = {"id": uuid4(), **values}
             for column in ("created_at", "updated_at"):
                 if column in table.c:
