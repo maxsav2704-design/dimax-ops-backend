@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
 from app.modules.earnings.application.execution_authority import ExecutionAuthority
-from app.modules.sync.application.price_review_dto import PriceConflictReview, PriceConflictSource
+from app.modules.sync.application.price_review_dto import ExecutionTimeCorrection, PriceConflictReview, PriceConflictSource
 from app.shared.domain.errors import Conflict, NotFound, ValidationError
 
 
@@ -49,7 +49,8 @@ class PriceConflictReviewService:
 
     @staticmethod
     def get(uow, *, company_id: UUID, source: PriceConflictSource, item_id: UUID,
-            lock_assignments: bool = False) -> PriceConflictReview:
+            lock_assignments: bool = False,
+            execution_correction: ExecutionTimeCorrection | None = None) -> PriceConflictReview:
         row, installer, operation = PriceConflictReviewService.pending(
             uow, company_id=company_id, source=source, item_id=item_id)
         project = uow.projects.get(company_id=company_id, project_id=row.project_id) if row.project_id else None
@@ -98,24 +99,33 @@ class PriceConflictReviewService:
         if target_id is None or project is None:
             result.analysis_code = "WORK_UNAVAILABLE"
             return result
-        if result.performed_at is None:
-            result.analysis_code = "MISSING_EXECUTION_TIME"
-            return result
         evidence = ExecutionAuthority.inspect(uow, company_id=company_id, project_id=row.project_id,
             installer_id=installer.id if installer else None, door_id=door_id,
             performed_at=result.performed_at, received_at=result.received_at,
             has_timezone=row.client_time_has_timezone, lock_assignments=lock_assignments)
+        result.time_correction_available = evidence.reason in {"MISSING_EXECUTION_TIME", "INVALID_EXECUTION_TIME"}
+        performed_at = result.performed_at
+        if execution_correction is not None:
+            if not result.time_correction_available:
+                raise Conflict("Only missing or invalid execution time can be corrected", field="execution_correction")
+            # A separate decision candidate; never change the retained device command.
+            result.execution_correction = execution_correction
+            performed_at = execution_correction.performed_at
+            evidence = ExecutionAuthority.inspect(uow, company_id=company_id, project_id=row.project_id,
+                installer_id=installer.id if installer else None, door_id=door_id,
+                performed_at=performed_at, received_at=result.received_at,
+                has_timezone=True, lock_assignments=lock_assignments)
         work_context["assignment_started_at"] = (
             evidence.assignment_started_at.isoformat() if evidence.assignment_started_at else None)
         if evidence.reason and not evidence.reviewable:
             result.analysis_code = evidence.reason
             return result
-        result.requires_execution_evidence = evidence.reviewable
+        result.requires_execution_evidence = evidence.reviewable or execution_correction is not None
         # Compare independently of the device version. Resolution must revalidate under locks.
         try:
             quote = FactoryPriceTimelineService.quote(uow, company_id=company_id, kind=result.work_kind,
-                target_id=target_id, performed_at=result.performed_at,
-                legacy_queue="price_list_id" not in payload and (evidence.legacy_queue or evidence.reviewable))
+                target_id=target_id, performed_at=performed_at,
+                legacy_queue="price_list_id" not in payload and (evidence.legacy_queue or result.requires_execution_evidence))
         except ValidationError:
             result.analysis_code = "INVALID_EXECUTION_TIME"
             return result
@@ -141,11 +151,13 @@ class PriceConflictReviewService:
         proven_legacy = evidence.legacy_queue and quote.selection == "FIRST_CONFIRMED_LEGACY"
         if evidence.reviewable:
             result.analysis_code = evidence.reason
-        if ((ordinary_mismatch or evidence.reviewable or proven_legacy) and installer is not None and version_known
+        if execution_correction is not None:
+            result.analysis_code = "EXECUTION_TIME_CORRECTION"
+        if ((ordinary_mismatch or result.requires_execution_evidence or proven_legacy) and installer is not None and version_known
                 and result.seen_version_status in ("MISSING", "AVAILABLE")):
             if seen_list is not None:
                 try:
-                    FactoryPriceTimelineService._receipt(uow, seen_list, at=result.performed_at)
+                    FactoryPriceTimelineService._receipt(uow, seen_list, at=performed_at)
                 except Conflict:
                     return result
                 seen_item = next((item for item in uow.price_lists.items(company_id, seen_list.id)
@@ -156,6 +168,7 @@ class PriceConflictReviewService:
             result.resolution_available = True
             result.review_token = hashlib.sha256(json.dumps({
                 "original": PriceConflictReviewService.original(row, source), "work": work_context,
-                "review": result.model_dump(mode="json", exclude={"review_token"}),
+                "review": result.model_dump(mode="json", exclude={"review_token", "time_correction_available", "execution_correction"}),
+                **({"execution_correction": execution_correction.model_dump(mode="json")} if execution_correction else {}),
             }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return result

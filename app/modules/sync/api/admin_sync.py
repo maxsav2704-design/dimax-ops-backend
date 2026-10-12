@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_uow, require_admin
 from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates
-from app.modules.sync.application.price_review_dto import PriceConflictReview, PriceConflictSource
+from app.modules.sync.application.price_review_dto import ExecutionTimeCorrection, PriceConflictReview, PriceConflictSource
 from app.modules.sync.application.price_review_service import PriceConflictReviewService
 from app.modules.sync.application.price_review_dto import PriceConflictResolution, ResolvePriceConflict
 from app.modules.sync.application.price_resolution_service import PriceConflictResolutionService
@@ -76,6 +76,18 @@ def review_price_conflict(
     with uow:
         ensure_admin_can_view_rates(uow, admin)
         return PriceConflictReviewService.get(uow, company_id=admin.company_id, source=source, item_id=item_id)
+
+
+@router.post("/price-conflicts/{source}/{item_id}/execution-review", response_model=PriceConflictReview)
+def review_execution_correction(
+    source: PriceConflictSource, item_id: UUID, body: ExecutionTimeCorrection,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin),
+) -> PriceConflictReview:
+    with uow:
+        ensure_admin_can_view_rates(uow, admin)
+        PriceConflictResolutionService.require_authority(uow, admin.company_id, admin.id)
+        return PriceConflictReviewService.get(uow, company_id=admin.company_id, source=source,
+            item_id=item_id, execution_correction=body)
 
 
 @router.post("/price-conflicts/{source}/{item_id}/resolve", response_model=PriceConflictResolution)
