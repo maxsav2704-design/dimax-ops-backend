@@ -12,6 +12,7 @@ from app.modules.audit.application.service import AuditService
 from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.identity.infrastructure.models import AdminProfileORM
 from app.modules.sync.application.price_review_service import PriceConflictReviewService
@@ -38,15 +39,25 @@ def clean_test_proposals(db_session, company_id):
 
 def missing(case, db, kind="DOOR", channel="batch", legacy=False):
     items = case.items
-    case.items = [item for item in items if item["kind"] != kind]
     if legacy:
         at = utcnow()
-        first = confirmed(case.company, case.actor, case.items)
-        case.items = items
+        first = confirmed(case.company, case.actor, [item for item in items if item["kind"] != kind])
         activate(case, expected=1)
     else:
         first, _ = activate(case)
-        case.items = items
+        if kind == "DOOR":
+            target = DoorTypeORM(company_id=case.company, code="UNPRICED", name="Unpriced door type", is_active=True)
+            db.add(target)
+            db.flush()
+            db.get(DoorORM, case.door).door_type_id = target.id
+            case.door_type = target.id
+        else:
+            target = AddonTypeORM(company_id=case.company, name="Unpriced adjustment", unit="pcs", is_active=True)
+            db.add(target)
+            db.flush()
+            case.addon = target.id
+        db.commit()
+        case.items = [*items, {"kind": kind, "target_id": target.id, "installer_price": "9.01"}]
         at = utcnow()
     response = submit(case, kind, channel, at, extra_payload={"base_version": 0} if kind == "DOOR" else {})
     assert response.status_code == 200, response.text
@@ -257,3 +268,42 @@ def test_nonempty_proposal_migration_cannot_be_downgraded(case, db_session, clie
     with pytest.raises(RuntimeError, match="retained work price proposals exist"):
         downgrade()
     db_session.rollback()
+
+
+@pytest.mark.parametrize("channel", ["sync", "batch"])
+def test_existing_factory_rate_never_allows_an_override_proposal(case, db_session, client_admin_real_uow, channel):
+    from test_factory_price_review import conflict
+    _, url, _, _ = conflict(case, db_session, "ADDON", channel)
+    response = client_admin_real_uow.post(url + "/work-price-proposals/review", json={})
+    assert response.status_code == 409, response.text
+    assert db_session.query(WorkPriceProposalORM).filter_by(company_id=case.company).count() == 0
+
+
+def test_proposal_fk_cannot_reference_another_tenants_work(case, db_session, client_admin_real_uow):
+    _, url, _ = missing(case, db_session)
+    assert client_admin_real_uow.post(url, json=proposal_body(client_admin_real_uow, url)).status_code == 200
+    original = db_session.query(WorkPriceProposalORM).filter_by(company_id=case.company).one()
+    forged = WorkPriceProposalORM(company_id=uuid4(), sync_queue_item_id=original.sync_queue_item_id,
+        version=1, created_by=case.actor, request_id=uuid4(), request_fingerprint=original.request_fingerprint,
+        snapshot_hash=original.snapshot_hash, snapshot=original.snapshot, rate=original.rate, amount=original.amount)
+    with pytest.raises(DBAPIError):
+        db_session.add(forged)
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("kind", ["DOOR", "ADDON"])
+def test_existing_completion_blocks_proposal(case, db_session, client_admin_real_uow, kind):
+    row, url, _ = missing(case, db_session, kind)
+    body = proposal_body(client_admin_real_uow, url)
+    if kind == "DOOR":
+        db_session.add(CompletedWorkORM(company_id=case.company, project_id=case.project, installer_id=case.installer,
+            door_id=case.door, work_kind="DOOR", entry_type="ORIGINAL", completed_at=utcnow(),
+            quantity=Decimal("1"), rate_snapshot=Decimal("10"), amount_snapshot=Decimal("10")))
+    else:
+        db_session.add(ProjectAddonFactORM(company_id=case.company, project_id=case.project, installer_id=case.installer,
+            addon_type_id=case.addon, qty_done=Decimal("1.50"), done_at=row.client_happened_at,
+            source="OFFLINE", client_event_id=str(row.id)))
+    db_session.commit()
+    assert client_admin_real_uow.post(url, json=body).status_code == 409
+    assert db_session.query(WorkPriceProposalORM).filter_by(company_id=case.company).count() == 0

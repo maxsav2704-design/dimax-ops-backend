@@ -5,6 +5,7 @@ from decimal import Decimal
 from app.modules.addons.infrastructure.models import AddonTypeORM
 from app.modules.audit.application.service import AuditService
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.earnings.infrastructure.ledger_queries import active_completed_work_filter
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.rates.application.timeline_dto import work_price_amount
@@ -64,13 +65,17 @@ class WorkPriceProposalService:
                 raise Conflict("Door version must match the original work")
             if door.is_locked or door.status.value == "INSTALLED":
                 raise Conflict("Door is locked or already installed")
+            target = uow.session.query(DoorTypeORM).filter_by(company_id=company_id,
+                id=door.door_type_id).with_for_update().one_or_none()
+            if target is None or not target.is_active or target.deleted_at is not None:
+                raise Conflict("Door type is no longer available")
             if uow.session.query(CompletedWorkORM).filter(
                     active_completed_work_filter(company_id), CompletedWorkORM.door_id == door.id).first():
                 raise Conflict("Door already has an earning")
             if door.apply_surcharge_to_installer and Decimal(str(door.surcharge_pct or 100)) != 100:
                 raise Conflict("Installer surcharge must be resolved separately")
             unit = "pcs"
-            work_state = {"door_id": str(door.id), "version": door.version, "status": door.status.value,
+            work_state = {"door_id": str(door.id), "version": door.version, "status": door.status.value, "type_name": target.name,
                 "assignment_started_at": door.assignment_started_at.isoformat() if door.assignment_started_at else None}
         elif operation == "ADDON_FACT_CREATE":
             addon = uow.session.query(AddonTypeORM).filter_by(company_id=company_id,
