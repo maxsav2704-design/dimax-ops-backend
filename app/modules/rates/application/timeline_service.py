@@ -9,7 +9,7 @@ from app.modules.audit.application.service import AuditService
 from app.modules.rates.application.approval_service import approval_snapshot_matches
 from app.modules.rates.application.installer_price_dto import InstallerPriceItem, InstallerPriceSnapshot
 from app.modules.rates.application.reconciliation_service import FactoryPriceReconciliationService
-from app.modules.rates.application.timeline_dto import ActivatePriceVersion, CompanyPricingState, EffectivePriceVersion, FactoryPriceQuote
+from app.modules.rates.application.timeline_dto import ActivatePriceVersion, CompanyPricingState, EffectivePriceVersion, FactoryPriceQuote, FactoryWorkPriceContext
 from app.modules.rates.infrastructure.timeline_models import FactoryPriceActivationORM
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.shared.infrastructure.db.base import utcnow
@@ -145,12 +145,14 @@ class FactoryPriceTimelineService:
             price_list, receipt = cls._effective_receipt(uow, activation)
             if seen_price_list_id is not None and seen_price_list_id != price_list.id:
                 raise Conflict("Cached price differs from the effective price at execution time", field="price_list_id")
+        context = FactoryWorkPriceContext(price_list_id=price_list.id, version=price_list.version,
+            approval_id=receipt.id, activation_id=activation.id, kind=kind, target_id=target_id,
+            currency=price_list.currency, performed_at=performed_at,
+            effective_from=activation.effective_from, selection=selection, snapshot_hash=receipt.snapshot_hash)
         item = next((row for row in uow.price_lists.items(company_id, price_list.id)
                      if row.kind == kind and (row.door_type_id or row.addon_type_id) == target_id), None)
         if item is None:
             raise Conflict("The applicable factory list has no price for this work", field="price_list_id",
-                           meta={"reason": "MISSING_FACTORY_PRICE"})
-        return FactoryPriceQuote(price_list_id=price_list.id, price_list_item_id=item.id, version=price_list.version,
-            approval_id=receipt.id, activation_id=activation.id, kind=kind, target_id=target_id,
-            unit=item.unit, rate=item.installer_price, currency=price_list.currency, performed_at=performed_at,
-            effective_from=activation.effective_from, selection=selection, snapshot_hash=receipt.snapshot_hash)
+                           meta={"reason": "MISSING_FACTORY_PRICE", "missing_price": context.model_dump(mode="json")})
+        return FactoryPriceQuote(**context.model_dump(), price_list_item_id=item.id,
+                                 unit=item.unit, rate=item.installer_price)

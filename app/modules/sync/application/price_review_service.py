@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
+from app.modules.rates.application.timeline_dto import FactoryWorkPriceContext
 from app.modules.earnings.application.execution_authority import ExecutionAuthority
 from app.modules.sync.application.price_review_dto import ExecutionTimeCorrection, PriceConflictReview, PriceConflictSource
 from app.shared.domain.errors import Conflict, NotFound, ValidationError
@@ -131,6 +132,8 @@ class PriceConflictReviewService:
             return result
         except Conflict as exc:
             result.analysis_code = "MISSING_FACTORY_PRICE" if (exc.meta or {}).get("reason") == "MISSING_FACTORY_PRICE" else "INVALID_FACTORY_EVIDENCE"
+            if result.analysis_code == "MISSING_FACTORY_PRICE" and (exc.meta or {}).get("missing_price"):
+                result.missing_price = FactoryWorkPriceContext.model_validate(exc.meta["missing_price"])
             return result
         if quote is None:
             result.analysis_code = "NO_ACTIVE_FACTORY_PRICES"
@@ -168,7 +171,7 @@ class PriceConflictReviewService:
             result.resolution_available = True
             result.review_token = hashlib.sha256(json.dumps({
                 "original": PriceConflictReviewService.original(row, source), "work": work_context,
-                "review": result.model_dump(mode="json", exclude={"review_token", "time_correction_available", "execution_correction"}),
+                "review": result.model_dump(mode="json", exclude={"review_token", "time_correction_available", "execution_correction", "missing_price"}),
                 **({"execution_correction": execution_correction.model_dump(mode="json")} if execution_correction else {}),
             }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return result

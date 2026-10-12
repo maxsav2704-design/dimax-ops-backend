@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
 
-from app.modules.rates.application.timeline_dto import FactoryPriceQuote
+from app.modules.rates.application.timeline_dto import FactoryPriceQuote, FactoryWorkPriceContext
 
 PriceConflictSource = Literal["sync_event", "sync_queue"]
 
@@ -42,6 +42,7 @@ class PriceConflictReview(BaseModel):
         "EXECUTION_TIME_CORRECTION",
     ]
     applicable_quote: FactoryPriceQuote | None = None
+    missing_price: FactoryWorkPriceContext | None = None
     preview_amount: Decimal | None = None
     work_context: Literal["CURRENT_CATALOG"] = "CURRENT_CATALOG"
     resolution_available: bool = False

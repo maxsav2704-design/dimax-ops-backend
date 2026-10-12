@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.addons.infrastructure.models import ProjectAddonFactORM
+from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
@@ -11,6 +11,10 @@ from app.modules.sync.infrastructure.models import SyncEventORM, SyncQueueItemOR
 from app.modules.identity.infrastructure.models import AdminProfileORM
 from app.shared.domain.errors import Conflict
 from test_factory_earnings import activate, case, submit
+from test_factory_price_timeline import confirmed
+from test_offline_execution_authority import retained
+from app.modules.sync.application.price_review_service import PriceConflictReviewService
+from app.shared.infrastructure.db.base import utcnow
 
 
 def conflict(case, db, kind="DOOR", channel="batch"):
@@ -165,3 +169,86 @@ def test_price_filter_queries_both_sources_before_limit(case, db_session, client
     assert all(item["problem_code"] == "CONFLICT_FACTORY_PRICE" and item["retry_allowed"] is False
                for item in data["items"])
     assert client_admin_real_uow.get(path + f"&installer_id={uuid4()}").json()["total"] == 0
+
+
+@pytest.mark.parametrize("kind", ["DOOR", "ADDON"])
+@pytest.mark.parametrize("channel", ["sync", "batch"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_missing_price_evidence_survives_later_list_and_retries(
+    case, db_session, client_admin_real_uow, make_door_type, kind, channel, legacy,
+):
+    if legacy:
+        at = utcnow()
+        first = confirmed(case.company, case.actor, [item for item in case.items if item["kind"] != kind])
+        latest, activation = activate(case, expected=1)
+    else:
+        first, activation = activate(case)
+        if kind == "DOOR":
+            target = make_door_type(name="New work without a factory price").id
+            db_session.get(DoorORM, case.door).door_type_id = target
+            case.door_type = target
+        else:
+            target_row = AddonTypeORM(company_id=case.company, name="Unpriced additional work", unit="pcs")
+            db_session.add(target_row)
+            db_session.flush()
+            target = target_row.id
+            case.addon = target
+        db_session.commit()
+        case.items.append({"kind": kind, "target_id": target, "installer_price": "700"})
+        at = utcnow()
+        latest = first
+
+    payload = {"base_version": 0} if kind == "DOOR" else {}
+    event_id = str(uuid4())
+    assert submit(case, kind, channel, at, event_id, payload).status_code == 200
+    row, url = retained(db_session, case, channel)
+    source = "sync_event" if channel == "sync" else "sync_queue"
+    original = PriceConflictReviewService.original(row, source)
+
+    for later in (False, True):
+        if later:
+            activate(case, expected=latest.version, previous=latest.id, door_price="800", addon_price="40")
+        response = client_admin_real_uow.get(url)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["analysis_code"] == "MISSING_FACTORY_PRICE"
+        assert data["resolution_available"] is False
+        assert data["applicable_quote"] is data["preview_amount"] is data["review_token"] is None
+        evidence = data["missing_price"]
+        assert evidence["price_list_id"] == str(first.id)
+        assert evidence["version"] == first.version
+        assert evidence["activation_id"] == str(activation.id)
+        assert evidence["kind"] == kind
+        assert evidence["target_id"] == str(case.door_type if kind == "DOOR" else case.addon)
+        assert evidence["selection"] == ("FIRST_CONFIRMED_LEGACY" if legacy else "AT_EXECUTION")
+        assert evidence["performed_at"] == at.isoformat().replace("+00:00", "Z")
+        assert len(evidence["snapshot_hash"]) == 64
+        assert not {"rate", "amount", "price_list_item_id"} & evidence.keys()
+        assert client_admin_real_uow.post(url + "/resolve", json={
+            "request_id": str(uuid4()), "review_token": "0" * 64,
+            "reason": "No factory price: manual bypass must not work", "confirm_execution_evidence": True,
+        }).status_code == 409
+        assert submit(case, kind, channel, at, event_id, payload).status_code == 200
+        retained(db_session, case, channel)
+        db_session.refresh(row)
+        assert PriceConflictReviewService.original(row, source) == original
+        assert db_session.query(ProjectAddonFactORM).filter_by(company_id=case.company).count() == 0
+
+
+@pytest.mark.parametrize("channel", ["sync", "batch"])
+def test_no_missing_price_evidence_when_factory_receipt_is_invalid(case, db_session, client_admin_real_uow, channel):
+    from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
+    at = utcnow()
+    first = confirmed(case.company, case.actor, case.items[:1])
+    activate(case, expected=1)
+    submit(case, "ADDON", channel, at)
+    _, url = retained(db_session, case, channel)
+    assert client_admin_real_uow.get(url).json()["missing_price"]["price_list_id"] == str(first.id)
+    receipt = db_session.query(FactoryPriceApprovalORM).filter_by(company_id=case.company, price_list_id=first.id).one()
+    # Simulate corrupted authority; absence of a rate must not disguise failed receipt verification.
+    receipt.snapshot = {**receipt.snapshot, "company_name": "Corrupt evidence"}
+    db_session.commit()
+    data = client_admin_real_uow.get(url).json()
+    assert data["analysis_code"] == "INVALID_FACTORY_EVIDENCE"
+    assert data["missing_price"] is data["applicable_quote"] is None
+    retained(db_session, case, channel)

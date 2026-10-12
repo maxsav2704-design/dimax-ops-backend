@@ -42,22 +42,27 @@ class CompanyPricingState(BaseModel):
     active_price: InstallerPriceSnapshot | None
 
 
-class FactoryPriceQuote(BaseModel):
+class FactoryWorkPriceContext(BaseModel):
+    """Verified timeline and work identity, without assuming a rate exists."""
+
     model_config = ConfigDict(frozen=True)
     price_list_id: UUID
-    price_list_item_id: UUID
     version: int
     approval_id: UUID
     activation_id: UUID
     kind: Literal["DOOR", "ADDON"]
     target_id: UUID
-    unit: str
-    rate: Decimal
     currency: Literal["ILS"]
     performed_at: datetime
     effective_from: datetime
     selection: Literal["AT_EXECUTION", "FIRST_CONFIRMED_LEGACY"]
     snapshot_hash: str
+
+
+class FactoryPriceQuote(FactoryWorkPriceContext):
+    price_list_item_id: UUID
+    unit: str
+    rate: Decimal
 
     def amount(self, quantity: Decimal) -> Decimal:
         try:

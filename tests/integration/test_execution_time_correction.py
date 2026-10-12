@@ -150,6 +150,8 @@ def test_time_correction_does_not_supply_missing_factory_price(case, db_session,
     response = client_admin_real_uow.post(url + "/execution-review", json=correction)
     assert response.status_code == 200, response.text
     assert response.json()["analysis_code"] == "MISSING_FACTORY_PRICE"
+    assert response.json()["missing_price"]["version"] == 1
+    assert response.json()["missing_price"]["selection"] == "FIRST_CONFIRMED_LEGACY"
     assert response.json()["resolution_available"] is False
     body = {"request_id": str(uuid4()), "review_token": "0" * 64, "reason": "Do not replace missing factory prices",
             "execution_correction": correction, "confirm_execution_evidence": True}
