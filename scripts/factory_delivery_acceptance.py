@@ -109,6 +109,12 @@ def prepare():
                    "password": password, "device_id": "factory-delivery-acceptance"})["access_token"]
     state = {"auth": auth, "recipient": recipient()}
     save(state)
+    contact = request(API, ADMIN + "/factory/contact", {
+        "expected_contact_id": None, "factory_name": "QA Factory",
+        "recipient_name": "QA Representative", "recipient_email": state["recipient"],
+        "authority_reference": "Isolated acceptance: OWNER-verified QA representative",
+    }, token=auth)
+    state["contact_id"] = contact["id"]
     price = request(API, ADMIN, {"request_id": str(uuid4()), "expected_latest_version": 0,
                     "reason": "Isolated delivery acceptance", "agreement_reference": "QA only",
                     "items": [{"kind": "DOOR", "target_id": str(did), "installer_price": "250.00"}]}, token=auth)
@@ -163,6 +169,13 @@ def confirm():
     with SessionLocal() as session:
         assert session.execute(text("SELECT count(*) FROM factory_price_activations")).scalar_one() == 0
         assert session.execute(text("SELECT count(*) FROM completed_work")).scalar_one() == 0
+        decision = session.execute(text(
+            "SELECT actor_user_id, after FROM audit_logs "
+            "WHERE entity_type='FACTORY_PRICE_APPROVAL' AND action='CONFIRM'"
+        )).one()
+        assert decision.actor_user_id is None
+        assert decision.after["factory_contact_id"] == state["contact_id"]
+        assert decision.after["actor_kind"] == "FACTORY_REPRESENTATIVE"
         rows = session.execute(text("SELECT status::text, payload FROM outbox_messages")).all()
         assert len(rows) == 2 and all(row[0] == "SENT" for row in rows)
         for _, payload in rows:

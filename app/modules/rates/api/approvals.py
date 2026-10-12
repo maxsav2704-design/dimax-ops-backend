@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates, get_uow, require_admin
 from app.api.v1.rate_limit import rate_limit_factory_prices
@@ -11,11 +11,39 @@ from app.modules.rates.application.approval_dto import (
 from app.modules.rates.application.approval_service import FactoryPriceApprovalService
 from app.modules.rates.application.price_list_dto import CancelPriceList
 from app.modules.rates.application.approval_verification import VerificationRejected
+from app.modules.rates.application.contact_dto import FactoryContactView, RegisterFactoryContact, RevokeFactoryContact
+from app.modules.rates.application.contact_service import FactoryContactService
 from app.shared.domain.errors import Forbidden
 
 admin_router = APIRouter(prefix="/admin/price-lists", tags=["Admin / Factory price lists"])
 public_router = APIRouter(prefix="/public/price-approvals", tags=["Public / Factory prices"],
                          dependencies=[Depends(rate_limit_factory_prices)])
+
+
+@admin_router.get("/factory/contact", response_model=FactoryContactView | None)
+def factory_contact(response: Response, user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        ensure_admin_can_view_rates(uow, user)
+        row = uow.price_lists.factory_contact(user.company_id)
+        return FactoryContactView.model_validate(row) if row else None
+
+
+@admin_router.post("/factory/contact", response_model=FactoryContactView)
+def register_factory_contact(body: RegisterFactoryContact, response: Response,
+                             user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return FactoryContactService.register(uow, company_id=user.company_id, actor_user_id=user.id, body=body)
+
+
+@admin_router.post("/factory/contact/revoke", response_model=None)
+def revoke_factory_contact(body: RevokeFactoryContact, response: Response,
+                           user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        FactoryContactService.revoke(uow, company_id=user.company_id, actor_user_id=user.id, body=body)
+    return {"ok": True}
 
 
 @admin_router.post("/{price_list_id}/approvals", response_model=IssuedApproval)
@@ -54,10 +82,11 @@ def preview_approval(body: PreviewApproval, response: Response, uow=Depends(get_
 
 
 @public_router.post("/confirm", response_model=PublicApproval)
-def confirm_approval(body: ConfirmApproval, response: Response, uow=Depends(get_uow)):
+def confirm_approval(body: ConfirmApproval, response: Response, request: Request, uow=Depends(get_uow)):
     response.headers["Cache-Control"] = "no-store"
     with uow:
-        result = FactoryPriceApprovalService.confirm(uow, body=body)
+        result = FactoryPriceApprovalService.confirm(uow, body=body,
+            ip=request.client.host if request.client else None, user_agent=request.headers.get("user-agent"))
     if isinstance(result, VerificationRejected):
         raise Forbidden("A valid mailbox code is required; request a new invitation if the attempt limit was reached")
     return result

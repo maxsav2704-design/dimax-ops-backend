@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 from datetime import timedelta
 from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
@@ -23,7 +24,9 @@ from test_factory_price_approvals_api import ADMIN, PUBLIC, approval_case, confi
 
 @pytest.fixture(autouse=True)
 def isolated_email(monkeypatch, db_session, company_id):
-    assert db_session.get_bind().url.database == "dimax_acceptance_tests"
+    database = db_session.get_bind().url.database or ""
+    assert os.getenv("APP_ENV") == "test"
+    assert database == "dimax_acceptance_tests" or re.fullmatch(r"dimax_audit_[0-9]{8}_[a-f0-9]{4}", database)
     monkeypatch.setattr(email_settings, "FACTORY_APPROVAL_EMAIL_KEY", SecretStr(base64.b64encode(bytes(range(32))).decode()))
     monkeypatch.setattr(settings, "PUBLIC_APP_BASE_URL", "https://dimax.example.org")
     monkeypatch.setattr(settings, "EMAIL_ENABLED", True)
@@ -70,13 +73,18 @@ def test_invalid_delivery_configuration_keeps_old_link(client, approval_case, mo
     assert client.post(f"{PUBLIC}/preview", json={"token": approval_case["token"]}).status_code == 200
 
 
-@pytest.mark.parametrize("mode", ["revoke", "expire", "rotate", "confirm", "recipient", "ciphertext"])
+@pytest.mark.parametrize("mode", ["revoke", "contact_revoke", "expire", "rotate", "confirm", "recipient", "ciphertext"])
 def test_stale_or_tampered_messages_are_not_sent(client, approval_case, db_session, mode):
     data, row = queued(client, approval_case, db_session)
     approval_id = data["invitation"]["id"]
     base = f'{ADMIN}/{approval_case["price_list"]["id"]}'
     if mode == "revoke":
         assert client.post(f'{base}/approvals/{approval_id}/revoke', json={"reason": "Wrong contact"}).status_code == 200
+    elif mode == "contact_revoke":
+        contact = client.get(f"{ADMIN}/factory/contact").json()
+        assert client.post(f"{ADMIN}/factory/contact/revoke", json={
+            "expected_contact_id": contact["id"], "reason": "Representative left the factory",
+        }).status_code == 200
     elif mode == "rotate":
         assert client.post(f"{base}/approvals", json=approval_case["body"]).status_code == 200
     elif mode == "confirm":
@@ -121,6 +129,12 @@ def test_actual_mailpit_multipart_delivery(client, approval_case, db_session, mo
     from test_journal_mailpit_acceptance import _mailpit
     assert settings.SMTP_HOST == "mailpit" and settings.SMTP_PORT == 1025
     case = {**approval_case, "body": {**approval_case["body"], "recipient_email": f"factory-{company_id}@example.com"}}
+    contact = client.get(f"{ADMIN}/factory/contact").json()
+    registered = client.post(f"{ADMIN}/factory/contact", json={
+        **{key: contact[key] for key in ("factory_name", "recipient_name", "authority_reference")},
+        "expected_contact_id": contact["id"], "recipient_email": case["body"]["recipient_email"],
+    })
+    assert registered.status_code == 200, registered.text
     data, _ = queued(client, case, db_session)
     monkeypatch.setattr(outbox_worker, "email_sender", SmtpEmailSender())
     try:

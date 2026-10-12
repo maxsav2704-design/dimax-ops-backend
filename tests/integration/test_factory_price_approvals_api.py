@@ -34,6 +34,11 @@ def approval_case(client, make_door_type, monkeypatch):
     price_list = created.json()
     invitation_body = {"factory_name": "Test Factory", "recipient_name": "Test Representative",
                        "recipient_email": "factory@example.com", "expires_in_hours": 24}
+    contact = client.post(f"{ADMIN}/factory/contact", json={
+        **{key: invitation_body[key] for key in ("factory_name", "recipient_name", "recipient_email")},
+        "expected_contact_id": None, "authority_reference": "QA verified factory authorization",
+    })
+    assert contact.status_code == 200, contact.text
     issued = client.post(f'{ADMIN}/{price_list["id"]}/approvals', json=invitation_body)
     assert issued.status_code == 200, issued.text
     link = issued.json()

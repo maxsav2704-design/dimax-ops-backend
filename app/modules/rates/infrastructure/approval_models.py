@@ -8,11 +8,14 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.modules.rates.infrastructure.contact_models import FactoryContactORM  # noqa: F401 -- register the composite FK target
 
 
 class FactoryPriceApprovalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "factory_price_approvals"
     __table_args__ = (
+        ForeignKeyConstraint(["company_id", "factory_contact_id"], ["factory_contacts.company_id", "factory_contacts.id"],
+                             ondelete="RESTRICT", name="fk_factory_approvals_contact"),
         UniqueConstraint("company_id", "price_list_id", "id", name="uq_factory_approvals_tenant_list_id"),
         ForeignKeyConstraint(
             ["company_id", "price_list_id"], ["factory_price_lists.company_id", "factory_price_lists.id"],
@@ -53,6 +56,7 @@ class FactoryPriceApprovalORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
 
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    factory_contact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     price_list_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)

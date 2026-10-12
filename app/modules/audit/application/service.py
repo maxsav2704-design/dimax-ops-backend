@@ -14,13 +14,15 @@ class AuditService:
         uow,
         *,
         company_id: uuid.UUID,
-        actor_user_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
         entity_type: str,
         entity_id: uuid.UUID,
         action: str,
         reason: str | None = None,
         before: dict | None = None,
         after: dict | None = None,
+        ip: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         uow.audit.add(
             AuditLogORM(
@@ -32,6 +34,8 @@ class AuditService:
                 reason=reason,
                 before=before,
                 after=after,
+                ip=ip[:64] if ip else None,
+                user_agent=user_agent[:512] if user_agent else None,
             )
         )
 

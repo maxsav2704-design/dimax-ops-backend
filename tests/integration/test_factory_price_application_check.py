@@ -19,6 +19,10 @@ PUBLIC = "/api/v1/public/price-approvals"
 
 
 def confirm_version(client, items, expected=0):
+    contact = client.post(f"{URL}/factory/contact", json={"expected_contact_id": None,
+        "factory_name": "QA Factory", "recipient_name": "QA Representative", "recipient_email": "qa@example.com",
+        "authority_reference": "QA verified factory authorization"})
+    assert contact.status_code == 200, contact.text
     response = client.post(URL, json={"request_id": str(uuid4()), "expected_latest_version": expected,
         "reason": "Factory offer", "agreement_reference": "QA agreement", "items": items})
     assert response.status_code == 200, response.text

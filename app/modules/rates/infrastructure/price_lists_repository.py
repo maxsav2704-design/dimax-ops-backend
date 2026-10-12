@@ -12,6 +12,7 @@ from app.modules.identity.infrastructure.models import AdminProfileORM, CompanyO
 from app.modules.identity.domain.enums import UserRole
 from app.modules.rates.infrastructure.price_list_models import FactoryPriceListItemORM, FactoryPriceListORM
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
+from app.modules.rates.infrastructure.contact_models import FactoryContactORM
 from app.modules.rates.infrastructure.reconciliation_queries import reconciliation_query
 from app.modules.rates.infrastructure.application_check_queries import required_work_query
 from app.modules.rates.infrastructure.timeline_models import FactoryPriceActivationORM
@@ -73,6 +74,32 @@ class FactoryPriceListsRepository:
 
     def company(self, company_id: UUID):
         return self.session.get(CompanyORM, company_id, populate_existing=True)
+
+    def factory_contact(self, company_id: UUID):
+        return self.session.scalar(select(FactoryContactORM).where(
+            FactoryContactORM.company_id == company_id, FactoryContactORM.revoked_at.is_(None),
+        ).execution_options(populate_existing=True))
+
+    def can_manage_factory_contact(self, company_id: UUID, actor_user_id: UUID) -> bool:
+        return self.session.scalar(select(UserORM.id).join(
+            AdminProfileORM, AdminProfileORM.user_id == UserORM.id,
+        ).join(CompanyORM, CompanyORM.id == UserORM.company_id).where(
+            UserORM.id == actor_user_id, UserORM.company_id == company_id,
+            AdminProfileORM.company_id == company_id, UserORM.role == UserRole.ADMIN,
+            UserORM.is_active.is_(True), UserORM.status == "ACTIVE", CompanyORM.is_active.is_(True),
+            AdminProfileORM.admin_scope == "OWNER",
+        )) is not None
+
+    def add_factory_contact(self, row: FactoryContactORM):
+        self.session.flush()
+        self.session.add(row)
+        self.session.flush()
+
+    def pending_company_approvals(self, company_id: UUID):
+        return self.session.scalars(select(FactoryPriceApprovalORM).where(
+            FactoryPriceApprovalORM.company_id == company_id,
+            FactoryPriceApprovalORM.revoked_at.is_(None), FactoryPriceApprovalORM.confirmed_at.is_(None),
+        )).all()
 
     def approval_scope(self, token_hash: str):
         return self.session.execute(select(FactoryPriceApprovalORM.id, FactoryPriceApprovalORM.company_id).where(

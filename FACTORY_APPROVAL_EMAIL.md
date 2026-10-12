@@ -5,6 +5,33 @@ default remains false. Invitation creation, replacement of the old link and
 outbox insertion commit together. `email_outbox_id` means queued, not delivered
 and not factory-confirmed. No price is activated by sending or opening email.
 
+## Owner Approved Recipient
+
+Before issuing invitations, OWNER must register the authorized factory contact at
+`POST /api/v1/admin/price-lists/factory/contact` (or in the price-list workspace).
+Provide the factory, representative, email, authority reference and
+`expected_contact_id` (null for the first registration). The API verifies the
+owner's live company profile. OPERATIONS cannot register or replace contacts.
+
+The existing invitation body remains compatible, but its recipient fields must
+exactly match the registered contact; arbitrary destinations return 409. GET on
+the contact endpoint is restricted to administrators with rate access. Replacing
+the contact revokes pending invitations and queued invitation/code deliveries
+become unavailable. Confirmed decisions and historical earnings stay unchanged.
+
+OWNER can revoke authority without naming a replacement using
+`POST /api/v1/admin/price-lists/factory/contact/revoke`, with
+`expected_contact_id` and a reason. Repeating a completed revocation is safe;
+a stale request cannot revoke a newly approved contact. New invitations are
+blocked until OWNER approves a replacement. Both approval and revocation are
+recorded in the audit log.
+
+Apply migration 0070 before deploying the corresponding API/worker/admin code.
+Pending pre-migration links have no owner-authorized contact: register the
+contact and reissue them. The migration never invents authorization for old
+receipts. Verify the representative's powers outside the application before
+OWNER approves the contact; mailbox verification is only possession evidence.
+
 ## Deployment Requirements
 
 - Set `PUBLIC_APP_BASE_URL` to the application's externally reachable HTTPS URL.
@@ -101,7 +128,9 @@ must independently check that the contact represents the factory. Public HTTPS/D
 delivery, sender authentication and recipient contact verification must be
 accepted before production use. No production credentials are created here.
 
-Integration tests use only `dimax_acceptance_tests`; the opt-in `DIMAX_FACTORY_MAILPIT=1`
+Integration tests require `APP_ENV=test` and either `dimax_acceptance_tests` or
+a disposable `dimax_audit_YYYYMMDD_hhhh` database (four lowercase hex characters).
+The opt-in `DIMAX_FACTORY_MAILPIT=1`
 case asserts the Mailpit SMTP host/port and removes only its own test message.
 
 ## Local Process-Level Acceptance

@@ -57,6 +57,12 @@ class FactoryPriceApprovalService:
             raise NotFound("Price list not found")
         if price_list.status != "DRAFT" or price_list.version != uow.price_lists.latest_version(company_id):
             raise Conflict("Only the latest draft can be sent for factory confirmation")
+        contact = uow.price_lists.factory_contact(company_id)
+        if contact is None:
+            raise Conflict("The company owner must approve a factory contact first")
+        if (body.factory_name != contact.factory_name or body.recipient_name != contact.recipient_name
+                or str(body.recipient_email) != contact.recipient_email):
+            raise Conflict("The recipient must match the owner-approved factory contact")
         now = utcnow()
         for previous in uow.price_lists.pending_approvals(company_id, price_list_id):
             previous.revoked_at, previous.revoked_by = now, actor_user_id
@@ -71,6 +77,7 @@ class FactoryPriceApprovalService:
             token_hash=hashlib.sha256(token.encode()).hexdigest(), snapshot_hash=_digest(price_list, snapshot),
             snapshot=snapshot, factory_name=body.factory_name, recipient_name=body.recipient_name,
             recipient_email=str(body.recipient_email),
+            factory_contact_id=contact.id,
         )
         uow.price_lists.add_approval(invitation)
         message = enqueue_invitation(uow, invitation, token, email_base) if email_base else None
@@ -122,6 +129,12 @@ class FactoryPriceApprovalService:
         if (invitation is None or not company.is_active or invitation.revoked_at is not None
                 or invitation.expires_at <= now):
             raise NotFound("Invitation unavailable")
+        if invitation.confirmed_at is None:
+            contact = uow.price_lists.factory_contact(scope.company_id)
+            if (contact is None or invitation.factory_contact_id != contact.id
+                    or any(getattr(invitation, key) != getattr(contact, key)
+                           for key in ("factory_name", "recipient_name", "recipient_email"))):
+                raise NotFound("Invitation unavailable")
         price_list = uow.price_lists.get(scope.company_id, invitation.price_list_id)
         if price_list is None or price_list.status == "CANCELLED":
             raise NotFound("Invitation unavailable")
@@ -156,7 +169,7 @@ class FactoryPriceApprovalService:
         return request_code(uow, invitation, token, now)
 
     @classmethod
-    def confirm(cls, uow, *, body: ConfirmApproval):
+    def confirm(cls, uow, *, body: ConfirmApproval, ip: str | None = None, user_agent: str | None = None):
         invitation, price_list, now = cls._resolve(uow, body.token)
         if body.expected_version != price_list.version or not compare_digest(body.snapshot_hash, invitation.snapshot_hash):
             raise Conflict("Confirmation does not match the displayed price list")
@@ -171,5 +184,13 @@ class FactoryPriceApprovalService:
         invitation.confirmed_at, invitation.confirmed_name = now, body.signer_name
         invitation.mailbox_verified_at = now
         price_list.status = "CONFIRMED"
-        # The external decision belongs to this recipient record, never to the issuing admin's user ID.
+        AuditService.add(uow, company_id=invitation.company_id, actor_user_id=None,
+            entity_type="FACTORY_PRICE_APPROVAL", entity_id=invitation.id, action="CONFIRM",
+            ip=ip, user_agent=user_agent, after={
+                "actor_kind": "FACTORY_REPRESENTATIVE", "factory_contact_id": str(invitation.factory_contact_id),
+                "price_list_id": str(price_list.id), "version": price_list.version,
+                "snapshot_hash": invitation.snapshot_hash, "confirmed_name": invitation.confirmed_name,
+                "recipient_email": invitation.recipient_email, "confirmed_at": now.isoformat(),
+                "mailbox_verified_at": now.isoformat(),
+            })
         return cls._public(invitation)

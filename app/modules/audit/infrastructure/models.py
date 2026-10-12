@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,8 +17,12 @@ from app.shared.infrastructure.db.base import (
 
 class AuditLogORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "audit_logs"
+    __table_args__ = (CheckConstraint(
+        "actor_user_id IS NOT NULL OR (entity_type = 'FACTORY_PRICE_APPROVAL' AND action = 'CONFIRM' "
+        "AND coalesce(after->>'actor_kind', '') = 'FACTORY_REPRESENTATIVE' "
+        "AND coalesce(after->>'factory_contact_id', '') <> '')", name="ck_audit_external_factory_actor"),)
 
-    actor_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
 
     # что поменяли
     entity_type: Mapped[str] = mapped_column(String(80), nullable=False)     # "Door", "Project", "InstallerRate"

@@ -190,16 +190,24 @@ def test_worker_redacts_smtp_errors_and_retries_once(client_raw, approval_case, 
 
 
 @pytest.mark.skipif(os.getenv("DIMAX_FACTORY_MAILPIT") != "1", reason="Requires isolated Mailpit")
-def test_real_mailpit_code_confirms_only_after_explicit_submission(client_raw, approval_case, db_session, monkeypatch):
+def test_real_mailpit_code_confirms_only_after_explicit_submission(client, client_raw, approval_case, db_session, monkeypatch):
     from app.integrations.email.smtp_sender import SmtpEmailSender
     from app.workers import outbox_worker
     from test_journal_mailpit_acceptance import _mailpit
     assert settings.SMTP_HOST == "mailpit" and settings.SMTP_PORT == 1025
     row = invitation(db_session, approval_case)
-    row.recipient_email = f"mailbox-{row.id}@example.com"
-    db_session.commit()
+    recipient = f"mailbox-{row.id}@example.com"
+    contact = client.get(f"{ADMIN}/factory/contact").json()
+    registered = client.post(f"{ADMIN}/factory/contact", json={
+        **{key: contact[key] for key in ("factory_name", "recipient_name", "authority_reference")},
+        "expected_contact_id": contact["id"], "recipient_email": recipient,
+    })
+    assert registered.status_code == 200, registered.text
+    issued = client.post(f'{ADMIN}/{approval_case["price_list"]["id"]}/approvals',
+        json={**approval_case["body"], "recipient_email": recipient})
+    assert issued.status_code == 200, issued.text
+    approval_case = {**approval_case, "token": issued.json()["confirmation_url"].split("#")[1]}
     body = confirmation(client_raw, approval_case)
-    recipient = row.recipient_email
     monkeypatch.setattr(outbox_worker, "email_sender", SmtpEmailSender())
     try:
         assert outbox_worker.run_once() == 1

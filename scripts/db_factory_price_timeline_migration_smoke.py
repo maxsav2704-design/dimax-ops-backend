@@ -1,14 +1,12 @@
 """Verify the price timeline only in the guarded disposable factory migration database."""
 import os
-from decimal import Decimal
 from uuid import uuid4
 
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
 
 from scripts.db_factory_price_approval_migration_smoke import main as verify_approvals
 
@@ -18,17 +16,7 @@ def main():
         raise RuntimeError("Explicit factory timeline migration check required")
     # Includes the exact isolated host/name, empty-DB and explicit test-environment guards.
     verify_approvals()
-    from app.modules.identity.infrastructure.models import AdminProfileORM
-    from app.modules.rates.application.approval_dto import ConfirmApproval, IssueApproval
-    from app.modules.rates.application.approval_service import FactoryPriceApprovalService
-    from app.modules.rates.application.price_list_dto import CreatePriceList
-    from app.modules.rates.application.price_lists_service import FactoryPriceListsService
-    from app.modules.rates.application.timeline_dto import ActivatePriceVersion
-    from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
-    from app.modules.rates.infrastructure.price_list_models import FactoryPriceListORM
-    from app.modules.rates.infrastructure.models import InstallerRateORM
     from app.shared.infrastructure.db.base import Base, utcnow
-    from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
 
     engine = create_engine(os.environ["DATABASE_URL"])
     config = Config("alembic.ini")
@@ -61,34 +49,23 @@ def main():
     business_tables = [name for name in tables if not name.startswith("factory_price_")
                        and name not in {"audit_logs", "admin_profiles"}]
     business_before = snapshot(business_tables)
-    with Session(engine) as session:
-        draft = session.scalar(select(FactoryPriceListORM))
-        rate = session.scalar(select(InstallerRateORM))
-        company_id, actor, door_type_id = draft.company_id, draft.created_by, rate.door_type_id
-        session.add(AdminProfileORM(company_id=company_id, user_id=actor, admin_scope="OWNER", can_view_rates=True))
-        session.commit()
-    with SqlAlchemyUnitOfWork() as uow:
-        version = FactoryPriceListsService.create(uow, company_id=company_id, actor_user_id=actor,
-            body=CreatePriceList(request_id=uuid4(), expected_latest_version=1, reason="QA factory offer",
-                agreement_reference="QA agreement", items=[{"kind": "DOOR", "target_id": door_type_id,
-                                                             "installer_price": Decimal("300")}]))
-    with SqlAlchemyUnitOfWork() as uow:
-        issued = FactoryPriceApprovalService.issue(uow, company_id=company_id, actor_user_id=actor,
-            price_list_id=version.id, body=IssueApproval(factory_name="QA Factory", recipient_name="QA Recipient",
-                                                        recipient_email="qa@example.com"))
-    with SqlAlchemyUnitOfWork() as uow:
-        token = issued.confirmation_url.split("#")[1]
-        preview = FactoryPriceApprovalService.preview(uow, token=token)
-        FactoryPriceApprovalService.confirm(uow, body=ConfirmApproval(token=token, expected_version=version.version,
-            snapshot_hash=preview.snapshot_hash, signer_name="QA Recipient", accepted=True))
-    with SqlAlchemyUnitOfWork() as uow:
-        FactoryPriceTimelineService.activate(uow, company_id=company_id, actor_user_id=actor, price_list_id=version.id,
-            body=ActivatePriceVersion(request_id=uuid4(), expected_active_price_list_id=None,
-                                      reason="QA reviewed transition", reviewed_transition=True))
-    with SqlAlchemyUnitOfWork() as uow:
-        price = FactoryPriceTimelineService.quote(uow, company_id=company_id, kind="DOOR", target_id=door_type_id,
-                                                  performed_at=utcnow())
-        assert price.amount(Decimal("1")) == Decimal("300")
+    # Historical schema fixtures must not call current services, which require later migrations.
+    # The complete authorization/activation/quote flow is covered by integration tests at head.
+    metadata = MetaData()
+    approvals = Table("factory_price_approvals", metadata, autoload_with=engine)
+    prices = Table("factory_price_lists", metadata, autoload_with=engine)
+    activations = Table("factory_price_activations", metadata, autoload_with=engine)
+    with engine.begin() as connection:
+        approval = connection.execute(select(approvals)).mappings().one()
+        now = utcnow()
+        connection.execute(approvals.update().where(approvals.c.id == approval["id"]).values(
+            confirmed_at=now, confirmed_name="QA historical fixture"))
+        connection.execute(prices.update().where(prices.c.id == approval["price_list_id"]).values(status="CONFIRMED"))
+        connection.execute(activations.insert().values(
+            id=uuid4(), company_id=approval["company_id"], price_list_id=approval["price_list_id"],
+            approval_id=approval["id"], request_id=uuid4(), request_fingerprint="3" * 64,
+            snapshot_hash=approval["snapshot_hash"], effective_from=now, created_at=now, updated_at=now,
+            created_by=approval["created_by"], reason="QA history preservation at schema 0065"))
     assert snapshot(business_tables) == business_before
     all_tables = tables + ["factory_price_activations"]
     with_history = snapshot(all_tables)
@@ -102,7 +79,7 @@ def main():
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0065_factory_price_timeline"
     engine.dispose()
-    print("PASS: timeline upgrade, rollback, metadata, activation/quote, legacy business snapshots and history protection")
+    print("PASS: timeline upgrade, rollback, metadata, historical activation fixture, legacy business snapshots and history protection")
 
 
 if __name__ == "__main__":

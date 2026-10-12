@@ -15,6 +15,8 @@ from app.modules.identity.domain.enums import UserRole
 from app.modules.identity.infrastructure.models import AdminProfileORM, CompanyORM, UserORM
 from app.modules.rates.application.approval_dto import ConfirmApproval, IssueApproval
 from app.modules.rates.application.approval_service import FactoryPriceApprovalService
+from app.modules.rates.application.contact_dto import RegisterFactoryContact
+from app.modules.rates.application.contact_service import FactoryContactService
 from app.modules.rates.application.price_list_dto import CreatePriceList
 from app.modules.rates.application.price_lists_service import FactoryPriceListsService
 from app.modules.rates.application.timeline_dto import ActivatePriceVersion
@@ -34,6 +36,10 @@ def confirmed(company_id, actor, items, expected=0, *, confirm=True):
                                  agreement_reference="QA agreement", items=items))
     if confirm:
         with SqlAlchemyUnitOfWork() as uow:
+            FactoryContactService.register(uow, company_id=company_id, actor_user_id=actor,
+                body=RegisterFactoryContact(expected_contact_id=None, factory_name="QA Factory",
+                    recipient_name="QA Representative", recipient_email="qa@example.com",
+                    authority_reference="QA verified factory authorization"))
             issued = FactoryPriceApprovalService.issue(uow, company_id=company_id, actor_user_id=actor,
                 price_list_id=version.id, body=IssueApproval(factory_name="QA Factory",
                     recipient_name="QA Representative", recipient_email="qa@example.com"))
