@@ -199,7 +199,7 @@ def _verify_assignment_trigger(engine, tables, fixtures):
             assert boundary(probe) is None
             value = reassigned(probe, installer_id=first["door_values"]["installer_id"])
             assert reassigned(probe, project_id=first["other_project"]) >= value
-            reassigned(probe, **second["door_values"])
+            reassigned(probe, **second["door_values"], unit_label=f"TRANSFER-{probe}")
             for installer_id in (None, first["door_values"]["installer_id"]):
                 before = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
                 door_id = uuid4()

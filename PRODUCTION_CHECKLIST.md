@@ -81,8 +81,35 @@ Expected contract:
 - the legacy `product_library` upgrade/downgrade smoke is green and preserves
   product rows, price-list foreign keys, and canonical index names.
 - production image contract is green for the release commit.
+- the populated `0070_factory_contact` to `0071_offline_evidence` migration check
+  is green, including preservation of both sync protocols and earnings, unknown
+  historical evidence, assignment triggers and atomic downgrade refusals.
 - Uvicorn access logging stays disabled, and the reverse proxy logs public
   file/journal routes as templates without capability tokens or query values.
+
+### Offline Evidence Rollout
+
+Migration `0071_offline_evidence` must not infer old assignment dates or the
+timezone of an already normalized device timestamp. Existing rows intentionally
+keep NULL evidence. Retain their original commands; do not reset the mobile
+outbox or fill those columns with guessed dates to clear a queue.
+
+Before rollout, inventory pending work, verify a backup and restore on an
+isolated target, and arrange a maintenance window for API/worker writers. Apply
+0070 then 0071 and deploy matching API, worker and admin code. Reviewable old-price
+claims require independent execution/assignment evidence; invalid or unknown
+timestamps and missing prices still need the separate correction workflow.
+Do not call the financial rollout complete while those records cannot be handled.
+
+Downgrading 0071 is intentionally refused after a server assignment boundary or
+either original-timezone flag is recorded (including `false`). Do not disable
+triggers or erase evidence to force rollback. A recovery from backup requires
+reconciliation of writes received after that backup before business use resumes.
+
+`scripts/db_offline_evidence_migration_smoke.py` is a destructive QA fixture tool,
+not a production migration command. It requires `APP_ENV=test`, explicit opt-in,
+the exact disposable database `dimax_offline_evidence_migration_tests` on `db`,
+and no existing objects. CI creates and removes only its own fixture database.
 
 ## Factory Price Authority (Open)
 
