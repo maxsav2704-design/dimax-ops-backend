@@ -122,16 +122,15 @@ def test_review_never_guesses_missing_data(case, db_session, client_admin_real_u
     assert response.json()["preview_amount"] is None
 
 
-def test_review_legacy_uses_first_confirmed_price(case, db_session, client_admin_real_uow):
+def test_review_does_not_quote_impossible_precreation_time(case, db_session, client_admin_real_uow):
     row, url, v1, _ = conflict(case, db_session)
     row.payload = {key: value for key, value in row.payload.items() if key != "price_list_id"}
     row.client_happened_at -= timedelta(days=2)
     db_session.commit()
     data = client_admin_real_uow.get(url).json()
-    assert data["analysis_code"] == "NO_VERSION"
-    assert data["applicable_quote"]["price_list_id"] == str(v1.id)
-    assert data["applicable_quote"]["selection"] == "FIRST_CONFIRMED_LEGACY"
-    assert float(data["preview_amount"]) == 250
+    assert data["analysis_code"] == "INVALID_EXECUTION_TIME"
+    assert data["applicable_quote"] is None
+    assert data["resolution_available"] is False
 
 
 @pytest.mark.parametrize("channel", ["sync", "batch"])

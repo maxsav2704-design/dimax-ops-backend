@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -62,6 +63,7 @@ class SyncEventORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
 
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    client_time_has_timezone: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     applied_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -179,6 +181,7 @@ class SyncQueueItemORM(Base, UUIDPrimaryKeyMixin):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     base_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     client_happened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_time_has_timezone: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
     conflict_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -16,6 +16,7 @@ from app.modules.addons.infrastructure.models import (
 )
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
+from app.modules.earnings.application.execution_authority import ExecutionAuthority
 from app.modules.sync.domain.enums import SyncChangeType
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
 
@@ -385,6 +386,9 @@ class AddonsUseCases:
         client_event_id: str | None,
         legacy_price_queue: bool = False,
         seen_price_list_id: uuid.UUID | None = None,
+        execution_received_at: datetime | None = None,
+        execution_has_timezone: bool | None = None,
+        reviewed_execution: bool = False,
     ) -> ProjectAddonFactORM | None:
         qty_done = validate_fact_quantity(qty_done)
         if client_event_id is not None and (not client_event_id.strip() or len(client_event_id) > 80):
@@ -419,6 +423,13 @@ class AddonsUseCases:
             if existing is not None:
                 ensure_same_fact(existing, **replay_fields)
                 return None
+
+        if done_at is not None and not reviewed_execution and FactoryEarningsPricing.is_active(uow, company_id):
+            # Direct uploads must not bypass the offline queue's historical-price checks.
+            legacy_price_queue = ExecutionAuthority.inspect(uow, company_id=company_id, project_id=project_id,
+                installer_id=installer_id, performed_at=done_at, received_at=execution_received_at or utcnow(),
+                has_timezone=(execution_has_timezone if execution_received_at is not None
+                              else done_at.utcoffset() is not None), lock_assignments=True).require_automatic()
 
         row = ProjectAddonFactORM(
             company_id=company_id,

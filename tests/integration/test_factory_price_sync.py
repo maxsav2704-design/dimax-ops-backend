@@ -48,15 +48,16 @@ def test_snapshot_exposes_only_active_confirmed_installer_prices_on_cold_and_war
 
 @pytest.mark.parametrize("kind", ["DOOR", "ADDON"])
 @pytest.mark.parametrize("channel", ["sync", "batch"])
-def test_cached_execution_version_survives_amendment_and_replay(case, db_session, kind, channel):
+def test_cached_old_version_alone_cannot_authorize_historical_earnings(case, db_session, kind, channel):
     v1, a1 = activate(case)
     activate(case, expected=1, previous=v1.id, door_price="300", addon_price="12")
     event_id, payload = str(uuid4()), {"price_list_id": str(v1.id)}
     for _ in range(2):
-        assert_applied(submit(case, kind, channel, a1.effective_from, event_id, payload), channel)
-    work, proof = earning(db_session, case)
-    assert proof.price_list_id == v1.id
-    assert work.amount_snapshot == (Decimal("250") if kind == "DOOR" else Decimal("13.50"))
+        response = submit(case, kind, channel, a1.effective_from, event_id, payload)
+        assert response.status_code == 200, response.text
+        item = response.json()["acks" if channel == "sync" else "results"][0]
+        assert item["error" if channel == "sync" else "conflict_code"] == "CONFLICT_FACTORY_PRICE"
+    assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
 
 
 @pytest.mark.parametrize("kind", ["DOOR", "ADDON"])

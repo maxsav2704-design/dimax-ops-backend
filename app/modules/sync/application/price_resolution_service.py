@@ -31,7 +31,9 @@ class PriceConflictResolutionService:
         if not uow.price_lists.can_activate_prices(company_id, actor_user_id):
             raise Forbidden("Only an authorized company administrator may resolve price conflicts")
         fingerprint = hashlib.sha256(json.dumps({"source": source, "item_id": str(item_id),
-            "actor_user_id": str(actor_user_id), **body.model_dump(mode="json", exclude={"request_id"})},
+            "actor_user_id": str(actor_user_id),
+            **body.model_dump(mode="json", exclude={"request_id", "confirm_execution_evidence"}),
+            **({"confirm_execution_evidence": True} if body.confirm_execution_evidence else {})},
             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         decisions = uow.session.query(SyncPriceResolutionORM).filter_by(company_id=company_id)
         previous = decisions.filter_by(request_id=body.request_id).one_or_none()
@@ -72,18 +74,26 @@ class PriceConflictResolutionService:
                 company_id=company_id, client_event_id=event_id) is not None:
             raise Conflict("Additional work already exists; price resolution cannot rewrite it")
 
-        review = PriceConflictReviewService.get(uow, company_id=company_id, source=source, item_id=item_id)
+        review = PriceConflictReviewService.get(uow, company_id=company_id, source=source, item_id=item_id,
+                                               lock_assignments=True)
         if not review.resolution_available or not review.review_token:
             raise Conflict("This conflict needs additional evidence; no automatic price resolution is available")
         if review.review_token != body.review_token:
             raise Conflict("Work or price evidence changed; review it again", field="review_token")
+        if review.requires_execution_evidence and not body.confirm_execution_evidence:
+            raise Conflict("Confirm independent execution and assignment evidence before accruing this work",
+                           field="confirm_execution_evidence")
         quote = review.applicable_quote
         # Only a derived in-memory command uses the approved decision. The retained command never changes.
-        payload["price_list_id"] = str(quote.price_list_id)
+        if quote.selection == "FIRST_CONFIRMED_LEGACY":
+            payload.pop("price_list_id", None)
+        else:
+            payload["price_list_id"] = str(quote.price_list_id)
         try:
             if operation == "DOOR_SET_STATUS":
                 args = dict(company_id=company_id, installer_id=installer.id, actor_user_id=actor_user_id,
-                    project_id=row.project_id, payload=payload, happened_at=row.client_happened_at)
+                    project_id=row.project_id, payload=payload, happened_at=row.client_happened_at,
+                    reviewed_execution=True)
                 if source == "sync_queue":
                     InstallerSyncService._apply_batch_door_set_status(uow, base_version=row.base_version, **args)
                 else:
@@ -92,7 +102,7 @@ class PriceConflictResolutionService:
             else:
                 InstallerSyncService._apply_addon_fact_create(uow, company_id=company_id,
                     installer_id=installer.id, project_id=row.project_id, payload=payload,
-                    client_event_id=event_id, happened_at=row.client_happened_at)
+                    client_event_id=event_id, happened_at=row.client_happened_at, reviewed_execution=True)
                 fact = uow.addon_facts.get_by_client_event(company_id=company_id, client_event_id=event_id)
                 work = work_query.filter_by(addon_fact_id=fact.id).one()
         except _SyncConflictError as exc:
@@ -107,7 +117,9 @@ class PriceConflictResolutionService:
         decision = SyncPriceResolutionORM(company_id=company_id, **{key: row.id},
             completed_work_id=work.id, actor_user_id=actor_user_id, request_id=body.request_id,
             request_fingerprint=fingerprint, review_token=body.review_token, reason=body.reason,
-            original_command=original, quote_snapshot=quote.model_dump(mode="json"), amount=work.amount_snapshot)
+            original_command=original, quote_snapshot={**quote.model_dump(mode="json"),
+                "execution_evidence_confirmed": body.confirm_execution_evidence,
+                "analysis_code": review.analysis_code}, amount=work.amount_snapshot)
         uow.session.add(decision)
         if source == "sync_event":
             uow.sync_events.mark_applied(row)
@@ -118,5 +130,7 @@ class PriceConflictResolutionService:
             entity_type="SYNC_PRICE_RESOLUTION", entity_id=decision.id, action="SYNC_FACTORY_PRICE_RESOLVED",
             reason=body.reason, before=original,
             after={"completed_work_id": str(work.id), "price_list_id": str(quote.price_list_id),
-                   "amount": str(work.amount_snapshot), "approval_id": str(quote.approval_id)})
+                   "amount": str(work.amount_snapshot), "approval_id": str(quote.approval_id),
+                   "execution_evidence_confirmed": body.confirm_execution_evidence,
+                   "analysis_code": review.analysis_code})
         return PriceConflictResolutionService._result(decision)

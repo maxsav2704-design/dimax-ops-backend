@@ -13,6 +13,7 @@ from app.modules.doors.application.commands import MarkDoorInstalled, MarkDoorNo
 from app.modules.doors.application.use_cases import DoorUseCases
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
+from app.modules.earnings.application.execution_authority import ExecutionAuthority
 from app.modules.issues.application.installer_api_service import InstallerIssuesApiService
 from app.modules.projects.application.sync_payload import build_project_sync_payload
 from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
@@ -342,6 +343,7 @@ class InstallerSyncService:
                         installer_id=installer_id,
                         actor_user_id=actor_user_id,
                         item=item,
+                        receipt=row,
                     )
                 uow.sync_queue.mark_applied(row)
                 results.append(
@@ -642,6 +644,8 @@ class InstallerSyncService:
                             project_id=project_id,
                             payload=payload,
                             happened_at=happened_at,
+                            received_at=row.created_at,
+                            has_timezone=row.client_time_has_timezone,
                         )
                     elif etype == SyncEventType.ADDON_FACT_CREATE:
                         InstallerSyncService._apply_addon_fact_create(
@@ -652,6 +656,8 @@ class InstallerSyncService:
                             payload=payload,
                             client_event_id=cid,
                             happened_at=happened_at,
+                            received_at=row.created_at,
+                            has_timezone=row.client_time_has_timezone,
                         )
                     elif etype == SyncEventType.ISSUE_CREATE:
                         InstallerSyncService._apply_issue_create(
@@ -717,6 +723,7 @@ class InstallerSyncService:
         installer_id: uuid.UUID,
         actor_user_id: uuid.UUID,
         item: dict,
+        receipt,
     ) -> dict:
         operation_type = item["operation_type"]
         project_id = uuid.UUID(str(item["project_id"]))
@@ -736,6 +743,8 @@ class InstallerSyncService:
                 payload=payload,
                 base_version=base_version,
                 happened_at=happened_at,
+                received_at=receipt.created_at,
+                has_timezone=receipt.client_time_has_timezone,
             )
 
         if operation_type == "ADDON_FACT_CREATE":
@@ -747,6 +756,8 @@ class InstallerSyncService:
                 payload=payload,
                 client_event_id=str(item["id"]),
                 happened_at=happened_at,
+                received_at=receipt.created_at,
+                has_timezone=receipt.client_time_has_timezone,
             )
             return {"new_version": None}
 
@@ -757,7 +768,19 @@ class InstallerSyncService:
         completes_work = operation_type == "ADDON_FACT_CREATE" or (
             operation_type == "DOOR_SET_STATUS" and str(payload.get("status", "")).upper() == "INSTALLED")
         if completes_work and happened_at is None and FactoryEarningsPricing.is_active(uow, company_id):
-            raise Conflict("Offline work requires its execution time for factory pricing", field="happened_at")
+            raise Conflict("Offline work requires its execution time for factory pricing", field="price_list_id")
+
+    @staticmethod
+    def _execution_legacy_queue(uow, *, company_id, project_id, installer_id, happened_at,
+                                received_at, has_timezone, door_id=None, reviewed_execution=False):
+        if not FactoryEarningsPricing.is_active(uow, company_id):
+            return False
+        if reviewed_execution:
+            # Only the locked, audited resolution service can authorize a historical exception.
+            return uow.price_lists.activation_at(company_id, happened_at) is None
+        return ExecutionAuthority.inspect(uow, company_id=company_id, project_id=project_id,
+            installer_id=installer_id, door_id=door_id, performed_at=happened_at,
+            received_at=received_at, has_timezone=has_timezone).require_automatic()
 
     @staticmethod
     def _ensure_project_access(
@@ -830,6 +853,9 @@ class InstallerSyncService:
         project_id: uuid.UUID,
         payload: dict,
         happened_at: datetime | None = None,
+        received_at: datetime | None = None,
+        has_timezone: bool | None = None,
+        reviewed_execution: bool = False,
     ) -> None:
         InstallerSyncService._ensure_project_access(
             uow,
@@ -876,6 +902,9 @@ class InstallerSyncService:
             raise Forbidden("Door is locked (already INSTALLED)")
 
         if status == "INSTALLED":
+            legacy = InstallerSyncService._execution_legacy_queue(uow, company_id=company_id,
+                project_id=project_id, installer_id=installer_id, door_id=d.id, happened_at=happened_at,
+                received_at=received_at, has_timezone=has_timezone, reviewed_execution=reviewed_execution)
             DoorUseCases.mark_installed(
                 uow,
                 MarkDoorInstalled(
@@ -885,7 +914,7 @@ class InstallerSyncService:
                     source="OFFLINE_SYNC",
                     expected_installer_id=installer_id,
                     happened_at=happened_at,
-                    legacy_price_queue=happened_at is not None,
+                    legacy_price_queue=legacy,
                     seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
                 ),
             )
@@ -922,6 +951,9 @@ class InstallerSyncService:
         payload: dict,
         base_version: int,
         happened_at: datetime | None = None,
+        received_at: datetime | None = None,
+        has_timezone: bool | None = None,
+        reviewed_execution: bool = False,
     ) -> dict:
         door_id = payload.get("door_id")
         status = str(payload.get("status") or "").strip().upper()
@@ -974,6 +1006,9 @@ class InstallerSyncService:
 
         if status == DoorStatus.INSTALLED.value:
             try:
+                legacy = InstallerSyncService._execution_legacy_queue(uow, company_id=company_id,
+                    project_id=project_id, installer_id=installer_id, door_id=door.id, happened_at=happened_at,
+                    received_at=received_at, has_timezone=has_timezone, reviewed_execution=reviewed_execution)
                 result = InstallerDoorService.change_status(
                     uow,
                     company_id=company_id,
@@ -983,7 +1018,7 @@ class InstallerSyncService:
                     to_status=DoorStatus.INSTALLED,
                     source="OFFLINE_SYNC",
                     happened_at=happened_at,
-                    legacy_price_queue=happened_at is not None,
+                    legacy_price_queue=legacy,
                     seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
                 )
             except (ValidationError, Forbidden, Conflict) as exc:
@@ -1032,6 +1067,9 @@ class InstallerSyncService:
         payload: dict,
         client_event_id: str,
         happened_at: datetime | None,
+        received_at: datetime | None = None,
+        has_timezone: bool | None = None,
+        reviewed_execution: bool = False,
     ) -> None:
         InstallerSyncService._ensure_project_access(
             uow,
@@ -1060,8 +1098,11 @@ class InstallerSyncService:
             done_at=happened_at,
             source=AddonFactSource.OFFLINE,
             client_event_id=client_event_id,
-            legacy_price_queue=happened_at is not None,
+            legacy_price_queue=reviewed_execution and uow.price_lists.activation_at(company_id, happened_at) is None,
             seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
+            execution_received_at=received_at,
+            execution_has_timezone=has_timezone,
+            reviewed_execution=reviewed_execution,
         )
         if result is None:
             pass

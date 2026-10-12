@@ -116,27 +116,36 @@ def test_all_ingress_paths_use_factory_price_not_legacy_snapshot(case, db_sessio
 @pytest.mark.parametrize("kind", ["DOOR", "ADDON"])
 @pytest.mark.parametrize("channel", ["sync", "batch"])
 @pytest.mark.parametrize("legacy", [False, True])
-def test_late_upload_and_retry_keep_execution_price(case, db_session, kind, channel, legacy):
+def test_late_upload_and_retry_retain_work_without_unproven_historic_earning(case, db_session, kind, channel, legacy):
     v1, a1 = activate(case)
     at = a1.effective_from - timedelta(days=2) if legacy else a1.effective_from
     activate(case, expected=1, previous=v1.id, door_price="300", addon_price="12")
     event_id = str(uuid4())
-    assert_applied(submit(case, kind, channel, at, event_id), channel)
-    assert_applied(submit(case, kind, channel, at, event_id), channel)
-    work, proof = earning(db_session, case)
-    assert work.amount_snapshot == (Decimal("250") if kind == "DOOR" else Decimal("13.50"))
-    assert proof.price_list_id == v1.id
-    assert proof.selection == ("FIRST_CONFIRMED_LEGACY" if legacy else "AT_EXECUTION")
-    assert work.completed_at == at
+    for _ in range(2):
+        response = submit(case, kind, channel, at, event_id)
+        assert response.status_code == 200, response.text
+        result = response.json()["acks" if channel == "sync" else "results"][0]
+        assert result["error" if channel == "sync" else "conflict_code"] == "CONFLICT_FACTORY_PRICE"
+    assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
+    model = SyncEventORM if channel == "sync" else SyncQueueItemORM
+    row = db_session.query(model).filter_by(company_id=case.company).one()
+    assert row.client_happened_at == at and row.payload
 
 
 @pytest.mark.parametrize("channel", ["sync", "batch"])
-def test_legacy_queue_uses_first_confirmed_not_first_activated(case, db_session, channel):
+def test_legacy_review_proposes_first_confirmed_not_first_activated(case, db_session, client_admin_real_uow, channel):
+    at = utcnow()
     v1 = confirmed(case.company, case.actor, case.items)
     activate(case, expected=1, door_price="300", addon_price="12")
-    assert_applied(submit(case, "DOOR", channel, utcnow() - timedelta(days=1)), channel)
-    work, proof = earning(db_session, case)
-    assert work.amount_snapshot == Decimal("250") and proof.price_list_id == v1.id
+    submit(case, "DOOR", channel, at, extra_payload={"base_version": 0})
+    model = SyncEventORM if channel == "sync" else SyncQueueItemORM
+    row = db_session.query(model).filter_by(company_id=case.company).one()
+    source = "sync_event" if channel == "sync" else "sync_queue"
+    review = client_admin_real_uow.get(f"/api/v1/admin/sync/price-conflicts/{source}/{row.id}").json()
+    assert review["requires_execution_evidence"] is True
+    assert review["applicable_quote"]["price_list_id"] == str(v1.id)
+    assert Decimal(review["preview_amount"]) == Decimal("250")
+    assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
 
 
 @pytest.mark.parametrize("kind", ["DOOR", "ADDON"])

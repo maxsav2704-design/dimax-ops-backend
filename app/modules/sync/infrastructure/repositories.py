@@ -85,6 +85,7 @@ class SyncEventRepository:
             event_type=event_type,
             client_event_id=client_event_id,
             client_happened_at=client_happened_at,
+            client_time_has_timezone=client_happened_at is not None and client_happened_at.utcoffset() is not None,
             payload=payload,
             applied_at=None,
             apply_error=None,
@@ -528,6 +529,7 @@ class InstallerSyncQueueRepository:
                 company_id=company_id,
                 user_id=user_id,
                 created_at=utcnow(),
+                client_time_has_timezone=client_happened_at is not None and client_happened_at.utcoffset() is not None,
             )
         row.device_id = device_id
         row.project_id = project_id

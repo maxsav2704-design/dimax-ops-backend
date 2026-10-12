@@ -31,11 +31,13 @@ class PriceConflictReview(BaseModel):
         "MISSING_FACTORY_PRICE", "INVALID_FACTORY_EVIDENCE", "WORK_UNAVAILABLE",
         "INVALID_QUANTITY", "UNSUPPORTED_WORK", "CATALOG_UNIT_CHANGED",
         "ORIGINAL_PRICE_UNAVAILABLE",
+        "ASSIGNMENT_EVIDENCE_REQUIRED", "HISTORICAL_PRICE_REVIEW", "LEGACY_EXECUTION_REVIEW",
     ]
     applicable_quote: FactoryPriceQuote | None = None
     preview_amount: Decimal | None = None
     work_context: Literal["CURRENT_CATALOG"] = "CURRENT_CATALOG"
     resolution_available: bool = False
+    requires_execution_evidence: bool = False
     review_token: str | None = None
 
 
@@ -45,6 +47,7 @@ class ResolvePriceConflict(BaseModel):
     request_id: UUID
     review_token: str = Field(pattern=r"^[a-f0-9]{64}$")
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=500)]
+    confirm_execution_evidence: bool = False
 
 
 class PriceConflictResolution(BaseModel):
