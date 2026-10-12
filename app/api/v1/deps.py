@@ -181,6 +181,8 @@ def require_admin(
         raise ForbiddenScope("Admin profile required")
 
     method = request.method.upper()
+    if request.url.path.startswith("/api/v1/admin/settings/") and user.admin_scope != "OWNER":
+        raise ForbiddenScope("Only the company owner may access company settings")
     if method not in _SAFE_ADMIN_METHODS:
         if user.admin_scope not in {"OWNER", "OPERATIONS"}:
             raise ForbiddenScope("Admin write scope required")

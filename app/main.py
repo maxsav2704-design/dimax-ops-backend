@@ -13,6 +13,8 @@ from starlette.responses import JSONResponse
 from app.api.v1.errors import install_error_handlers
 from app.api.v1.routers import router as v1_router
 from app.core.config import settings
+from app.core.runtime_guard import validate_startup
+from app.modules.rates.application.approval_email import email_settings
 from app.shared.infrastructure.db.session import engine
 from app.shared.infrastructure.observability import (
     configure_logging,
@@ -68,7 +70,11 @@ def _request_query_keys(request: Request) -> list[str]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="DIMAX Operations Suite")
+    production = validate_startup(settings,
+        factory_email_key=email_settings.FACTORY_APPROVAL_EMAIL_KEY.get_secret_value())
+    app = FastAPI(title="DIMAX Operations Suite", docs_url=None if production else "/docs",
+                  redoc_url=None if production else "/redoc",
+                  openapi_url=None if production else "/openapi.json")
     install_error_handlers(app)
     @app.middleware("http")
     async def request_observability(request: Request, call_next):

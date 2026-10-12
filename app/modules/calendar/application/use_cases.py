@@ -10,6 +10,15 @@ from app.modules.calendar.infrastructure.models import CalendarEventORM
 
 class CalendarUseCases:
     @staticmethod
+    def _validate_assignees(uow, company_id, installer_ids):
+        ids = list(dict.fromkeys(installer_ids))
+        for installer_id in ids:
+            installer = uow.installers.get(company_id, installer_id)
+            if installer is None or not installer.is_active or installer.deleted_at is not None:
+                raise NotFound("Installer unavailable")
+        return ids
+
+    @staticmethod
     def create_event(
         uow,
         *,
@@ -25,6 +34,8 @@ class CalendarUseCases:
     ) -> CalendarEventORM:
         if ends_at <= starts_at:
             raise ValidationError("ends_at must be after starts_at")
+
+        installer_ids = CalendarUseCases._validate_assignees(uow, company_id, installer_ids)
 
         location_final = location.strip() if location else None
         if project_id is not None:
@@ -74,6 +85,9 @@ class CalendarUseCases:
             raise NotFound(
                 "Event not found", details={"event_id": str(event_id)}
             )
+
+        if kwargs.get("installer_ids") is not None:
+            kwargs["installer_ids"] = CalendarUseCases._validate_assignees(uow, company_id, kwargs["installer_ids"])
 
         for field in (
             "title",
