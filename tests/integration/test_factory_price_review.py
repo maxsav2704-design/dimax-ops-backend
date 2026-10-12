@@ -12,7 +12,6 @@ from app.modules.identity.infrastructure.models import AdminProfileORM
 from app.shared.domain.errors import Conflict
 from test_factory_earnings import activate, case, submit
 from test_factory_price_timeline import confirmed
-from test_offline_execution_authority import retained
 from app.modules.sync.application.price_review_service import PriceConflictReviewService
 from app.shared.infrastructure.db.base import utcnow
 
@@ -177,6 +176,8 @@ def test_price_filter_queries_both_sources_before_limit(case, db_session, client
 def test_missing_price_evidence_survives_later_list_and_retries(
     case, db_session, client_admin_real_uow, make_door_type, kind, channel, legacy,
 ):
+    from test_offline_execution_authority import retained
+
     if legacy:
         at = utcnow()
         first = confirmed(case.company, case.actor, [item for item in case.items if item["kind"] != kind])
@@ -238,6 +239,8 @@ def test_missing_price_evidence_survives_later_list_and_retries(
 @pytest.mark.parametrize("channel", ["sync", "batch"])
 def test_no_missing_price_evidence_when_factory_receipt_is_invalid(case, db_session, client_admin_real_uow, channel):
     from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
+    from test_offline_execution_authority import retained
+
     at = utcnow()
     first = confirmed(case.company, case.actor, case.items[:1])
     activate(case, expected=1)
