@@ -9,9 +9,11 @@ from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.identity.infrastructure.models import AdminProfileORM, UserORM
 from app.modules.rates.infrastructure.approval_models import FactoryPriceApprovalORM
 from app.modules.rates.infrastructure.timeline_models import FactoryPriceActivationORM
+from app.modules.sync.infrastructure.models import SyncPriceResolutionORM
 from test_factory_price_timeline import book, other_admin, quote, transition
 from test_factory_price_application_check import confirm_version
 from test_factory_earnings import case, submit, assert_applied
+from test_price_conflict_resolution import clean_test_decisions
 
 URL = "/api/v1/admin/price-lists"
 
@@ -105,7 +107,7 @@ def test_historical_effective_receipt_remains_readable_without_backfilled_eviden
     assert receipt.mailbox_verified_at is None
 
 
-def test_authenticated_factory_activation_to_late_offline_earnings(case, client_raw, db_session, installer_user):
+def test_authenticated_factory_activation_to_reviewed_late_offline_earnings(case, client_raw, db_session, installer_user):
     login(client_raw, db_session, case.actor)
     items = [{**item, "target_id": str(item["target_id"])} for item in case.items]
     first = confirm_version(client_raw, items)
@@ -120,11 +122,45 @@ def test_authenticated_factory_activation_to_late_offline_earnings(case, client_
     login(client_raw, db_session, installer_user.id)
     assert client_raw.post(f'{URL}/{next_list["id"]}/activate', json=body()).status_code == 403
     case.client = client_raw
+    pending = []
     for kind in ("DOOR", "ADDON"):
         event = str(uuid4())
         for _ in range(2):
-            assert_applied(submit(case, kind, "batch", performed_at, event,
-                {"price_list_id": first["id"]}), "batch")
+            response = submit(case, kind, "batch", performed_at, event, {"price_list_id": first["id"]})
+            assert response.status_code == 200, response.text
+            result = response.json()["results"][0]
+            assert result["status"] == "CONFLICT" and result["conflict_code"] == "CONFLICT_FACTORY_PRICE"
+        path = f"/api/v1/admin/sync/price-conflicts/sync_queue/{event}"
+        assert client_raw.get(path).status_code == 403
+        assert client_raw.post(path + "/resolve", json={"request_id": str(uuid4()),
+            "review_token": "0" * 64, "reason": "Installer cannot authorize own historical earnings",
+            "confirm_execution_evidence": True}).status_code == 403
+        pending.append((kind, event, path))
+    assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
+
+    login(client_raw, db_session, case.actor)
+    for _, _, path in pending:
+        response = client_raw.get(path)
+        assert response.status_code == 200, response.text
+        review = response.json()
+        assert review["analysis_code"] == "HISTORICAL_PRICE_REVIEW"
+        assert review["requires_execution_evidence"] and review["resolution_available"]
+        request = {"request_id": str(uuid4()), "review_token": review["review_token"],
+            "reason": "Verified assignment and completed work against the site work record"}
+        assert client_raw.post(path + "/resolve", json=request).status_code == 409
+        request["confirm_execution_evidence"] = True
+        resolved = client_raw.post(path + "/resolve", json=request)
+        assert resolved.status_code == 200, resolved.text
+        assert client_raw.post(path + "/resolve", json=request).json() == resolved.json()
+
+    login(client_raw, db_session, installer_user.id)
+    for kind, event, _ in pending:
+        assert_applied(submit(case, kind, "batch", performed_at, event, {"price_list_id": first["id"]}), "batch")
     db_session.expire_all()
     rows = db_session.scalars(select(CompletedWorkORM).where(CompletedWorkORM.company_id == case.company)).all()
     assert sorted(row.amount_snapshot for row in rows) == [Decimal("13.50"), Decimal("250.00")]
+    assert all(row.completed_at == performed_at for row in rows)
+    decisions = db_session.query(SyncPriceResolutionORM).filter_by(company_id=case.company).all()
+    assert len(decisions) == 2
+    assert all(row.actor_user_id == case.actor and row.quote_snapshot["execution_evidence_confirmed"]
+               for row in decisions)

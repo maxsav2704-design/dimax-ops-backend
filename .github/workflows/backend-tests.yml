@@ -170,6 +170,7 @@ jobs:
           tests/integration/test_offline_execution_authority.py
           tests/integration/test_factory_earnings.py
           tests/integration/test_factory_price_sync.py
+          tests/integration/test_factory_price_activation_api.py
           tests/integration/test_factory_price_review.py
           tests/integration/test_price_conflict_resolution.py
 
@@ -177,7 +178,7 @@ jobs:
         run: >
           docker compose run --rm --no-deps
           -e APP_ENV -e DATABASE_URL -e TEST_DATABASE_URL
-          api pytest -q -p no:cacheprovider --maxfail=1 tests/integration
+          api pytest -q -p no:cacheprovider tests/integration
 
       - name: Teardown
         if: always()
