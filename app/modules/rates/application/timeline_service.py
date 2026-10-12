@@ -15,6 +15,14 @@ from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationEr
 from app.shared.infrastructure.db.base import utcnow
 
 
+class MissingFactoryPrice(Conflict):
+    def __init__(self, context: FactoryWorkPriceContext):
+        super().__init__("The applicable factory list has no price for this work",
+                         field="price_list_id", meta={"reason": "MISSING_FACTORY_PRICE"})
+        # Internal evidence for authorized review; preserve the public error envelope.
+        self.context = context
+
+
 class FactoryPriceTimelineService:
     """Reviewed company-wide transitions and execution-time price selection."""
 
@@ -152,7 +160,6 @@ class FactoryPriceTimelineService:
         item = next((row for row in uow.price_lists.items(company_id, price_list.id)
                      if row.kind == kind and (row.door_type_id or row.addon_type_id) == target_id), None)
         if item is None:
-            raise Conflict("The applicable factory list has no price for this work", field="price_list_id",
-                           meta={"reason": "MISSING_FACTORY_PRICE", "missing_price": context.model_dump(mode="json")})
+            raise MissingFactoryPrice(context)
         return FactoryPriceQuote(**context.model_dump(), price_list_item_id=item.id,
                                  unit=item.unit, rate=item.installer_price)

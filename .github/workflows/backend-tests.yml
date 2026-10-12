@@ -170,6 +170,7 @@ jobs:
           tests/integration/test_offline_execution_authority.py
           tests/integration/test_execution_time_correction.py
           tests/integration/test_factory_earnings.py
+          tests/integration/test_factory_price_timeline.py
           tests/integration/test_factory_price_sync.py
           tests/integration/test_factory_price_activation_api.py
           tests/integration/test_factory_price_review.py

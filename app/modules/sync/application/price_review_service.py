@@ -3,8 +3,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
-from app.modules.rates.application.timeline_service import FactoryPriceTimelineService
-from app.modules.rates.application.timeline_dto import FactoryWorkPriceContext
+from app.modules.rates.application.timeline_service import FactoryPriceTimelineService, MissingFactoryPrice
 from app.modules.earnings.application.execution_authority import ExecutionAuthority
 from app.modules.sync.application.price_review_dto import ExecutionTimeCorrection, PriceConflictReview, PriceConflictSource
 from app.shared.domain.errors import Conflict, NotFound, ValidationError
@@ -130,10 +129,12 @@ class PriceConflictReviewService:
         except ValidationError:
             result.analysis_code = "INVALID_EXECUTION_TIME"
             return result
-        except Conflict as exc:
-            result.analysis_code = "MISSING_FACTORY_PRICE" if (exc.meta or {}).get("reason") == "MISSING_FACTORY_PRICE" else "INVALID_FACTORY_EVIDENCE"
-            if result.analysis_code == "MISSING_FACTORY_PRICE" and (exc.meta or {}).get("missing_price"):
-                result.missing_price = FactoryWorkPriceContext.model_validate(exc.meta["missing_price"])
+        except MissingFactoryPrice as exc:
+            result.analysis_code = "MISSING_FACTORY_PRICE"
+            result.missing_price = exc.context
+            return result
+        except Conflict:
+            result.analysis_code = "INVALID_FACTORY_EVIDENCE"
             return result
         if quote is None:
             result.analysis_code = "NO_ACTIVE_FACTORY_PRICES"
