@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -18,6 +18,14 @@ from app.modules.identity.infrastructure.models import AdminProfileORM
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.projects.domain.enums import ProjectStatus
 from app.modules.projects.infrastructure.models import ProjectORM
+
+
+JERUSALEM_MIDNIGHT_CASES = [
+    (datetime(2026, 1, 15, 21, 59, tzinfo=timezone.utc), date(2026, 1, 15)),
+    (datetime(2026, 1, 15, 22, 0, tzinfo=timezone.utc), date(2026, 1, 16)),
+    (datetime(2026, 7, 15, 20, 59, tzinfo=timezone.utc), date(2026, 7, 15)),
+    (datetime(2026, 7, 15, 21, 0, tzinfo=timezone.utc), date(2026, 7, 16)),
+]
 
 
 class _SessionUow:
@@ -85,7 +93,9 @@ def _seed_original_completed_work(
     installer_name: str = "Correction Installer",
     unit_label: str = "CW-01",
     amount: Decimal = Decimal("40.00"),
+    completed_at: datetime | None = None,
 ) -> tuple[InstallerORM, CompletedWorkORM]:
+    completed_at = completed_at or datetime.now(timezone.utc)
     installer = InstallerORM(
         company_id=company_id,
         full_name=installer_name,
@@ -110,6 +120,7 @@ def _seed_original_completed_work(
         installer_id=installer.id,
         unit_label=unit_label,
     )
+    door.installed_at = completed_at
     db_session.add(door)
     db_session.flush()
 
@@ -118,7 +129,7 @@ def _seed_original_completed_work(
         project_id=project.id,
         door_id=door.id,
         installer_id=installer.id,
-        completed_at=datetime.now(timezone.utc),
+        completed_at=completed_at,
         quantity=Decimal("1.00"),
         rate_snapshot=amount,
         amount_snapshot=amount,
@@ -163,6 +174,7 @@ def _seed_addon_completed_work(
     db_session,
     company_id: uuid.UUID,
     installer_name: str = "Addon Correction Installer",
+    done_at: datetime | None = None,
 ) -> tuple[InstallerORM, CompletedWorkORM, ProjectAddonFactORM]:
     installer = InstallerORM(
         company_id=company_id,
@@ -195,7 +207,7 @@ def _seed_addon_completed_work(
         installer_id=installer.id,
         addon_type_id=addon_type.id,
         qty_done=Decimal("2.00"),
-        done_at=datetime.now(timezone.utc),
+        done_at=done_at or datetime.now(timezone.utc),
         comment="Offline addon",
         source=AddonFactSource.OFFLINE,
         client_event_id=f"addon-correction-{uuid.uuid4()}",
@@ -290,14 +302,18 @@ def test_admin_earnings_correction_creates_reversal_and_correction_rows(
     assert Decimal(str(rows[1].amount_snapshot)) == Decimal("-40.00")
 
 
+@pytest.mark.parametrize("performed_at,business_day", JERUSALEM_MIDNIGHT_CASES)
 def test_admin_earnings_correction_allows_addon_fact_reversal_and_correction(
     client,
     db_session,
     company_id,
+    performed_at,
+    business_day,
 ):
     installer, original, fact = _seed_addon_completed_work(
         db_session=db_session,
         company_id=company_id,
+        done_at=performed_at,
     )
 
     resp = client.post(
@@ -312,6 +328,7 @@ def test_admin_earnings_correction_allows_addon_fact_reversal_and_correction(
     body = resp.json()
     assert body["reversal"]["amount_snapshot"] == "-24.00"
     assert body["correction"]["amount_snapshot"] == "28.00"
+    assert datetime.fromisoformat(body["correction"]["completed_at"]) == performed_at
 
     ledger_resp = client.get(
         f"/api/v1/admin/earnings/ledger?installer_id={installer.id}&work_kind=ADDON"
@@ -334,9 +351,18 @@ def test_admin_earnings_correction_allows_addon_fact_reversal_and_correction(
         company_id=company_id,
         installer_id=installer.id,
         period="day",
-        anchor_date=fact.done_at.date(),
+        anchor_date=business_day,
     )
     assert summary.total == Decimal("28.00")
+    assert summary.period_key == business_day.isoformat()
+    assert summary.jobs_count == 1
+    for offset in (-1, 1):
+        adjacent = InstallerEarningsApiService.summary(
+            _SessionUow(db_session), company_id=company_id, installer_id=installer.id,
+            period="day", anchor_date=business_day + timedelta(days=offset),
+        )
+        assert adjacent.total == Decimal("0.00")
+        assert adjacent.jobs_count == 0
 
 
 def test_admin_earnings_correction_rejects_non_positive_rate(
@@ -761,17 +787,21 @@ def test_admin_earnings_correction_rejects_existing_correction_entry(
     assert resp.json()["error"]["code"] == "CONFLICT"
 
 
+@pytest.mark.parametrize("performed_at,business_day", JERUSALEM_MIDNIGHT_CASES)
 def test_earnings_summary_reflects_admin_correction_write_path(
     client,
     db_session,
     company_id,
     make_door_type,
+    performed_at,
+    business_day,
 ):
     installer, original = _seed_original_completed_work(
         db_session=db_session,
         company_id=company_id,
         make_door_type=make_door_type,
         unit_label="CW-03",
+        completed_at=performed_at,
     )
 
     resp = client.post(
@@ -784,12 +814,21 @@ def test_earnings_summary_reflects_admin_correction_write_path(
     )
     assert resp.status_code == 201, resp.text
 
+    assert datetime.fromisoformat(resp.json()["correction"]["completed_at"]) == performed_at
     summary = InstallerEarningsApiService.summary(
         _SessionUow(db_session),
         company_id=company_id,
         installer_id=installer.id,
         period="day",
-        anchor_date=original.completed_at.date(),
+        anchor_date=business_day,
     )
     assert summary.total == Decimal("55.00")
     assert summary.jobs_count == 1
+    assert summary.period_key == business_day.isoformat()
+    for offset in (-1, 1):
+        adjacent = InstallerEarningsApiService.summary(
+            _SessionUow(db_session), company_id=company_id, installer_id=installer.id,
+            period="day", anchor_date=business_day + timedelta(days=offset),
+        )
+        assert adjacent.total == Decimal("0.00")
+        assert adjacent.jobs_count == 0
