@@ -258,5 +258,6 @@ def test_foreign_company_cannot_read_issue_or_revoke(case, db_session, client_ad
         db_session.rollback()
         db_session.query(AdminProfileORM).filter_by(user_id=actor.id).delete()
         db_session.delete(actor)
+        db_session.flush()
         db_session.delete(other)
         db_session.commit()
