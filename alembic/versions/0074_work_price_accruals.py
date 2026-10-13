@@ -42,11 +42,24 @@ def upgrade():
     BEGIN RAISE EXCEPTION 'Work price accrual evidence is immutable'; END;
     $$ LANGUAGE plpgsql""")
     op.execute("CREATE TRIGGER work_price_accrual_guard BEFORE UPDATE OR DELETE ON work_price_accruals FOR EACH ROW EXECUTE FUNCTION protect_work_price_accrual()")
+    op.execute("""CREATE FUNCTION protect_work_accrued_earning() RETURNS trigger AS $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM work_price_accruals WHERE completed_work_id = OLD.id
+                 OR completed_work_id = OLD.correction_ref_id) THEN
+        IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'Factory-confirmed work earnings are immutable'; END IF;
+        IF NEW IS DISTINCT FROM OLD THEN RAISE EXCEPTION 'Factory-confirmed work earnings are immutable'; END IF;
+      END IF;
+      IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+      RETURN NEW;
+    END; $$ LANGUAGE plpgsql""")
+    op.execute("CREATE TRIGGER work_accrued_earning_guard BEFORE UPDATE OR DELETE ON completed_work FOR EACH ROW EXECUTE FUNCTION protect_work_accrued_earning()")
 
 
 def downgrade():
     op.execute("LOCK TABLE work_price_accruals IN ACCESS EXCLUSIVE MODE")
     if op.get_bind().execute(sa.text("SELECT EXISTS(SELECT 1 FROM work_price_accruals)")).scalar_one():
         raise RuntimeError("Cannot downgrade: work price accrual history exists")
+    op.execute("DROP TRIGGER work_accrued_earning_guard ON completed_work")
+    op.execute("DROP FUNCTION protect_work_accrued_earning()")
     op.drop_table("work_price_accruals")
     op.execute("DROP FUNCTION protect_work_price_accrual()")

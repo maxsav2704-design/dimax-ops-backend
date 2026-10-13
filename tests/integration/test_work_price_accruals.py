@@ -4,6 +4,7 @@ from datetime import timedelta
 from decimal import Decimal
 from threading import Barrier
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -81,6 +82,11 @@ def test_accrue_once_and_ack_original_mobile_command(case, db_session, client_ad
     assert work.amount_snapshot == Decimal("9.01" if kind == "DOOR" else "13.52")
     assert work.completed_at == original_time
     assert work.installer_id == case.installer and work.project_id == case.project
+    mobile = case.client.get("/api/v1/installer/earnings/summary", params={
+        "period": "day", "date": original_time.astimezone(ZoneInfo("Asia/Jerusalem")).date().isoformat()})
+    assert mobile.status_code == 200, mobile.text
+    assert Decimal(mobile.json()["total"]) == work.amount_snapshot
+    assert mobile.json()["rows"][0]["id"] == str(work.id)
     ledger = client.get("/api/v1/admin/earnings/ledger").json()["items"]
     assert len(ledger) == 1 and not ledger[0]["can_correct"]
     assert ledger[0]["factory_price"] is None and ledger[0]["work_price"]["id"] == result.json()["id"]
@@ -88,6 +94,11 @@ def test_accrue_once_and_ack_original_mobile_command(case, db_session, client_ad
     for command in ("UPDATE work_price_accruals SET amount=1 WHERE id=:id", "DELETE FROM work_price_accruals WHERE id=:id"):
         with pytest.raises(DBAPIError):
             db_session.execute(text(command), {"id": UUID(result.json()["id"])})
+        db_session.rollback()
+    for command in ("UPDATE completed_work SET rate_snapshot=1, amount_snapshot=quantity WHERE id=:id",
+                    "DELETE FROM completed_work WHERE id=:id"):
+        with pytest.raises(DBAPIError):
+            db_session.execute(text(command), {"id": work.id})
         db_session.rollback()
 
 
@@ -109,7 +120,8 @@ def test_stale_work_cannot_accrue(case, db_session, client_admin_real_uow, chang
     else:
         assert client.post(proposals, json=proposal_body(client, proposals, rate="12.00")).status_code == 200
     db_session.commit()
-    assert client.post(url, json=body).status_code in (403, 409)
+    expected = 422 if change == "payload" else 403 if change == "permission" else 409
+    assert client.post(url, json=body).status_code == expected
     assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
     assert db_session.query(WorkPriceAccrualORM).filter_by(company_id=case.company).count() == 0
 
