@@ -137,7 +137,8 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Both the focused financial regressions and full suite must finish on slower runners.
+    timeout-minutes: 45
     env:
       APP_ENV: test
       DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/dimax_acceptance_tests
