@@ -16,6 +16,8 @@ from app.modules.sync.application.work_price_proposal_dto import (
 from app.modules.sync.application.work_price_proposal_service import WorkPriceProposalService
 from app.modules.sync.application.work_price_approval_dto import IssueWorkPriceApproval, WorkPriceApprovalPage, WorkPriceApprovalSummary
 from app.modules.sync.application.work_price_approval_service import WorkPriceApprovalService
+from app.modules.sync.application.work_price_accrual_service import WorkPriceAccrualService
+from app.modules.sync.application.work_price_accrual_dto import AccrueWorkPrice, WorkPriceAccrual, WorkPriceAccrualReview
 from app.modules.rates.application.price_list_dto import CancelPriceList
 from app.modules.sync.api.admin_schemas import (
     SyncProblemsResponseDTO,
@@ -27,6 +29,24 @@ from app.modules.sync.application.admin_api_service import AdminSyncApiService
 from app.shared.infrastructure.db.uow_sqlalchemy import SqlAlchemyUnitOfWork
 
 router = APIRouter(prefix="/admin/sync", tags=["Admin Sync"])
+
+
+@router.get("/work-price-approvals/{approval_id}/accrual", response_model=WorkPriceAccrualReview)
+def review_work_price_accrual(approval_id: UUID, response: Response,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return WorkPriceAccrualService.review(uow, company_id=admin.company_id,
+            actor_user_id=admin.id, approval_id=approval_id)
+
+
+@router.post("/work-price-approvals/{approval_id}/accrual", response_model=WorkPriceAccrual)
+def accrue_work_price(approval_id: UUID, body: AccrueWorkPrice, response: Response,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return WorkPriceAccrualService.accrue(uow, company_id=admin.company_id,
+            actor_user_id=admin.id, approval_id=approval_id, body=body)
 
 
 @router.get("/states", response_model=list[SyncStateDTO])

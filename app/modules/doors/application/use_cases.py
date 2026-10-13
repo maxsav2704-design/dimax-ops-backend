@@ -93,6 +93,7 @@ class DoorUseCases:
             door=door,
             legacy_price_queue=cmd.legacy_price_queue,
             seen_price_list_id=cmd.seen_price_list_id,
+            approved_work_price=cmd.approved_work_price,
         )
 
         # закрываем issue если было

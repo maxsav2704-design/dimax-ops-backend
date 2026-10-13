@@ -856,6 +856,7 @@ class InstallerSyncService:
         received_at: datetime | None = None,
         has_timezone: bool | None = None,
         reviewed_execution: bool = False,
+        approved_work_price=None,
     ) -> None:
         InstallerSyncService._ensure_project_access(
             uow,
@@ -916,6 +917,7 @@ class InstallerSyncService:
                     happened_at=happened_at,
                     legacy_price_queue=legacy,
                     seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
+                    approved_work_price=approved_work_price,
                 ),
             )
         elif status == "NOT_INSTALLED":
@@ -954,6 +956,7 @@ class InstallerSyncService:
         received_at: datetime | None = None,
         has_timezone: bool | None = None,
         reviewed_execution: bool = False,
+        approved_work_price=None,
     ) -> dict:
         door_id = payload.get("door_id")
         status = str(payload.get("status") or "").strip().upper()
@@ -1020,6 +1023,7 @@ class InstallerSyncService:
                     happened_at=happened_at,
                     legacy_price_queue=legacy,
                     seen_price_list_id=uuid.UUID(payload["price_list_id"]) if payload.get("price_list_id") else None,
+                    approved_work_price=approved_work_price,
                 )
             except (ValidationError, Forbidden, Conflict) as exc:
                 raise InstallerSyncService._domain_error_to_conflict(exc) from exc
@@ -1070,6 +1074,7 @@ class InstallerSyncService:
         received_at: datetime | None = None,
         has_timezone: bool | None = None,
         reviewed_execution: bool = False,
+        approved_work_price=None,
     ) -> None:
         InstallerSyncService._ensure_project_access(
             uow,
@@ -1103,6 +1108,7 @@ class InstallerSyncService:
             execution_received_at=received_at,
             execution_has_timezone=has_timezone,
             reviewed_execution=reviewed_execution,
+            approved_work_price=approved_work_price,
         )
         if result is None:
             pass

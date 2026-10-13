@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from app.modules.earnings.application.work_pricing import ApprovedWorkPrice
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class MarkDoorInstalled:
     happened_at: datetime | None = None
     legacy_price_queue: bool = False
     seen_price_list_id: uuid.UUID | None = None
+    approved_work_price: ApprovedWorkPrice | None = None
 
 
 @dataclass(frozen=True)

@@ -45,6 +45,17 @@ class FactoryEarningPriceDTO(BaseModel):
     effective_from: datetime
 
 
+class WorkEarningPriceDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    approval_id: uuid.UUID
+    completed_work_id: uuid.UUID
+    approval_hash: str
+    amount: Decimal
+    accrued_at: datetime
+    reason: str
+
+
 class AdminEarningsLedgerItemDTO(EarningsLedgerEntryDTO):
     work_kind: str
     project_id: uuid.UUID | None
@@ -60,6 +71,7 @@ class AdminEarningsLedgerItemDTO(EarningsLedgerEntryDTO):
     installer_name: str | None
     can_correct: bool
     factory_price: FactoryEarningPriceDTO | None = None
+    work_price: WorkEarningPriceDTO | None = None
 
 
 class AdminEarningsLedgerResponseDTO(BaseModel):

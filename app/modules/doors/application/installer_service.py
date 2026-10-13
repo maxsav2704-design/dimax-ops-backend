@@ -11,6 +11,7 @@ from app.modules.doors.application.transition_recorder import record_door_transi
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned, InvalidTransition
 from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
+from app.modules.earnings.application.work_pricing import ApprovedWorkPrice
 from app.modules.projects.application.status_service import ProjectStatusService
 from app.shared.domain.errors import NotFound
 
@@ -35,6 +36,7 @@ class InstallerDoorService:
         happened_at: datetime | None = None,
         legacy_price_queue: bool = False,
         seen_price_list_id: uuid.UUID | None = None,
+        approved_work_price: ApprovedWorkPrice | None = None,
     ) -> dict:
         FactoryEarningsPricing.lock_company(uow, company_id)
         door = uow.doors.get(
@@ -97,6 +99,7 @@ class InstallerDoorService:
                 door=door,
                 legacy_price_queue=legacy_price_queue,
                 seen_price_list_id=seen_price_list_id,
+                approved_work_price=approved_work_price,
             )
 
         ProjectStatusService.recalc_and_set(

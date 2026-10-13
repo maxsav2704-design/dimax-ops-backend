@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.db.base import Base, utcnow
+from app.modules.earnings.infrastructure.work_price_models import WorkPriceAccrualORM  # noqa: F401 -- register dependent evidence
 
 
 class FactoryEarningPriceORM(Base):

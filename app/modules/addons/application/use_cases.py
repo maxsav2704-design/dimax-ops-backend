@@ -16,6 +16,7 @@ from app.modules.addons.infrastructure.models import (
 )
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
+from app.modules.earnings.application.work_pricing import ApprovedWorkPrice
 from app.modules.earnings.application.execution_authority import ExecutionAuthority
 from app.modules.sync.domain.enums import SyncChangeType
 from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
@@ -72,6 +73,7 @@ def create_completed_work_for_addon_fact(
     plan,
     legacy_price_queue: bool = False,
     seen_price_list_id: uuid.UUID | None = None,
+    approved_work_price: ApprovedWorkPrice | None = None,
 ) -> CompletedWorkORM | None:
     if Decimal(str(fact.qty_done or 0)) <= 0:
         return None
@@ -92,6 +94,7 @@ def create_completed_work_for_addon_fact(
     quote = FactoryEarningsPricing.quote(
         uow, company_id=company_id, kind="ADDON", target_id=fact.addon_type_id,
         performed_at=completed_at, legacy_queue=legacy_price_queue, seen_price_list_id=seen_price_list_id,
+        approved_work_price=approved_work_price,
     )
     if quote is None and (plan is None or Decimal(str(plan.installer_price or 0)) <= 0):
         return None
@@ -389,6 +392,7 @@ class AddonsUseCases:
         execution_received_at: datetime | None = None,
         execution_has_timezone: bool | None = None,
         reviewed_execution: bool = False,
+        approved_work_price: ApprovedWorkPrice | None = None,
     ) -> ProjectAddonFactORM | None:
         qty_done = validate_fact_quantity(qty_done)
         if client_event_id is not None and (not client_event_id.strip() or len(client_event_id) > 80):
@@ -463,6 +467,7 @@ class AddonsUseCases:
             uow, company_id=company_id, fact=row, plan=plan,
             legacy_price_queue=legacy_price_queue,
             seen_price_list_id=seen_price_list_id,
+            approved_work_price=approved_work_price,
         )
 
         uow.sync_change_log.add_change(

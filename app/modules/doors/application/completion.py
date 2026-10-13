@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from app.modules.doors.application.pricing import resolve_completion_pricing
 from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
+from app.modules.earnings.application.work_pricing import ApprovedWorkPrice
 from app.modules.earnings.infrastructure.ledger_queries import active_completed_work_filter
 from app.modules.earnings.infrastructure.models import (
     ClientPriceSnapshotORM,
@@ -82,6 +83,7 @@ def create_completed_work_for_door(
     door,
     legacy_price_queue: bool = False,
     seen_price_list_id: uuid.UUID | None = None,
+    approved_work_price: ApprovedWorkPrice | None = None,
 ) -> CompletedWorkORM:
     if installer_id is None:
         raise ValidationError(
@@ -107,6 +109,7 @@ def create_completed_work_for_door(
     quote = FactoryEarningsPricing.quote(
         uow, company_id=company_id, kind="DOOR", target_id=door.door_type_id,
         performed_at=completed_at, legacy_queue=legacy_price_queue, seen_price_list_id=seen_price_list_id,
+        approved_work_price=approved_work_price,
     )
     if quote is not None:
         if (getattr(door, "apply_surcharge_to_installer", False)
