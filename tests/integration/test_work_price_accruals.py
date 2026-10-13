@@ -51,7 +51,7 @@ def ready(case, db, client, kind="ADDON", channel="batch", legacy=False):
     assert preview.status_code == 200, preview.text
     assert preview.headers["cache-control"] == "no-store"
     assert preview.json()["accrual"] is None
-    body = {"request_id": str(uuid4()), "approval_hash": issued["snapshot_hash"],
+    body = {"request_id": str(uuid4()), "approval_hash": preview.json()["approval_hash"],
             "reason": "Execution and independent factory decision checked", "confirm_accrual": True}
     return row, proposals, url, body
 
@@ -128,7 +128,7 @@ def test_pending_confirmation_cannot_accrue(case, db_session, client_admin_real_
     issued, _ = send(client, invitations, body)
     url = f'/api/v1/admin/sync/work-price-approvals/{issued["id"]}/accrual'
     assert client.get(url).status_code == 409
-    assert client.post(url, json={"request_id": str(uuid4()), "approval_hash": issued["snapshot_hash"],
+    assert client.post(url, json={"request_id": str(uuid4()), "approval_hash": "a" * 64,
         "reason": "Attempt without factory confirmation", "confirm_accrual": True}).status_code == 409
 
 
