@@ -14,10 +14,37 @@ from app.modules.rates.application.approval_verification import VerificationReje
 from app.modules.rates.application.contact_dto import FactoryContactView, RegisterFactoryContact, RevokeFactoryContact
 from app.modules.rates.application.contact_service import FactoryContactService
 from app.shared.domain.errors import Forbidden
+from app.modules.sync.application.work_price_approval_dto import PublicWorkPriceApproval
+from app.modules.sync.application.work_price_approval_service import WorkPriceApprovalService
 
 admin_router = APIRouter(prefix="/admin/price-lists", tags=["Admin / Factory price lists"])
 public_router = APIRouter(prefix="/public/price-approvals", tags=["Public / Factory prices"],
                          dependencies=[Depends(rate_limit_factory_prices)])
+
+
+@public_router.post("/work/preview", response_model=PublicWorkPriceApproval)
+def preview_work_price(body: PreviewApproval, response: Response, uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return WorkPriceApprovalService.preview(uow, token=body.token)
+
+
+@public_router.post("/work/request-code", response_model=RequestedApprovalCode)
+def request_work_price_code(body: PreviewApproval, response: Response, uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return WorkPriceApprovalService.request_code(uow, token=body.token)
+
+
+@public_router.post("/work/confirm", response_model=PublicWorkPriceApproval)
+def confirm_work_price(body: ConfirmApproval, response: Response, request: Request, uow=Depends(get_uow)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        result = WorkPriceApprovalService.confirm(uow, body=body,
+            ip=request.client.host if request.client else None, user_agent=request.headers.get("user-agent"))
+    if isinstance(result, VerificationRejected):
+        raise Forbidden("A valid mailbox code is required; request a new invitation if the attempt limit was reached")
+    return result
 
 
 @admin_router.get("/factory/contact", response_model=FactoryContactView | None)

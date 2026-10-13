@@ -23,13 +23,14 @@ class VerificationRejected:
 
 
 def code_digest(invitation, code: str) -> str:
-    context = (f"factory-mailbox-v1:{invitation.company_id}:{invitation.id}:"
+    purpose = getattr(invitation, "mailbox_purpose", "factory-mailbox-v1")
+    context = (f"{purpose}:{invitation.company_id}:{invitation.id}:"
                f"{invitation.mailbox_challenge_id}:{invitation.snapshot_hash}:"
                f"{invitation.recipient_email}:{code}")
     return hmac.new(_key(), context.encode(), hashlib.sha256).hexdigest()
 
 
-def request_code(uow, invitation, token: str, now) -> RequestedApprovalCode:
+def request_code(uow, invitation, token: str, now, *, enqueue=enqueue_code) -> RequestedApprovalCode:
     if invitation.confirmed_at:
         raise Conflict("This version already has an immutable factory decision")
     if invitation.mailbox_attempts >= MAX_ATTEMPTS or invitation.mailbox_requests >= MAX_REQUESTS:
@@ -44,7 +45,7 @@ def request_code(uow, invitation, token: str, now) -> RequestedApprovalCode:
     invitation.mailbox_code_expires_at = min(now + CODE_LIFETIME, invitation.expires_at)
     invitation.mailbox_requests += 1
     # Resending invalidates the previous code, never the invitation's failed-attempt budget.
-    enqueue_code(uow, invitation, token, code)
+    enqueue(uow, invitation, token, code)
     return RequestedApprovalCode(expires_at=invitation.mailbox_code_expires_at, resend_after=now + RESEND_DELAY)
 
 

@@ -18,7 +18,7 @@ from app.shared.infrastructure.db.base import (
 class AuditLogORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __tablename__ = "audit_logs"
     __table_args__ = (CheckConstraint(
-        "actor_user_id IS NOT NULL OR (entity_type = 'FACTORY_PRICE_APPROVAL' AND action = 'CONFIRM' "
+        "actor_user_id IS NOT NULL OR (entity_type IN ('FACTORY_PRICE_APPROVAL', 'WORK_PRICE_APPROVAL') AND action = 'CONFIRM' "
         "AND coalesce(after->>'actor_kind', '') = 'FACTORY_REPRESENTATIVE' "
         "AND coalesce(after->>'factory_contact_id', '') <> '')", name="ck_audit_external_factory_actor"),)
 

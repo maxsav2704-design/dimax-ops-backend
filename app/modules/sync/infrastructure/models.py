@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.modules.sync.domain.enums import SyncChangeType, SyncEventType
+from app.modules.sync.infrastructure.work_price_approval_model import WorkPriceApprovalORM  # noqa: F401 -- register dependent table
 from app.shared.infrastructure.db.base import (
     Base,
     TimestampMixin,

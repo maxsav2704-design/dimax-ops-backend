@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from app.api.v1.deps import get_uow, require_admin
 from app.api.v1.deps import CurrentUser, ensure_admin_can_view_rates
@@ -14,6 +14,9 @@ from app.modules.sync.application.work_price_proposal_dto import (
     CreateWorkPriceProposal, ReviewWorkPriceProposal, WorkPriceProposal, WorkPriceProposalReview,
 )
 from app.modules.sync.application.work_price_proposal_service import WorkPriceProposalService
+from app.modules.sync.application.work_price_approval_dto import IssueWorkPriceApproval, WorkPriceApprovalPage, WorkPriceApprovalSummary
+from app.modules.sync.application.work_price_approval_service import WorkPriceApprovalService
+from app.modules.rates.application.price_list_dto import CancelPriceList
 from app.modules.sync.api.admin_schemas import (
     SyncProblemsResponseDTO,
     SyncResetLegacyResponse,
@@ -103,6 +106,33 @@ def resolve_price_conflict(
         ensure_admin_can_view_rates(uow, admin)
         return PriceConflictResolutionService.resolve(uow, company_id=admin.company_id,
             actor_user_id=admin.id, source=source, item_id=item_id, body=body)
+
+
+@router.post("/work-price-proposals/{proposal_id}/invitations", response_model=WorkPriceApprovalSummary)
+def invite_work_price_factory(proposal_id: UUID, body: IssueWorkPriceApproval, response: Response,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return WorkPriceApprovalService.issue(uow, company_id=admin.company_id,
+            proposal_id=proposal_id, actor_user_id=admin.id, body=body)
+
+
+@router.get("/work-price-proposals/{proposal_id}/invitations", response_model=WorkPriceApprovalPage)
+def work_price_invitation_history(proposal_id: UUID, response: Response, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return WorkPriceApprovalService.history(uow, company_id=admin.company_id,
+            proposal_id=proposal_id, actor_user_id=admin.id, limit=limit, offset=offset)
+
+
+@router.post("/work-price-proposals/{proposal_id}/invitations/{approval_id}/revoke", response_model=WorkPriceApprovalSummary)
+def revoke_work_price_invitation(proposal_id: UUID, approval_id: UUID, body: CancelPriceList, response: Response,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow), admin: CurrentUser = Depends(require_admin)):
+    response.headers["Cache-Control"] = "no-store"
+    with uow:
+        return WorkPriceApprovalService.revoke(uow, company_id=admin.company_id, proposal_id=proposal_id,
+            approval_id=approval_id, actor_user_id=admin.id, reason=body.reason)
 
 
 @router.post("/price-conflicts/{source}/{item_id}/work-price-proposals/review", response_model=WorkPriceProposalReview)

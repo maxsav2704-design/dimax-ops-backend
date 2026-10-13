@@ -18,6 +18,9 @@ from app.modules.rates.application.approval_email import (
     KIND as FACTORY_INVITATION, CODE_KIND as FACTORY_CODE, UnavailableInvitation, deliver_invitation, deliver_code,
 )
 from app.shared.infrastructure.db.session import SessionLocal
+from app.modules.sync.application.work_price_email import (
+    KIND as WORK_INVITATION, CODE_KIND as WORK_CODE, deliver as deliver_work_price,
+)
 from app.shared.infrastructure.observability import get_logger, log_event
 from app.workers.outbox_health import record_heartbeat
 
@@ -88,6 +91,8 @@ def run_once(limit: int = 20) -> int:
                     deliver_invitation(m, email_sender)
                 elif m.channel == OutboxChannel.EMAIL and payload.get("kind") == FACTORY_CODE:
                     deliver_code(m, email_sender)
+                elif m.channel == OutboxChannel.EMAIL and payload.get("kind") in {WORK_INVITATION, WORK_CODE}:
+                    deliver_work_price(m, email_sender)
                 elif m.channel == OutboxChannel.EMAIL:
                     attachment_path = None
                     object_key = payload.get("object_key")
@@ -165,7 +170,7 @@ def run_once(limit: int = 20) -> int:
 
             except Exception as e:
                 payload = m.payload if isinstance(m.payload, dict) else {}
-                factory_invitation = payload.get("kind") in {FACTORY_INVITATION, FACTORY_CODE}
+                factory_invitation = payload.get("kind") in {FACTORY_INVITATION, FACTORY_CODE, WORK_INVITATION, WORK_CODE}
                 err = "Factory invitation email could not be submitted" if factory_invitation else str(e)
                 if factory_invitation and isinstance(e, UnavailableInvitation):
                     err = "Factory invitation is unavailable; create a new invitation if needed"
