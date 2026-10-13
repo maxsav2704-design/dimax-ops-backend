@@ -65,6 +65,9 @@ def test_accrue_once_and_ack_original_mobile_command(case, db_session, client_ad
     row, _, url, body = ready(case, db_session, client, kind, channel, legacy)
     original_payload, original_time = dict(row.payload), row.client_happened_at
     event_id = row.client_event_id if channel == "sync" else str(row.id)
+    check = {"events": [], "price_resolution_checks": [event_id, event_id, "unrelated-event"]}
+    if channel == "sync":
+        assert case.client.post("/api/v1/installer/sync", json=check).json()["acks"] == []
     result = client.post(url, json=body)
     assert result.status_code == 200, result.text
     assert client.post(url, json=body).json() == result.json()
@@ -73,6 +76,13 @@ def test_accrue_once_and_ack_original_mobile_command(case, db_session, client_ad
     assert client.get(url).json()["accrual"] == result.json()
     db_session.expire_all()
     assert row.payload == original_payload and row.client_happened_at == original_time
+    if channel == "sync":
+        checked = case.client.post("/api/v1/installer/sync", json=check)
+        assert checked.status_code == 200, checked.text
+        assert checked.json()["acks"] == [{"client_event_id": event_id, "ok": True, "applied": False, "error": None}]
+        with SqlAlchemyUnitOfWork() as uow:
+            assert uow.sync_events.resolved_price_events(company_id=case.company, installer_id=uuid4(), client_event_ids=[event_id]) == []
+            assert uow.sync_events.resolved_price_events(company_id=uuid4(), installer_id=case.installer, client_event_ids=[event_id]) == []
     assert_applied(submit(case, kind, channel, original_time, event_id,
                           extra_payload={"base_version": 0} if kind == "DOOR" else {}), channel)
     db_session.expire_all()

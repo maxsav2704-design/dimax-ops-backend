@@ -7,6 +7,7 @@ from sqlalchemy import and_, desc, func, nulls_last, or_
 from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.earnings.infrastructure.work_price_models import WorkPriceAccrualORM
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.projects.infrastructure.models import ProjectORM
@@ -48,9 +49,10 @@ class SyncEventRepository:
     def resolved_price_events(self, *, company_id, installer_id, client_event_ids):
         if not client_event_ids:
             return []
-        return self.session.query(SyncEventORM).join(SyncPriceResolutionORM,
-            and_(SyncPriceResolutionORM.company_id == SyncEventORM.company_id,
-                 SyncPriceResolutionORM.sync_event_id == SyncEventORM.id)).filter(
+        decisions = [self.session.query(model.id).filter(
+            model.company_id == SyncEventORM.company_id, model.sync_event_id == SyncEventORM.id).exists()
+            for model in (SyncPriceResolutionORM, WorkPriceAccrualORM)]
+        return self.session.query(SyncEventORM).filter(or_(*decisions),
             SyncEventORM.company_id == company_id, SyncEventORM.installer_id == installer_id,
             SyncEventORM.client_event_id.in_(client_event_ids), SyncEventORM.apply_error.is_(None),
             SyncEventORM.applied_at.isnot(None)).all()
