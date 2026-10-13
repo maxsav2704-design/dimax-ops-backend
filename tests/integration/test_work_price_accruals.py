@@ -120,7 +120,7 @@ def test_stale_work_cannot_accrue(case, db_session, client_admin_real_uow, chang
     else:
         assert client.post(proposals, json=proposal_body(client, proposals, rate="12.00")).status_code == 200
     db_session.commit()
-    expected = 422 if change == "payload" else 403 if change == "permission" else 409
+    expected = 422 if change == "payload" else 403 if change in ("permission", "assignment") else 409
     assert client.post(url, json=body).status_code == expected
     assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
     assert db_session.query(WorkPriceAccrualORM).filter_by(company_id=case.company).count() == 0
