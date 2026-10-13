@@ -13,7 +13,7 @@ from app.modules.sync.application.price_review_service import PriceConflictRevie
 from app.modules.sync.application.service import InstallerSyncService, _SyncConflictError
 from app.modules.sync.application.work_price_accrual_dto import WorkPriceAccrual, WorkPriceAccrualReview
 from app.modules.sync.application.work_price_approval_service import WorkPriceApprovalService
-from app.modules.sync.application.work_price_proposal_service import _digest, _key
+from app.modules.sync.application.work_price_proposal_service import _digest
 from app.modules.sync.infrastructure.work_price_approval_model import WorkPriceApprovalORM
 from app.shared.domain.errors import Conflict, NotFound
 from app.shared.infrastructure.db.base import utcnow
@@ -100,8 +100,9 @@ class WorkPriceAccrualService:
         except _SyncConflictError as exc:
             raise Conflict(exc.message, meta={"conflict_code": exc.conflict_code}) from exc
         quote.validate_work(work)
+        source_key = "sync_event_id" if source == "sync_event" else "sync_queue_item_id"
         decision = WorkPriceAccrualORM(company_id=company_id, approval_id=approval_id, completed_work_id=work.id,
-            **{_key(source): item_id}, actor_user_id=actor_user_id, request_id=body.request_id,
+            **{source_key: item_id}, actor_user_id=actor_user_id, request_id=body.request_id,
             request_fingerprint=fingerprint, approval_hash=approval.snapshot_hash, reason=body.reason,
             snapshot={"approval": approval.snapshot, "confirmed_at": approval.confirmed_at.isoformat(),
                       "confirmed_name": approval.confirmed_name, "factory_contact_id": str(approval.factory_contact_id)},
