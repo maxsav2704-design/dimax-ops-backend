@@ -1025,3 +1025,81 @@ def test_sync_queue_batch_rolls_back_partial_changes_on_conflict(
     )
     assert queue_row.status == "CONFLICT"
     assert queue_row.conflict_code == "CONFLICT_INVALID_TRANSITION"
+
+
+def test_sync_queue_batch_malformed_payload_is_a_conflict_not_a_server_error(
+    installer_sync_batch_client,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    # Sync audit block 8: a payload value the schema cannot type (reason_id is a free
+    # string) raised ValueError past the domain handlers and failed the whole batch.
+    client, installer_id, _user = installer_sync_batch_client
+    project = _make_project(company_id=company_id, name="Batch Malformed")
+    door_type = make_door_type(name="Batch Malformed Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id, project_id=project.id, door_type_id=door_type.id,
+        installer_id=installer_id, status=DoorStatus.IN_PROGRESS, version=1,
+    )
+    db_session.add(door)
+    db_session.commit()
+
+    bad = _batch_item(project_id=project.id, door_id=door.id, status="NOT_INSTALLED", base_version=1)
+    bad["payload"]["reason_id"] = "not-a-uuid"
+    good = _batch_item(project_id=project.id, door_id=door.id, status="INSTALLED", base_version=1)
+    resp = client.post(
+        "/api/v1/installer/sync-queue/batch",
+        json={"device_id": "sync-batch-device", "app_version": "mobile-batch", "items": [bad, good]},
+    )
+    assert resp.status_code == 200, resp.text
+    results = resp.json()["results"]
+    assert [r["status"] for r in results] == ["CONFLICT", "APPLIED"]
+    assert results[0]["conflict_code"] == "CONFLICT_INVALID_TRANSITION"
+    assert results[0]["message"].startswith("Malformed payload")
+
+
+def test_sync_queue_batch_id_used_by_another_account_is_a_conflict(
+    installer_sync_batch_client,
+    db_session,
+    company_id,
+    make_door_type,
+    make_user,
+):
+    client, installer_id, _user = installer_sync_batch_client
+    other_user = make_user(password="Other-account-2026!")
+    project = _make_project(company_id=company_id, name="Batch Foreign Id")
+    door_type = make_door_type(name="Batch Foreign Id Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id, project_id=project.id, door_type_id=door_type.id,
+        installer_id=installer_id, status=DoorStatus.IN_PROGRESS, version=1,
+    )
+    db_session.add(door)
+    foreign_id = uuid.uuid4()
+    db_session.add(SyncQueueItemORM(
+        id=foreign_id, company_id=company_id, user_id=other_user.id, device_id="other-device",
+        entity_type="door", entity_id=door.id, operation_type="DOOR_SET_STATUS",
+        payload={"status": "IN_PROGRESS"}, base_version=0, status="APPLIED", conflict_code=None,
+        created_at=datetime.now(timezone.utc), synced_at=None,
+    ))
+    db_session.commit()
+
+    reused = _batch_item(project_id=project.id, door_id=door.id, status="INSTALLED", base_version=1)
+    reused["id"] = str(foreign_id)
+    own = _batch_item(project_id=project.id, door_id=door.id, status="INSTALLED", base_version=1)
+    resp = client.post(
+        "/api/v1/installer/sync-queue/batch",
+        json={"device_id": "sync-batch-device", "app_version": "mobile-batch", "items": [reused, own]},
+    )
+    assert resp.status_code == 200, resp.text
+    results = resp.json()["results"]
+    assert results[0]["status"] == "CONFLICT"
+    assert results[0]["item_id"] == str(foreign_id)
+    assert results[1]["status"] == "APPLIED"
+    db_session.expire_all()
+    kept = db_session.query(SyncQueueItemORM).filter(SyncQueueItemORM.id == foreign_id).one()
+    assert kept.user_id == other_user.id and kept.status == "APPLIED"

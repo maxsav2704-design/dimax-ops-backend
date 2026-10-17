@@ -492,6 +492,10 @@ class InstallerSyncQueueRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def get_by_id(self, *, item_id: uuid.UUID) -> SyncQueueItemORM | None:
+        """Whoever owns it: the id is the global primary key (ownership check)."""
+        return self.session.query(SyncQueueItemORM).filter_by(id=item_id).one_or_none()
+
     def get_for_company(self, *, company_id: uuid.UUID, item_id: uuid.UUID, for_update=False) -> SyncQueueItemORM | None:
         query = self.session.query(SyncQueueItemORM).filter_by(company_id=company_id, id=item_id)
         return (query.with_for_update() if for_update else query).one_or_none()

@@ -306,9 +306,23 @@ class InstallerSyncService:
 
         results: list[dict] = []
         for item in items:
+            item_id = uuid.UUID(str(item["id"]))
+            # The queue id is the global primary key. An id another account already
+            # stored is a conflict for this item only; inserting it would fail the
+            # flush and abort the whole batch transaction.
+            foreign = uow.sync_queue.get_by_id(item_id=item_id)
+            if foreign is not None and (
+                foreign.user_id != actor_user_id or foreign.company_id != company_id
+            ):
+                results.append({
+                    "item_id": item_id, "status": "CONFLICT", "new_version": None,
+                    "conflict_code": "CONFLICT_INVALID_TRANSITION",
+                    "message": "Queue ID was already used by another account; the original record is preserved",
+                })
+                continue
             existing = uow.sync_queue.get(
                 company_id=company_id,
-                item_id=uuid.UUID(str(item["id"])),
+                item_id=item_id,
                 user_id=actor_user_id,
             )
             if existing is not None and not InstallerSyncService._batch_item_matches(existing, item):
@@ -399,6 +413,22 @@ class InstallerSyncService:
                         "new_version": None,
                         "conflict_code": exc.conflict_code,
                         "message": exc.message,
+                    }
+                )
+            except (ValueError, TypeError) as exc:
+                # Malformed payload values (e.g. a reason_id that is not a UUID) are a
+                # conflict for this item only, not a server error for the batch.
+                uow.sync_queue.mark_conflict(
+                    row,
+                    conflict_code="CONFLICT_INVALID_TRANSITION",
+                )
+                results.append(
+                    {
+                        "item_id": row.id,
+                        "status": "CONFLICT",
+                        "new_version": None,
+                        "conflict_code": "CONFLICT_INVALID_TRANSITION",
+                        "message": f"Malformed payload: {exc}"[:200],
                     }
                 )
 
