@@ -8,7 +8,8 @@ from app.modules.sync.application.health_service import SyncHealthService
 class DashboardService:
     @staticmethod
     def get_dashboard(uow, *, company_id, actor_user_id) -> dict:
-        sync_health = SyncHealthService.run_for_company(uow, company_id=company_id)
+        # A GET must not evaluate health with side effects (writes, webhooks, issues).
+        sync_health = SyncHealthService.read_for_company(uow, company_id=company_id)
         limits = CompanyMetricsService.limits_kpi(uow, company_id=company_id)
         audit_repo = getattr(uow, "audit", None)
         unread_count = 0

@@ -13,6 +13,15 @@ from app.modules.projects.application.status_service import ProjectStatusService
 from app.shared.domain.errors import NotFound
 
 
+def _append_report(existing: str | None, title: str | None, details: str | None) -> str | None:
+    """Append an installer's later report to the issue text instead of replacing it."""
+    note = " - ".join(part for part in (title, details) if part)
+    base = (existing or "").strip()
+    if not note:
+        return base or None
+    return f"{base}\n\n{note}" if base else note
+
+
 class InstallerIssuesApiService:
     @staticmethod
     def ensure_issue_visible(
@@ -121,7 +130,8 @@ class InstallerIssuesApiService:
                 created_by_user_id=created_by_user_id,
                 owner_user_id=created_by_user_id,
             )
-        else:
+        elif issue.status == IssueStatus.CLOSED:
+            # A closed issue is reopened as a fresh report.
             issue.status = IssueStatus.OPEN
             issue.workflow_state = IssueWorkflowState.NEW
             issue.priority = IssuePriority.P3
@@ -129,6 +139,11 @@ class InstallerIssuesApiService:
             issue.details = details
             issue.created_by_user_id = created_by_user_id
             issue.owner_user_id = created_by_user_id
+        else:
+            # The office manages an open issue: its workflow, priority and owner
+            # stay; the new report is appended so nothing the installer wrote is lost.
+            issue.title = issue.title or title
+            issue.details = _append_report(issue.details, title, details)
 
         uow.issues.save(issue)
 
@@ -189,7 +204,8 @@ class InstallerIssuesApiService:
         )
 
         text = str(comment or "").strip()
-        issue.details = text or None
+        if text:
+            issue.details = _append_report(issue.details, None, text)
         uow.issues.save(issue)
         uow.session.flush()
         publish_issue_change(uow, issue=issue, door=door)

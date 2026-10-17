@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from app.api.v1.deps import get_uow
+from app.api.v1.rate_limit import rate_limit_public_journal
 from app.modules.journal.api.schemas import (
     PublicSignResponse,
     PublicJournalGetResponse,
@@ -17,7 +18,11 @@ router = APIRouter(prefix="/public/journals", tags=["Public / Journal"])
 
 
 @router.get("/{token}", response_model=PublicJournalGetResponse)
-def public_get(token: str, uow=Depends(get_uow)) -> PublicJournalGetResponse:
+def public_get(
+    token: str,
+    _rl=Depends(rate_limit_public_journal),
+    uow=Depends(get_uow),
+) -> PublicJournalGetResponse:
     with uow:
         return JournalPublicApiService.public_get(uow, token=token)
 
@@ -27,6 +32,7 @@ def public_sign(
     token: str,
     body: PublicSignBody,
     request: Request,
+    _rl=Depends(rate_limit_public_journal),
     uow=Depends(get_uow),
 ):
     ip = request.client.host if request.client else None

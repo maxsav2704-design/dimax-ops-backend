@@ -342,6 +342,16 @@ class InstallerSyncService:
                 )
                 continue
 
+            payload_door_id = str((item.get("payload") or {}).get("door_id") or "")
+            if item["operation_type"] == "DOOR_SET_STATUS" and payload_door_id != str(item["entity_id"]):
+                # Price resolution and proposals read the door from entity_id while
+                # apply reads it from the payload: the two must name the same door.
+                results.append({
+                    "item_id": uuid.UUID(str(item["id"])), "status": "CONFLICT", "new_version": None,
+                    "conflict_code": "CONFLICT_INVALID_TRANSITION",
+                    "message": "Queue item entity does not match the door in its payload",
+                })
+                continue
             row = uow.sync_queue.create_or_update_pending(
                 company_id=company_id,
                 user_id=actor_user_id,

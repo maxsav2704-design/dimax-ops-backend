@@ -599,3 +599,39 @@ def test_admin_read_scope_matrix_is_enforced(
             )
             if expected_status == 403:
                 assert response.json()["error"]["code"] == "FORBIDDEN_SCOPE"
+
+
+def test_project_detail_hides_door_prices_without_the_rates_capability(client_raw, db_session, company_id, make_user, make_door_type):
+    from decimal import Decimal
+
+    from app.modules.doors.domain.enums import DoorStatus
+    from app.modules.doors.infrastructure.models import DoorORM
+    from app.modules.projects.domain.enums import ProjectStatus
+    from app.modules.projects.infrastructure.models import ProjectORM
+
+    project = ProjectORM(company_id=company_id, name=f"Priced {uuid.uuid4().hex[:6]}", address="Street 1", status=ProjectStatus.OK)
+    db_session.add(project)
+    db_session.flush()
+    db_session.add(DoorORM(
+        company_id=company_id, project_id=project.id, door_type_id=make_door_type().id, unit_label="P-01",
+        our_price=Decimal("321.00"), status=DoorStatus.NOT_INSTALLED, installer_id=None,
+        reason_id=None, comment=None, installed_at=None, is_locked=False,
+    ))
+    db_session.commit()
+
+    for scope, can_view_rates in (("VIEWER", False), ("FINANCE", True)):
+        password = f"{scope.title()}Prices123"
+        user = make_user(role=UserRole.ADMIN, password=password, with_admin_profile=False)
+        db_session.add(AdminProfileORM(
+            company_id=company_id, user_id=user.id, admin_scope=scope,
+            can_view_rates=can_view_rates, can_manage_imports=False, can_manage_users=False,
+        ))
+        db_session.commit()
+        token = _login(client_raw, company_id=str(company_id), email=user.email, password=password)
+        resp = client_raw.get(f"/api/v1/admin/projects/{project.id}", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200, resp.text
+        prices = [door["our_price"] for door in resp.json()["doors"]]
+        if can_view_rates:
+            assert [Decimal(str(price)) for price in prices] == [Decimal("321.00")], (scope, prices)
+        else:
+            assert prices == [None], (scope, prices)

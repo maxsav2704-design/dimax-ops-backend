@@ -197,7 +197,7 @@ class ReportsAdminApiService:
             installed_series_14d=series,
             **kpi_data,
         )
-        sync_health = SyncHealthService.run_for_company(
+        sync_health = SyncHealthService.read_for_company(
             uow,
             company_id=company_id,
         )
@@ -1550,7 +1550,7 @@ class ReportsAdminApiService:
             company_id=company_id,
             now=now,
         )
-        sync_health = SyncHealthService.run_for_company(
+        sync_health = SyncHealthService.read_for_company(
             uow,
             company_id=company_id,
         )

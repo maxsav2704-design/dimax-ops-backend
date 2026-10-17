@@ -427,6 +427,19 @@ class AddonsUseCases:
                 ensure_same_fact(existing, **replay_fields)
                 return None
 
+        # Product rule: the office plans extra work, the installer only records the
+        # fact. A fact for an unplanned addon type is refused instead of being paid.
+        plan = uow.addon_plans.get_by_project_type(
+            company_id=company_id,
+            project_id=project_id,
+            addon_type_id=addon_type_id,
+        )
+        if plan is None:
+            raise ValidationError(
+                "Extra work must be planned by the office before the installer records it",
+                field="addon_type_id", meta={"code": "ADDON_NOT_PLANNED"},
+            )
+
         if done_at is not None and not reviewed_execution and FactoryEarningsPricing.is_active(uow, company_id):
             # Direct uploads must not bypass the offline queue's historical-price checks.
             legacy_price_queue = ExecutionAuthority.inspect(uow, company_id=company_id, project_id=project_id,
@@ -457,11 +470,6 @@ class AddonsUseCases:
                 raise
             ensure_same_fact(existing, **replay_fields)
             return None
-        plan = uow.addon_plans.get_by_project_type(
-            company_id=company_id,
-            project_id=project_id,
-            addon_type_id=addon_type_id,
-        )
         create_completed_work_for_addon_fact(
             uow, company_id=company_id, fact=row, plan=plan,
             legacy_price_queue=legacy_price_queue,

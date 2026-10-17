@@ -155,6 +155,39 @@ def _addon_batch_item(
     }
 
 
+def test_sync_queue_batch_refuses_an_entity_id_that_is_not_the_payload_door(
+    installer_sync_batch_client,
+    db_session,
+    company_id,
+    make_door_type,
+):
+    client, installer_id, user = installer_sync_batch_client
+    project = _make_project(company_id=company_id, name="Batch entity mismatch")
+    door_type = make_door_type(name="Batch Door")
+    db_session.add(project)
+    db_session.flush()
+    door = _make_door(
+        company_id=company_id, project_id=project.id, door_type_id=door_type.id,
+        installer_id=installer_id, status=DoorStatus.NOT_INSTALLED, version=0,
+    )
+    db_session.add(door)
+    db_session.commit()
+
+    item = _batch_item(project_id=project.id, door_id=door.id, status="IN_PROGRESS", base_version=0)
+    item["entity_id"] = str(uuid.uuid4())
+    resp = client.post(
+        "/api/v1/installer/sync-queue/batch",
+        json={"device_id": "sync-batch-device", "app_version": "mobile-batch", "items": [item]},
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["results"][0]
+    assert result["status"] == "CONFLICT"
+    assert result["conflict_code"] == "CONFLICT_INVALID_TRANSITION"
+    db_session.refresh(door)
+    assert door.status == DoorStatus.NOT_INSTALLED
+    assert door.version == 0
+
+
 def test_sync_queue_batch_applies_item_and_marks_queue_row_synced(
     installer_sync_batch_client,
     db_session,

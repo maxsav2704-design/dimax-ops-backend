@@ -451,6 +451,7 @@ def project_details(
             project_id=project_id,
             order_number=order_number,
             locale=request.headers.get("accept-language", "en") if request else "en",
+            include_prices=bool(user.can_view_rates),
         )
 
 

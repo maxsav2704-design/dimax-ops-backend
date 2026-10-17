@@ -359,7 +359,7 @@ class DoorDTO(BaseModel):
     id: UUID
     unit_label: str
     door_type_id: UUID
-    our_price: Decimal
+    our_price: Decimal | None
     order_number: str | None
     house_number: str | None
     floor_label: str | None

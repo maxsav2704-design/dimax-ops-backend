@@ -290,26 +290,26 @@ def test_installer_addons_get_and_add_fact_flow(
     assert len(get_after_resp.json()["facts"]) == 1
 
 
-def test_admin_addon_plan_reconciles_existing_installer_fact_into_earnings(
+def test_installer_fact_without_office_plan_is_rejected(
     client_installer_addons,
-    client_admin_real_uow,
     db_session,
     company_id,
     make_door_type,
 ):
+    # Product rule: the office plans extra work, the installer only records the fact.
     client, installer_id = client_installer_addons
     project = _create_project(
         db_session,
         company_id=company_id,
-        name=f"Late Addon Plan {uuid.uuid4().hex[:8]}",
+        name=f"Unplanned addon {uuid.uuid4().hex[:8]}",
     )
-    door_type = make_door_type(name="Late Addon Door Type")
+    door_type = make_door_type(name="Unplanned Addon Door Type")
     db_session.add(
         DoorORM(
             company_id=company_id,
             project_id=project.id,
             door_type_id=door_type.id,
-            unit_label="L-01",
+            unit_label="U-01",
             our_price=Decimal("100.00"),
             status=DoorStatus.NOT_INSTALLED,
             installer_id=installer_id,
@@ -321,7 +321,7 @@ def test_admin_addon_plan_reconciles_existing_installer_fact_into_earnings(
     )
     addon_type = AddonTypeORM(
         company_id=company_id,
-        name="Late seal",
+        name="Unplanned seal",
         unit="pcs",
         default_client_price=Decimal("20.00"),
         default_installer_price=Decimal("8.00"),
@@ -331,50 +331,27 @@ def test_admin_addon_plan_reconciles_existing_installer_fact_into_earnings(
     db_session.add(addon_type)
     db_session.commit()
 
-    add_fact_resp = client.post(
+    resp = client.post(
         f"/api/v1/installer/addons/projects/{project.id}/facts",
         json={
             "addon_type_id": str(addon_type.id),
             "qty_done": "2.00",
-            "comment": "done before plan",
-            "client_event_id": "evt-late-plan",
+            "comment": "not planned",
+            "client_event_id": "evt-unplanned",
         },
     )
-    assert add_fact_resp.status_code == 200, add_fact_resp.text
-    assert (
-        db_session.query(CompletedWorkORM)
-        .filter(
-            CompletedWorkORM.company_id == company_id,
-            CompletedWorkORM.installer_id == installer_id,
-            CompletedWorkORM.work_kind == "ADDON",
-        )
-        .count()
-        == 0
-    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "planned" in resp.json()["error"]["message"].lower()
+    assert db_session.query(ProjectAddonFactORM).filter_by(project_id=project.id).count() == 0
+    assert db_session.query(CompletedWorkORM).filter_by(project_id=project.id).count() == 0
 
-    plan_resp = client_admin_real_uow.post(
-        f"/api/v1/admin/projects/{project.id}/addons/plan",
-        json={
-            "addon_type_id": str(addon_type.id),
-            "qty_planned": "2.00",
-            "client_price": "25.00",
-            "installer_price": "8.00",
-        },
+    # The same upload without an idempotency key is refused by the schema.
+    no_key = client.post(
+        f"/api/v1/installer/addons/projects/{project.id}/facts",
+        json={"addon_type_id": str(addon_type.id), "qty_done": "1.00", "comment": None},
     )
-    assert plan_resp.status_code == 200, plan_resp.text
-
-    completed = (
-        db_session.query(CompletedWorkORM)
-        .filter(
-            CompletedWorkORM.company_id == company_id,
-            CompletedWorkORM.installer_id == installer_id,
-            CompletedWorkORM.work_kind == "ADDON",
-        )
-        .one()
-    )
-    assert completed.quantity == Decimal("2.00")
-    assert completed.rate_snapshot == Decimal("8.00")
-    assert completed.amount_snapshot == Decimal("16.00")
+    assert no_key.status_code == 422, no_key.text
 
 
 def test_installer_addons_forbidden_if_project_not_assigned(
@@ -429,6 +406,7 @@ def test_installer_addons_validation_and_not_found(
         json={
             "addon_type_id": str(uuid.uuid4()),
             "qty_done": "-1.00",
+            "client_event_id": "evt-validation-1",
         },
     )
     assert negative_qty_resp.status_code == 422, negative_qty_resp.text
@@ -439,6 +417,7 @@ def test_installer_addons_validation_and_not_found(
         json={
             "addon_type_id": str(uuid.uuid4()),
             "qty_done": "1.00",
+            "client_event_id": "evt-validation-2",
         },
     )
     assert missing_type_resp.status_code == 404, missing_type_resp.text

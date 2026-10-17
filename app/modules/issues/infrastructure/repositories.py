@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
@@ -208,6 +209,23 @@ class IssueRepository:
             .first()
         )
 
+    def _free_door_for_system_issue(self, *, company_id: uuid.UUID, project_id: uuid.UUID) -> DoorORM | None:
+        """A door of the project that has no issue yet, chosen deterministically.
+
+        A door holds at most one issue, so a system risk issue (sync, delivery)
+        must never take the slot of a real door issue or hit the unique key
+        inside a GET. No free door means no system issue for this project."""
+        return (
+            self.session.query(DoorORM)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.project_id == project_id,
+                ~exists().where(IssueORM.door_id == DoorORM.id),
+            )
+            .order_by(DoorORM.unit_label, DoorORM.id)
+            .first()
+        )
+
     def upsert_sync_risk(
         self, *, company_id: uuid.UUID, project_id: uuid.UUID
     ) -> uuid.UUID | None:
@@ -221,15 +239,7 @@ class IssueRepository:
             row.details = "Installer sync is in DANGER state (offline/lag)."
             self.session.flush()
             return row.id
-        door = (
-            self.session.query(DoorORM)
-            .filter(
-                DoorORM.company_id == company_id,
-                DoorORM.project_id == project_id,
-            )
-            .limit(1)
-            .first()
-        )
+        door = self._free_door_for_system_issue(company_id=company_id, project_id=project_id)
         if not door:
             return None
         new = IssueORM(
@@ -276,15 +286,7 @@ class IssueRepository:
             self.session.flush()
             return row.id, True
 
-        door = (
-            self.session.query(DoorORM)
-            .filter(
-                DoorORM.company_id == company_id,
-                DoorORM.project_id == project_id,
-            )
-            .limit(1)
-            .first()
-        )
+        door = self._free_door_for_system_issue(company_id=company_id, project_id=project_id)
         if not door:
             return None, False
 

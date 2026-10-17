@@ -63,3 +63,8 @@ def _reset_rate_limits_for_tests() -> None:
 def rate_limit_factory_prices(request: Request) -> None:
     ip = request.client.host if request.client else "unknown"
     _allow(f"factory_prices:{ip}", window=60, max_req=60)
+
+
+def rate_limit_public_journal(request: Request) -> None:
+    ip = request.client.host if request.client else "unknown"
+    _allow(f"public_journal:{ip}", window=60, max_req=60)

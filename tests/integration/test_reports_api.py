@@ -2578,6 +2578,11 @@ def test_install_snapshot_uses_latest_effective_rate_at_install_time(
     assert installed.status == DoorStatus.INSTALLED
     assert installed.installer_rate_snapshot == Decimal("110.00")
 
+    # Three rate versions must not multiply the door in the plan / fact report.
+    plan_fact = client_admin_real_uow.get(f"/api/v1/admin/reports/project-plan-fact/{project.id}")
+    assert plan_fact.status_code == 200, plan_fact.text
+    assert plan_fact.json()["total_doors"] == 1
+
 
 def test_reports_kpi_uses_correction_ledger_over_door_snapshot(
     client_admin_real_uow,

@@ -15,6 +15,8 @@ from app.main import create_app
 from app.modules.calendar.domain.enums import CalendarEventType
 from app.modules.calendar.infrastructure.models import CalendarEventAssigneeORM, CalendarEventORM
 from app.modules.doors.domain.enums import DoorStatus
+from app.modules.issues.domain.enums import IssuePriority, IssueWorkflowState
+from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.application.installer_api_service import _period_bounds
@@ -764,6 +766,26 @@ def test_installer_can_create_issue_and_open_door(
     assert door.status == DoorStatus.ISSUE_OPEN
     assert door.version == 1
 
+    # The office triages the issue; a second installer report must not undo it.
+    issue = db_session.get(IssueORM, uuid.UUID(body["id"]))
+    issue.workflow_state = IssueWorkflowState.TRIAGED
+    issue.priority = IssuePriority.P1
+    issue.owner_user_id = None
+    db_session.commit()
+
+    again = client.post(
+        "/api/v1/installer/issues",
+        json={"door_id": str(door.id), "title": "Still broken", "details": "Second visit"},
+    )
+    assert again.status_code == 201, again.text
+    db_session.expire_all()
+    issue = db_session.get(IssueORM, uuid.UUID(body["id"]))
+    assert issue.workflow_state == IssueWorkflowState.TRIAGED
+    assert issue.priority == IssuePriority.P1
+    assert issue.owner_user_id is None
+    assert issue.title == "Broken frame"
+    assert "Need check" in (issue.details or "") and "Second visit" in (issue.details or "")
+
     issue = db_session.query(IssueORM).filter(IssueORM.door_id == door.id).one()
     assert issue.created_by_user_id == user.id
 
@@ -855,10 +877,11 @@ def test_installer_can_update_issue_comment_and_list_empty_media(
         json={"comment": "Need another visit"},
     )
     assert patch_resp.status_code == 200, patch_resp.text
-    assert patch_resp.json()["details"] == "Need another visit"
+    # The installer adds to the issue text; the office's notes are never replaced.
+    assert patch_resp.json()["details"] == "Old comment\n\nNeed another visit"
 
     db_session.refresh(issue)
-    assert issue.details == "Need another visit"
+    assert issue.details == "Old comment\n\nNeed another visit"
 
     media_resp = client.get(f"/api/v1/installer/issues/{issue.id}/media")
     assert media_resp.status_code == 200, media_resp.text

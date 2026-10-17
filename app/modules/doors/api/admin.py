@@ -22,13 +22,10 @@ from app.modules.doors.api.schemas import (
 router = APIRouter(prefix="/admin/doors", tags=["Admin / Doors"])
 
 
-def _uuid(val: str) -> UUID:
-    return UUID(val)
-
 
 @router.post("/{door_id}/install", response_model=DoorActionResponse)
 def admin_mark_installed(
-    door_id: str,
+    door_id: UUID,
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
 ):
@@ -38,7 +35,7 @@ def admin_mark_installed(
             MarkDoorInstalled(
                 company_id=user.company_id,
                 actor_user_id=user.id,
-                door_id=_uuid(door_id),
+                door_id=door_id,
             ),
         )
     return DoorActionResponse(**result)
@@ -46,7 +43,7 @@ def admin_mark_installed(
 
 @router.post("/{door_id}/not-installed", response_model=DoorActionResponse)
 def admin_mark_not_installed(
-    door_id: str,
+    door_id: UUID,
     body: MarkNotInstalledBody,
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
@@ -57,7 +54,7 @@ def admin_mark_not_installed(
             MarkDoorNotInstalled(
                 company_id=user.company_id,
                 actor_user_id=user.id,
-                door_id=_uuid(door_id),
+                door_id=door_id,
                 reason_id=body.reason_id,
                 comment=body.comment,
             ),
@@ -67,7 +64,7 @@ def admin_mark_not_installed(
 
 @router.post("/{door_id}/override", response_model=OkResponse)
 def admin_override(
-    door_id: str,
+    door_id: UUID,
     body: AdminOverrideBody,
     user: CurrentUser = Depends(require_admin),
     uow=Depends(get_uow),
@@ -78,7 +75,7 @@ def admin_override(
             AdminOverrideDoor(
                 company_id=user.company_id,
                 actor_user_id=user.id,
-                door_id=_uuid(door_id),
+                door_id=door_id,
                 new_status=body.new_status,
                 reason_id=body.reason_id,
                 comment=body.comment,

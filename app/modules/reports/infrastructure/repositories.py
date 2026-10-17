@@ -8,6 +8,31 @@ from statistics import median
 from sqlalchemy import Numeric, and_, case, cast, func, not_, null, or_, select
 from sqlalchemy.orm import Session
 
+
+def _effective_rate_join():
+    """Join a door to the ONE legacy rate in force when it was installed (or now
+    for doors not yet installed): the latest version of (installer, door type)
+    with effective_from at or before that moment. Joining every version
+    multiplied doors and money in the plan / fact and KPI fallbacks."""
+    effective_at = func.coalesce(DoorORM.installed_at, func.now())
+    latest_effective_from = (
+        select(func.max(InstallerRateORM.effective_from))
+        .where(
+            InstallerRateORM.company_id == DoorORM.company_id,
+            InstallerRateORM.installer_id == DoorORM.installer_id,
+            InstallerRateORM.door_type_id == DoorORM.door_type_id,
+            InstallerRateORM.effective_from <= effective_at,
+        )
+        .correlate(DoorORM)
+        .scalar_subquery()
+    )
+    return and_(
+        InstallerRateORM.company_id == DoorORM.company_id,
+        InstallerRateORM.installer_id == DoorORM.installer_id,
+        InstallerRateORM.door_type_id == DoorORM.door_type_id,
+        InstallerRateORM.effective_from == latest_effective_from,
+    )
+
 from app.modules.addons.infrastructure.models import (
     AddonTypeORM,
     ProjectAddonFactORM,
@@ -498,11 +523,7 @@ class ReportsRepository:
             .one()
         )
 
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -1236,11 +1257,7 @@ class ReportsRepository:
             .all()
         )
 
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -1380,11 +1397,7 @@ class ReportsRepository:
         if factory_mode:
             return installer_financial_matrix(self.session, company_id=company_id,
                 limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir)
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -1671,11 +1684,7 @@ class ReportsRepository:
         if factory_mode:
             return installer_financial_matrix(self.session, company_id=company_id, by_project=True,
                 limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir)
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -2036,11 +2045,7 @@ class ReportsRepository:
     ) -> dict:
         if factory_mode:
             return installer_financial_details(self.session, company_id=company_id, installer_id=installer_id)
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -2714,11 +2719,7 @@ class ReportsRepository:
             .one()
         )
 
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -2852,11 +2853,7 @@ class ReportsRepository:
         project_id: uuid.UUID,
         factory_rates: dict[tuple[str, uuid.UUID], Decimal] | None = None,
     ) -> dict:
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -3161,11 +3158,7 @@ class ReportsRepository:
         limit: int = 5,
         factory_rates: dict[tuple[str, uuid.UUID], Decimal] | None = None,
     ) -> dict:
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,
@@ -3472,11 +3465,7 @@ class ReportsRepository:
         sort_dir: str = "desc",
         factory_mode: bool = False,
     ) -> dict:
-        rate_join = and_(
-            InstallerRateORM.company_id == DoorORM.company_id,
-            InstallerRateORM.installer_id == DoorORM.installer_id,
-            InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        )
+        rate_join = _effective_rate_join()
         effective_installer_rate = func.coalesce(
             DoorORM.installer_rate_snapshot,
             InstallerRateORM.price,

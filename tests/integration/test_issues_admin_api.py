@@ -280,6 +280,18 @@ def test_admin_issue_bulk_workflow_validation_errors(
     assert len(payload["missing_issue_ids"]) == 1
 
 
+def test_admin_door_action_with_malformed_id_is_a_validation_error(client_admin_real_uow):
+    resp = client_admin_real_uow.post("/api/v1/admin/doors/not-a-uuid/install")
+    assert resp.status_code == 422, resp.text
+
+
+def test_public_journal_endpoints_are_rate_limited(client_admin_real_uow):
+    token = uuid.uuid4().hex
+    statuses = [client_admin_real_uow.get(f"/api/v1/public/journals/{token}").status_code for _ in range(61)]
+    assert statuses[0] == 404
+    assert statuses[-1] == 429
+
+
 def test_admin_issues_returns_404_for_missing_issue(client_admin_real_uow):
     issue_id = uuid.uuid4()
     get_resp = client_admin_real_uow.get(f"/api/v1/admin/issues/{issue_id}")
@@ -344,3 +356,26 @@ def test_authenticated_media_url_returns_404_until_media_store_exists(client_ins
     resp = client_installer.get(f"/api/v1/media/{uuid.uuid4()}/url")
     assert resp.status_code == 404, resp.text
     assert resp.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_system_risk_issue_never_takes_a_door_that_already_has_an_issue(db_session, company_id, make_door_type):
+    from app.modules.issues.infrastructure.repositories import IssueRepository
+
+    project, door, issue = _seed_issue(db_session, company_id=company_id, make_door_type=make_door_type)
+    repo = IssueRepository(db_session)
+
+    # The only door already holds a real issue: no slot, no crash, the real issue untouched.
+    assert repo.upsert_sync_risk(company_id=company_id, project_id=project.id) is None
+    db_session.refresh(issue)
+    assert issue.title != "SYNC_RISK"
+
+    free_door = DoorORM(
+        company_id=company_id, project_id=project.id, door_type_id=door.door_type_id,
+        unit_label="A-102", our_price=door.our_price, status=door.status, installer_id=door.installer_id,
+        reason_id=None, comment=None, installed_at=None, is_locked=False,
+    )
+    db_session.add(free_door)
+    db_session.flush()
+    risk_id = repo.upsert_sync_risk(company_id=company_id, project_id=project.id)
+    assert risk_id is not None
+    assert db_session.get(IssueORM, risk_id).door_id == free_door.id

@@ -182,17 +182,29 @@ def test_missing_first_price_retains_failed_command_without_fallback(case, db_se
     assert queued.payload and queued.project_id == case.project
 
 
-@pytest.mark.parametrize("no_plan", [False, True])
-def test_addon_price_does_not_require_or_use_project_plan(case, db_session, no_plan):
+def test_addon_price_comes_from_the_factory_list_not_the_plan_price(case, db_session):
     activate(case)
-    plan = db_session.get(ProjectAddonPlanORM, case.plan)
-    if no_plan:
-        db_session.delete(plan)
-    else:
-        plan.installer_price = Decimal("0")
+    db_session.get(ProjectAddonPlanORM, case.plan).installer_price = Decimal("0")
     db_session.commit()
     assert_applied(submit(case, "ADDON", "direct"), "direct")
     assert earning(db_session, case)[0].amount_snapshot == Decimal("13.50")
+
+
+@pytest.mark.parametrize("channel", ["direct", "sync"])
+def test_addon_fact_without_office_plan_is_refused(case, db_session, channel):
+    # Product rule: the office plans extra work; an unplanned fact is never paid.
+    activate(case)
+    db_session.delete(db_session.get(ProjectAddonPlanORM, case.plan))
+    db_session.commit()
+    response = submit(case, "ADDON", channel)
+    if channel == "direct":
+        assert response.status_code == 422, response.text
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json()["acks"][0]["ok"] is False, response.text
+    db_session.expire_all()
+    assert db_session.query(CompletedWorkORM).filter_by(company_id=case.company).count() == 0
+    assert db_session.query(ProjectAddonFactORM).filter_by(company_id=case.company).count() == 0
 
 
 def test_uploaded_unpaid_fact_is_not_repriced_by_plan_edit_after_cutover(case, db_session):

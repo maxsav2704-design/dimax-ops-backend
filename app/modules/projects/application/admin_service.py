@@ -1559,6 +1559,7 @@ class ProjectAdminService:
         project_id: uuid.UUID,
         order_number: str | None = None,
         locale: str = "en",
+        include_prices: bool = True,
     ) -> dict:
         project = uow.projects.get(company_id=company_id, project_id=project_id)
         if not project:
@@ -1639,7 +1640,8 @@ class ProjectAdminService:
                     "id": d.id,
                     "unit_label": d.unit_label,
                     "door_type_id": d.door_type_id,
-                    "our_price": d.our_price,
+                    # Money only for sessions with the rates capability (same rule as addon plans).
+                    "our_price": d.our_price if include_prices else None,
                     "order_number": getattr(d, "order_number", None),
                     "house_number": getattr(d, "house_number", None),
                     "floor_label": getattr(d, "floor_label", None),

@@ -60,7 +60,14 @@ class SyncHealthService:
         return "OK"
 
     @staticmethod
-    def run_for_company(uow, *, company_id) -> dict:
+    def read_for_company(uow, *, company_id) -> dict:
+        """The same summary as run_for_company, with no side effects: nothing is
+        written, no webhook is sent, no issue is opened or closed. Dashboards and
+        reports (GET requests, any admin scope) use this one."""
+        return SyncHealthService.run_for_company(uow, company_id=company_id, apply=False)
+
+    @staticmethod
+    def run_for_company(uow, *, company_id, apply: bool = True) -> dict:
         now = SyncHealthService._utcnow()
         max_cursor = uow.sync_change_log.max_cursor(company_id=company_id)
 
@@ -111,9 +118,10 @@ class SyncHealthService:
             total_queue_blocked += queue_blocked
             total_queue_auth_required += queue_auth_required
 
-            r.health_status = status
-            r.health_lag = lag
-            r.health_days_offline = days_offline
+            if apply:
+                r.health_status = status
+                r.health_lag = lag
+                r.health_days_offline = days_offline
 
             results.append(
                 HealthResult(
@@ -143,7 +151,7 @@ class SyncHealthService:
                 ok_count += 1
 
         alerts_sent = 0
-        if settings.SYNC_ALERT_WEBHOOK_URL:
+        if apply and settings.SYNC_ALERT_WEBHOOK_URL:
             for r in danger_items:
                 if SyncHealthService._should_alert(r, now):
                     installer = uow.installers.get(
@@ -168,7 +176,8 @@ class SyncHealthService:
                         r.last_alert_lag = int(r.health_lag or 0)
                         alerts_sent += 1
 
-        uow.session.flush()
+        if apply:
+            uow.session.flush()
 
         top_laggers = sorted(results, key=lambda x: x.lag, reverse=True)[:5]
         top_offline = sorted(
@@ -187,7 +196,9 @@ class SyncHealthService:
         )
         never_seen = sum(1 for x in results if x.last_seen_at is None)
 
-        if settings.SYNC_PROJECT_AUTO_PROBLEM_ENABLED:
+        if not apply:
+            pass
+        elif settings.SYNC_PROJECT_AUTO_PROBLEM_ENABLED:
             SyncHealthService._auto_mark_projects_problem(
                 uow, company_id=company_id
             )
