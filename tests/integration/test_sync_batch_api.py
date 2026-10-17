@@ -1040,25 +1040,31 @@ def test_sync_queue_batch_malformed_payload_is_a_conflict_not_a_server_error(
     door_type = make_door_type(name="Batch Malformed Door")
     db_session.add(project)
     db_session.flush()
-    door = _make_door(
+    bad_door = _make_door(
         company_id=company_id, project_id=project.id, door_type_id=door_type.id,
         installer_id=installer_id, status=DoorStatus.IN_PROGRESS, version=1,
     )
-    db_session.add(door)
+    good_door = _make_door(
+        company_id=company_id, project_id=project.id, door_type_id=door_type.id,
+        installer_id=installer_id, status=DoorStatus.NOT_INSTALLED, version=0,
+    )
+    db_session.add_all([bad_door, good_door])
     db_session.commit()
 
-    bad = _batch_item(project_id=project.id, door_id=door.id, status="NOT_INSTALLED", base_version=1)
+    bad = _batch_item(project_id=project.id, door_id=bad_door.id, status="NOT_INSTALLED", base_version=1)
     bad["payload"]["reason_id"] = "not-a-uuid"
-    good = _batch_item(project_id=project.id, door_id=door.id, status="INSTALLED", base_version=1)
+    good = _batch_item(project_id=project.id, door_id=good_door.id, status="IN_PROGRESS", base_version=0)
     resp = client.post(
         "/api/v1/installer/sync-queue/batch",
         json={"device_id": "sync-batch-device", "app_version": "mobile-batch", "items": [bad, good]},
     )
     assert resp.status_code == 200, resp.text
     results = resp.json()["results"]
-    assert [r["status"] for r in results] == ["CONFLICT", "APPLIED"]
+    assert [r["status"] for r in results] == ["CONFLICT", "APPLIED"], results
     assert results[0]["conflict_code"] == "CONFLICT_INVALID_TRANSITION"
     assert results[0]["message"].startswith("Malformed payload")
+    db_session.refresh(bad_door)
+    assert (bad_door.status, bad_door.version) == (DoorStatus.IN_PROGRESS, 1)
 
 
 def test_sync_queue_batch_id_used_by_another_account_is_a_conflict(
@@ -1076,30 +1082,31 @@ def test_sync_queue_batch_id_used_by_another_account_is_a_conflict(
     db_session.flush()
     door = _make_door(
         company_id=company_id, project_id=project.id, door_type_id=door_type.id,
-        installer_id=installer_id, status=DoorStatus.IN_PROGRESS, version=1,
+        installer_id=installer_id, status=DoorStatus.NOT_INSTALLED, version=0,
     )
     db_session.add(door)
+    db_session.flush()
     foreign_id = uuid.uuid4()
     db_session.add(SyncQueueItemORM(
         id=foreign_id, company_id=company_id, user_id=other_user.id, device_id="other-device",
-        entity_type="door", entity_id=door.id, operation_type="DOOR_SET_STATUS",
+        project_id=project.id, entity_type="door", entity_id=door.id, operation_type="DOOR_SET_STATUS",
         payload={"status": "IN_PROGRESS"}, base_version=0, status="APPLIED", conflict_code=None,
         created_at=datetime.now(timezone.utc), synced_at=None,
     ))
     db_session.commit()
 
-    reused = _batch_item(project_id=project.id, door_id=door.id, status="INSTALLED", base_version=1)
+    reused = _batch_item(project_id=project.id, door_id=door.id, status="IN_PROGRESS", base_version=0)
     reused["id"] = str(foreign_id)
-    own = _batch_item(project_id=project.id, door_id=door.id, status="INSTALLED", base_version=1)
+    own = _batch_item(project_id=project.id, door_id=door.id, status="IN_PROGRESS", base_version=0)
     resp = client.post(
         "/api/v1/installer/sync-queue/batch",
         json={"device_id": "sync-batch-device", "app_version": "mobile-batch", "items": [reused, own]},
     )
     assert resp.status_code == 200, resp.text
     results = resp.json()["results"]
-    assert results[0]["status"] == "CONFLICT"
+    assert results[0]["status"] == "CONFLICT", results
     assert results[0]["item_id"] == str(foreign_id)
-    assert results[1]["status"] == "APPLIED"
+    assert results[1]["status"] == "APPLIED", results
     db_session.expire_all()
     kept = db_session.query(SyncQueueItemORM).filter(SyncQueueItemORM.id == foreign_id).one()
     assert kept.user_id == other_user.id and kept.status == "APPLIED"

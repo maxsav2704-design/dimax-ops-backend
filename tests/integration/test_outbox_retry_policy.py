@@ -41,7 +41,8 @@ def test_mark_failed_backs_off_before_the_next_attempt(db_session, company_id):
     assert msg.status == OutboxStatus.PENDING
     assert msg.attempts == 1
     assert msg.scheduled_at >= before + timedelta(minutes=1) - timedelta(seconds=5)
-    # Not eligible for the next batch right away.
+    # Not eligible for the next batch right away (the test session has autoflush off).
+    db_session.flush()
     assert msg not in repo.lock_next_batch(company_id=company_id, limit=20)
 
     repo.mark_failed(msg, error="provider down")

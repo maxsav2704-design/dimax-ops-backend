@@ -8,6 +8,7 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.sync.domain.enums import SyncChangeType
 from app.modules.sync.infrastructure.repositories import SyncChangeLogRepository
 
@@ -63,7 +64,15 @@ def test_change_log_writers_of_one_company_commit_in_cursor_order(db_session, co
     assert len(cursors) == 2 and cursors[0] < cursors[1]
 
 
-def test_installer_sync_ahead_of_server_cursor_gets_a_cold_snapshot(client_installer):
+def test_installer_sync_ahead_of_server_cursor_gets_a_cold_snapshot(
+    client_installer, db_session, company_id, installer_user
+):
+    db_session.add(InstallerORM(
+        company_id=company_id, full_name="Ahead Cursor Installer", phone="+10000000901",
+        email=None, address=None, passport_id=None, notes=None, status="ACTIVE",
+        is_active=True, user_id=installer_user.id,
+    ))
+    db_session.commit()
     response = client_installer.post(
         "/api/v1/installer/sync",
         json={"since_cursor": 10_000_000, "ack_cursor": 0, "events": [], "device_id": "ahead-device"},
