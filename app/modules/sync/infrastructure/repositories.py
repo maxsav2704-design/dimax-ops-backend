@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, desc, func, nulls_last, or_
+from sqlalchemy import and_, desc, func, nulls_last, or_, text
 from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
@@ -184,6 +184,14 @@ class SyncChangeLogRepository:
         installer_id: uuid.UUID | None,
         payload: dict,
     ) -> None:
+        # Cursors come from a global sequence at insert time. Holding the company
+        # row (NO KEY UPDATE, compatible with FK key-share locks) until commit makes
+        # commits happen in cursor order per company, so a reader that was served
+        # cursor N can never miss a lower cursor that commits later.
+        self.session.execute(
+            text("SELECT id FROM companies WHERE id = :company_id FOR NO KEY UPDATE"),
+            {"company_id": str(company_id)},
+        )
         row = SyncChangeLogORM(
             company_id=company_id,
             created_at=utcnow(),

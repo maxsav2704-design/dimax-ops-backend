@@ -497,7 +497,9 @@ class InstallerSyncService:
         min_available = uow.sync_change_log.min_cursor(company_id=company_id)
         max_now = uow.sync_change_log.max_cursor(company_id=company_id)
 
-        if min_available is not None and since_cursor < min_available:
+        # A device behind the pruned log, or ahead of the server (restored backup,
+        # reset environment), gets a cold snapshot instead of silent gaps.
+        if (min_available is not None and since_cursor < min_available) or since_cursor > max_now:
             snapshot = InstallerSyncService._build_cold_snapshot(
                 uow,
                 company_id=company_id,
