@@ -3771,11 +3771,14 @@ class ReportsRepository:
         factory_rates: dict[tuple[str, uuid.UUID], Decimal] | None = None,
     ) -> dict:
         factory_mode = factory_rates is not None
+        # The one legacy rate in force at install time: several versions would
+        # make this scalar subquery fail with a cardinality error.
         legacy_rate = select(InstallerRateORM.price).where(
             InstallerRateORM.company_id == DoorORM.company_id,
             InstallerRateORM.installer_id == DoorORM.installer_id,
             InstallerRateORM.door_type_id == DoorORM.door_type_id,
-        ).correlate(DoorORM).scalar_subquery()
+            InstallerRateORM.effective_from <= func.coalesce(DoorORM.installed_at, func.now()),
+        ).order_by(InstallerRateORM.effective_from.desc()).limit(1).correlate(DoorORM).scalar_subquery()
         rate = (_factory_rate(factory_rates, "DOOR", DoorORM.door_type_id) if factory_mode
                 else func.coalesce(DoorORM.installer_rate_snapshot, legacy_rate, 0))
         exposure = issue_exposure(self.session, company_id=company_id, rate=rate,

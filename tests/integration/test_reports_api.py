@@ -2582,6 +2582,9 @@ def test_install_snapshot_uses_latest_effective_rate_at_install_time(
     plan_fact = client_admin_real_uow.get(f"/api/v1/admin/reports/project-plan-fact/{project.id}")
     assert plan_fact.status_code == 200, plan_fact.text
     assert plan_fact.json()["total_doors"] == 1
+    # The legacy-rate scalar subquery must pick one version, not fail on three.
+    impact = client_admin_real_uow.get("/api/v1/admin/reports/issues-addons-impact?limit=5")
+    assert impact.status_code == 200, impact.text
 
 
 def test_reports_kpi_uses_correction_ledger_over_door_snapshot(
