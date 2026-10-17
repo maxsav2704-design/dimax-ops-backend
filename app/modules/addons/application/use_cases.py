@@ -404,12 +404,11 @@ class AddonsUseCases:
         if project is None:
             raise Forbidden("Project is not assigned to this installer")
 
-        my_doors = uow.doors.list_by_project_for_installer(
+        if not uow.doors.has_any_for_installer(
             company_id=company_id,
             project_id=project_id,
             installer_id=installer_id,
-        )
-        if not my_doors:
+        ):
             raise Forbidden("Project is not assigned to this installer")
 
         at = uow.addon_types.get(

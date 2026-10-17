@@ -901,6 +901,44 @@ def test_installer_sync_queue_list_has_pagination_object(
     }
 
 
+def test_installer_sync_queue_list_pages_in_the_database(
+    installer_client_phase2,
+    db_session,
+    company_id,
+):
+    # Sync audit block 6: the list used to load every row and slice in memory.
+    client, _installer_id, user = installer_client_phase2
+    base = datetime.now(timezone.utc)
+    for index in range(3):
+        db_session.add(
+            SyncQueueItemORM(
+                company_id=company_id,
+                user_id=user.id,
+                device_id="page-device",
+                entity_type="door",
+                entity_id=uuid.uuid4(),
+                operation_type="DOOR_SET_STATUS",
+                payload={"status": "IN_PROGRESS", "index": index},
+                base_version=index,
+                status="PENDING",
+                conflict_code=None,
+                created_at=base + timedelta(seconds=index),
+                synced_at=None,
+            )
+        )
+    db_session.commit()
+
+    first = client.get("/api/v1/installer/sync-queue?page=1&per_page=2")
+    assert first.status_code == 200, first.text
+    assert [item["base_version"] for item in first.json()["items"]] == [2, 1]
+    assert first.json()["pagination"] == {"page": 1, "per_page": 2, "total": 3, "total_pages": 2}
+
+    second = client.get("/api/v1/installer/sync-queue?page=2&per_page=2")
+    assert second.status_code == 200, second.text
+    assert [item["base_version"] for item in second.json()["items"]] == [0]
+    assert second.json()["pagination"]["total"] == 3
+
+
 @pytest.mark.parametrize(
     ("period", "anchor", "expected_start", "expected_end"),
     [

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from starlette.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -90,22 +91,26 @@ async def delivery_status_webhook(
     ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
 
-    with uow:
-        result = OutboxDeliveryWebhookService.process(
-            uow,
-            provider=body.provider.strip().lower(),
-            channel=body.channel.strip().upper() if body.channel else None,
-            event_type=body.event_type.strip().lower() or "delivery_status",
-            external_event_id=external_event_id,
-            payload=payload,
-            outbox_id=body.outbox_id,
-            provider_message_id=body.provider_message_id,
-            provider_status=body.status,
-            provider_error=body.error,
-            delivered_at=body.delivered_at,
-            ip=ip,
-            user_agent=user_agent,
-        )
+    def _process():
+        with uow:
+            return OutboxDeliveryWebhookService.process(
+                uow,
+                provider=body.provider.strip().lower(),
+                channel=body.channel.strip().upper() if body.channel else None,
+                event_type=body.event_type.strip().lower() or "delivery_status",
+                external_event_id=external_event_id,
+                payload=payload,
+                outbox_id=body.outbox_id,
+                provider_message_id=body.provider_message_id,
+                provider_status=body.status,
+                provider_error=body.error,
+                delivered_at=body.delivered_at,
+                ip=ip,
+                user_agent=user_agent,
+            )
+
+    # The unit of work is synchronous; run it off the event loop.
+    result = await run_in_threadpool(_process)
     log_event(
         logger,
         "webhook.outbox.processed",

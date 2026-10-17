@@ -107,6 +107,24 @@ class ProjectAddonPlanRepository:
             )
             .all()
         )
+    def list_by_projects(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_ids: list[uuid.UUID],
+    ) -> list[ProjectAddonPlanORM]:
+        """One query for the cold sync snapshot instead of one per project."""
+        if not project_ids:
+            return []
+        return (
+            self.session.query(ProjectAddonPlanORM)
+            .filter(
+                ProjectAddonPlanORM.company_id == company_id,
+                ProjectAddonPlanORM.project_id.in_(project_ids),
+            )
+            .all()
+        )
+
     def delete(
         self,
         *,

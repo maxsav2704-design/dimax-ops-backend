@@ -137,6 +137,29 @@ class IssueRepository:
             query = query.filter(IssueORM.status == IssueStatus.OPEN)
         return query.order_by(IssueORM.created_at.desc()).all()
 
+    def list_by_projects_for_installer(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_ids: list[uuid.UUID],
+        installer_id: uuid.UUID,
+    ) -> list[tuple[IssueORM, uuid.UUID]]:
+        """Open and closed issues of the installer's doors across projects, with the
+        project id of each; one query for the cold sync snapshot."""
+        if not project_ids:
+            return []
+        return (
+            self.session.query(IssueORM, DoorORM.project_id)
+            .join(DoorORM, DoorORM.id == IssueORM.door_id)
+            .filter(
+                IssueORM.company_id == company_id,
+                DoorORM.project_id.in_(project_ids),
+                DoorORM.installer_id == installer_id,
+            )
+            .order_by(IssueORM.created_at.desc())
+            .all()
+        )
+
     def list_created_by_user(
         self,
         *,

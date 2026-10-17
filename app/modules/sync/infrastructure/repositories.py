@@ -581,7 +581,21 @@ class InstallerSyncQueueRepository:
                 desc(SyncQueueItemORM.created_at),
                 desc(SyncQueueItemORM.id),
             )
-            .all()
+        )
+        if offset:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all()
+
+    def count_for_user(self, *, company_id: uuid.UUID, user_id: uuid.UUID) -> int:
+        return (
+            self.session.query(SyncQueueItemORM.id)
+            .filter(
+                SyncQueueItemORM.company_id == company_id,
+                SyncQueueItemORM.user_id == user_id,
+            )
+            .count()
         )
 
     def count_problem_statuses_by_installer(

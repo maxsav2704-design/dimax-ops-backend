@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from starlette.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse
 
@@ -67,22 +68,26 @@ async def status_callback(
     )[:160]
     error_text = f"{error_code or ''} {error_message or ''}".strip() or None
 
-    with uow:
-        result = OutboxDeliveryWebhookService.process(
-            uow,
-            provider="twilio",
-            channel="WHATSAPP",
-            event_type="message_status",
-            external_event_id=event_id,
-            payload=dict(form),
-            outbox_id=outbox_id,
-            provider_message_id=message_sid,
-            provider_status=message_status,
-            provider_error=error_text,
-            delivered_at=None,
-            ip=ip,
-            user_agent=ua,
-        )
+    def _process():
+        with uow:
+            return OutboxDeliveryWebhookService.process(
+                uow,
+                provider="twilio",
+                channel="WHATSAPP",
+                event_type="message_status",
+                external_event_id=event_id,
+                payload=dict(form),
+                outbox_id=outbox_id,
+                provider_message_id=message_sid,
+                provider_status=message_status,
+                provider_error=error_text,
+                delivered_at=None,
+                ip=ip,
+                user_agent=ua,
+            )
+
+    # The unit of work is synchronous; run it off the event loop.
+    result = await run_in_threadpool(_process)
     log_event(
         logger,
         "webhook.twilio.processed",

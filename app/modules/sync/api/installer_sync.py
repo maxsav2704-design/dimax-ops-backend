@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from app.api.v1.acl import get_current_installer_id
-from app.api.v1.pagination import paginate_items, pagination_params
+from app.api.v1.pagination import pagination_meta, pagination_params
 from app.api.v1.deps import CurrentUser, get_uow, require_installer
 from app.modules.sync.api.installer_schemas import (
     InstallerSyncBatchRequest,
@@ -31,9 +31,13 @@ def list_sync_queue(
 ):
     page, per_page = pagination
     with uow:
+        # Page in the database; the queue grows for the life of the account.
+        total = uow.sync_queue.count_for_user(company_id=user.company_id, user_id=user.id)
         rows = uow.sync_queue.list_for_user(
             company_id=user.company_id,
             user_id=user.id,
+            offset=(page - 1) * per_page,
+            limit=per_page,
         )
         items = [
             InstallerSyncQueueItemDTO(
@@ -52,7 +56,10 @@ def list_sync_queue(
             )
             for row in rows
         ]
-        return InstallerSyncQueueListResponse(**paginate_items(items, page=page, per_page=per_page))
+        return InstallerSyncQueueListResponse(
+            items=items,
+            pagination=pagination_meta(page=page, per_page=per_page, total=total),
+        )
 
 
 @router.post("/sync", response_model=InstallerSyncResponse)

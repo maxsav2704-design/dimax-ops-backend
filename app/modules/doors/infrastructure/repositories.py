@@ -117,6 +117,25 @@ class DoorRepository:
             .all()
         )
 
+    def has_any_for_installer(
+        self,
+        *,
+        company_id: uuid.UUID,
+        project_id: uuid.UUID,
+        installer_id: uuid.UUID,
+    ) -> bool:
+        """Assignment check without loading the project's door list (sync hot path)."""
+        return (
+            self.session.query(DoorORM.id)
+            .filter(
+                DoorORM.company_id == company_id,
+                DoorORM.project_id == project_id,
+                DoorORM.installer_id == installer_id,
+            )
+            .first()
+            is not None
+        )
+
     def list_project_ids_for_installer(
         self,
         *,

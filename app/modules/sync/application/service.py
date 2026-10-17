@@ -800,12 +800,11 @@ class InstallerSyncService:
         installer_id: uuid.UUID,
         project_id: uuid.UUID,
     ) -> None:
-        my_doors = uow.doors.list_by_project_for_installer(
+        if not uow.doors.has_any_for_installer(
             company_id=company_id,
             project_id=project_id,
             installer_id=installer_id,
-        )
-        if not my_doors:
+        ):
             raise Forbidden("Project is not assigned to this installer")
 
     @staticmethod
@@ -1157,21 +1156,16 @@ class InstallerSyncService:
             for t in uow.addon_types.list_active(company_id=company_id)
         ]
 
-        plans = []
-        for pid_uuid in project_uuid_ids:
-            rows = uow.addon_plans.list_by_project(
-                company_id=company_id, project_id=pid_uuid
+        plans = [
+            {
+                "project_id": str(r.project_id),
+                "addon_type_id": str(r.addon_type_id),
+                "qty_planned": str(r.qty_planned),
+            }
+            for r in uow.addon_plans.list_by_projects(
+                company_id=company_id, project_ids=list(project_uuid_ids)
             )
-            plans.extend(
-                [
-                    {
-                        "project_id": str(pid_uuid),
-                        "addon_type_id": str(r.addon_type_id),
-                        "qty_planned": str(r.qty_planned),
-                    }
-                    for r in rows
-                ]
-            )
+        ]
 
         addon_facts = InstallerSyncService._pull_addon_facts(
             uow,
@@ -1194,27 +1188,21 @@ class InstallerSyncService:
             if f.get("updated_at") and hasattr(f["updated_at"], "isoformat"):
                 f["updated_at"] = f["updated_at"].isoformat()
 
-        issues = []
-        for pid_uuid in project_uuid_ids:
-            rows = uow.issues.list_open_by_project_for_installer(
+        issues = [
+            {
+                "id": str(issue.id),
+                "door_id": str(issue.door_id),
+                "project_id": str(project_id),
+                "status": enum_value(issue.status),
+                "title": issue.title,
+                "details": issue.details,
+            }
+            for issue, project_id in uow.issues.list_by_projects_for_installer(
                 company_id=company_id,
-                project_id=pid_uuid,
+                project_ids=list(project_uuid_ids),
                 installer_id=installer_id,
-                include_closed=True,
             )
-            issues.extend(
-                [
-                    {
-                        "id": str(issue.id),
-                        "door_id": str(issue.door_id),
-                        "project_id": str(pid_uuid),
-                        "status": enum_value(issue.status),
-                        "title": issue.title,
-                        "details": issue.details,
-                    }
-                    for issue in rows
-                ]
-            )
+        ]
 
         return {
             "projects": projects,
