@@ -108,6 +108,9 @@ def test_reports_dashboard_returns_expected_shape(client_admin_real_uow):
     assert isinstance(body["kpi"], dict)
     assert isinstance(body["sync_health"], dict)
     assert isinstance(body["limits"], dict)
+    # Dashboard sparkline: fourteen daily counts, oldest first, never negative.
+    series = body["kpi"]["installed_series_14d"]
+    assert len(series) == 14 and all(isinstance(v, int) and v >= 0 for v in series)
 
 
 def test_reports_dispatcher_board_returns_operational_snapshot(

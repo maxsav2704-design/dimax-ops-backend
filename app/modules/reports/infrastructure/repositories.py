@@ -229,6 +229,29 @@ class ReportsRepository:
             .subquery()
         )
 
+    def installed_daily_series(
+        self,
+        *,
+        company_id: uuid.UUID,
+        date_to: datetime,
+        days: int = 14,
+    ) -> list[int]:
+        """Effective door installations per day for the `days` days ending at `date_to`
+        (same rows the KPI counts as installed_doors). Oldest day first."""
+        end_day = date_to.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = end_day - timedelta(days=days - 1)
+        effective = self._effective_completed_work_subquery(
+            company_id=company_id, date_from=start, date_to=end_day + timedelta(days=1)
+        )
+        day = func.date_trunc("day", effective.c.completed_at)
+        rows = (
+            self.session.query(day.label("day"), func.count(effective.c.completed_work_id))
+            .group_by(day)
+            .all()
+        )
+        counts = {row[0].date() if hasattr(row[0], "date") else row[0]: int(row[1]) for row in rows}
+        return [counts.get((start + timedelta(days=offset)).date(), 0) for offset in range(days)]
+
     def _effective_addon_work_by_fact_subquery(
         self,
         *,

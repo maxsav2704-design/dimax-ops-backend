@@ -24,6 +24,9 @@ class KpiResponse(BaseModel):
     missing_rates_installed_doors: int
     missing_addon_plans_done: int
 
+    # Effective installations per day, oldest first, for the dashboard sparkline (14 days up to period_to).
+    installed_series_14d: list[int] = []
+
 
 class LimitMetricResponse(BaseModel):
     current: int

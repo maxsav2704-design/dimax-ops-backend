@@ -186,9 +186,15 @@ class ReportsAdminApiService:
             date_from=date_from,
             date_to=date_to,
         )
+        series = ReportsService.installed_daily_series(
+            uow.session,
+            company_id=company_id,
+            date_to=date_to or datetime.now(timezone.utc),
+        )
         kpi_response = KpiResponse(
             period_from=date_from,
             period_to=date_to,
+            installed_series_14d=series,
             **kpi_data,
         )
         sync_health = SyncHealthService.run_for_company(

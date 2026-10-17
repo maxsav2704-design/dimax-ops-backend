@@ -28,6 +28,20 @@ class ReportsService:
         )
 
     @staticmethod
+    def installed_daily_series(
+        session: Session,
+        *,
+        company_id: uuid.UUID,
+        date_to: datetime,
+        days: int = 14,
+    ) -> list[int]:
+        return ReportsService._repo(session).installed_daily_series(
+            company_id=company_id,
+            date_to=date_to,
+            days=days,
+        )
+
+    @staticmethod
     def problem_projects(
         session: Session,
         *,
