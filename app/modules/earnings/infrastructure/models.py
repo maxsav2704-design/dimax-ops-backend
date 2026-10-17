@@ -45,6 +45,8 @@ class CompletedWorkORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Index("ix_completed_work_company_completed_at", "company_id", "completed_at", "id"),
         Index("ix_completed_work_company_project_completed_at", "company_id", "project_id", "completed_at", "id"),
         Index("ix_completed_work_installer_completed_at", "installer_id", "completed_at"),
+        # Door completion / reversal look up the active work by door (migration 0075).
+        Index("ix_completed_work_door_id", "door_id"),
         Index(
             "uq_completed_work_addon_fact_original",
             "addon_fact_id",

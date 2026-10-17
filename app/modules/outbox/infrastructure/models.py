@@ -24,6 +24,8 @@ class OutboxMessageORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_outbox_company_id", "company_id"),
         Index("ix_outbox_status_channel", "status", "channel"),
+        # Webhook delivery status lookups (migration 0075).
+        Index("ix_outbox_provider_message_id", "provider_message_id"),
     )
 
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
