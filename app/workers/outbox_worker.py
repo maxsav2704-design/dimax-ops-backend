@@ -44,6 +44,9 @@ def _enqueue_whatsapp_fallback_email(
     object_key = payload.get("object_key")
     if not fallback_email or not object_key:
         return False
+    if repo.has_fallback_email(msg):
+        # Every failed attempt used to enqueue another copy of the same email.
+        return False
 
     fallback = OutboxMessageORM(
         company_id=msg.company_id,

@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.modules.journal.infrastructure.models import JournalORM
-from app.modules.outbox.domain.enums import DeliveryStatus, OutboxStatus
+from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
 
 
@@ -55,12 +55,42 @@ class OutboxRepository:
         msg.sent_at = datetime.now(timezone.utc)
         self.session.add(msg)
 
+    # Minutes before the next attempt after the 1st, 2nd, ... failure; the last
+    # value repeats. Before this the worker retried every ~3 s and used up all
+    # attempts within seconds of a provider outage.
+    RETRY_BACKOFF_MINUTES = (1, 5, 15, 60)
+
+    @classmethod
+    def retry_delay_minutes(cls, attempts: int) -> int:
+        index = max(0, min(attempts, len(cls.RETRY_BACKOFF_MINUTES)) - 1)
+        return cls.RETRY_BACKOFF_MINUTES[index]
+
     def mark_failed(self, msg: OutboxMessageORM, *, error: str) -> None:
         msg.attempts += 1
         msg.last_error = error[:5000]
         if msg.attempts >= msg.max_attempts:
             msg.status = OutboxStatus.FAILED
+        else:
+            msg.scheduled_at = datetime.now(timezone.utc) + timedelta(
+                minutes=self.retry_delay_minutes(msg.attempts)
+            )
         self.session.add(msg)
+
+    def has_fallback_email(self, msg: OutboxMessageORM) -> bool:
+        """A WhatsApp message gets at most one fallback email, whatever the attempt."""
+        if msg.correlation_id is None:
+            return False
+        return (
+            self.session.query(OutboxMessageORM.id)
+            .filter(
+                OutboxMessageORM.company_id == msg.company_id,
+                OutboxMessageORM.channel == OutboxChannel.EMAIL,
+                OutboxMessageORM.correlation_id == msg.correlation_id,
+                OutboxMessageORM.payload["fallback_reason"].isnot(None),
+            )
+            .first()
+            is not None
+        )
 
     def set_provider_status(
         self,
