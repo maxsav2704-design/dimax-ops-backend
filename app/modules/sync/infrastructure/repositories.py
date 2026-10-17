@@ -582,8 +582,10 @@ class InstallerSyncQueueRepository:
         *,
         company_id: uuid.UUID,
         user_id: uuid.UUID,
+        offset: int | None = None,
+        limit: int | None = None,
     ) -> list[SyncQueueItemORM]:
-        return (
+        query = (
             self.session.query(SyncQueueItemORM)
             .filter(
                 SyncQueueItemORM.company_id == company_id,
