@@ -693,6 +693,31 @@ def test_installer_sync_event_rolls_back_partial_changes_and_records_failure(
     assert failed_event.apply_error == "CONFLICT_INVALID_TRANSITION"
 
 
+def test_installer_sync_server_fault_is_retryable_and_not_sticky(sync_replay_case, db_session, monkeypatch):
+    """A fault inside the server (not a decision about the work) must not become a
+    permanent conflict for that client_event_id, and must not leak its message."""
+    case = sync_replay_case
+    original = InstallerSyncService._apply_door_set_status
+
+    def _server_fault(uow, **kwargs):
+        raise RuntimeError("database connection reset: internal detail")
+
+    monkeypatch.setattr(InstallerSyncService, "_apply_door_set_status", staticmethod(_server_fault))
+    first = _post_replay_event(case, case["event"])
+    assert first["acks"] == [{
+        "client_event_id": case["event"]["client_event_id"], "ok": False, "applied": False, "error": "SERVER_ERROR",
+    }]
+    assert "internal detail" not in str(first)
+    assert db_session.query(SyncEventORM).filter(SyncEventORM.company_id == case["company_id"]).count() == 0
+
+    monkeypatch.setattr(InstallerSyncService, "_apply_door_set_status", staticmethod(original))
+    replay = _post_replay_event(case, case["event"])
+    assert replay["acks"] == [{
+        "client_event_id": case["event"]["client_event_id"], "ok": True, "applied": True, "error": None,
+    }]
+    _assert_one_replay_installation(case, db_session)
+
+
 def test_installer_sync_issue_create_rejects_unassigned_door(
     client_installer,
     db_session,

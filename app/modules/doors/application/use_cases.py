@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.shared.domain.errors import Conflict, Forbidden, NotFound, ValidationError
+from app.shared.domain.errors import Conflict, ForbiddenScope, NotFound, ValidationError
 from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.doors.application.completion import (
     create_completed_work_for_door,
@@ -207,7 +207,7 @@ class DoorUseCases:
     @staticmethod
     def admin_override(uow, cmd: AdminOverrideDoor, *, actor_role: str) -> None:
         if actor_role != "ADMIN":
-            raise Forbidden("Admin only")
+            raise ForbiddenScope("Admin only")
 
         FactoryEarningsPricing.lock_company(uow, cmd.company_id)
         door = uow.doors.get(company_id=cmd.company_id, door_id=cmd.door_id, for_update=True)

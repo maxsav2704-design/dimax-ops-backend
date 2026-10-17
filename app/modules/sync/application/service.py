@@ -31,6 +31,10 @@ from app.shared.infrastructure.observability import get_logger, log_event
 logger = get_logger(__name__)
 
 
+# Ack code for a server fault while applying an event (not a verdict on the work).
+SERVER_ERROR_CODE = "SERVER_ERROR"
+
+
 class _SyncConflictError(Exception):
     def __init__(self, conflict_code: str, message: str):
         super().__init__(message)
@@ -102,7 +106,9 @@ class InstallerSyncService:
             return exc.conflict_code
         if isinstance(exc, (ValidationError, Forbidden, NotFound, Conflict)):
             return InstallerSyncService._domain_error_to_conflict(exc).conflict_code
-        return str(exc)
+        # Anything else is a server fault, not a verdict on the work: a stable code
+        # for the device (retryable there) and no internal message on the wire.
+        return SERVER_ERROR_CODE
 
     @staticmethod
     def _batch_item_matches(row, item: dict) -> bool:
@@ -685,10 +691,11 @@ class InstallerSyncService:
 
             except Exception as e:
                 error_code = InstallerSyncService._sync_event_error_code(e)
+                unexpected = error_code == SERVER_ERROR_CODE
                 log_event(
                     logger,
                     "installer.sync.event_failed",
-                    level="warning",
+                    level="error" if unexpected else "warning",
                     company_id=company_id,
                     installer_id=installer_id,
                     actor_user_id=actor_user_id,
@@ -698,11 +705,14 @@ class InstallerSyncService:
                     error=str(e),
                     error_code=error_code,
                 )
-                try:
-                    if row is not None and getattr(row, "client_event_id", None) == cid:
+                if row is not None and getattr(row, "client_event_id", None) == cid:
+                    if unexpected:
+                        # Not a decision about the work: forget the event row so the
+                        # device's replay applies it again once the server is healthy.
+                        uow.session.delete(row)
+                        uow.session.flush()
+                    else:
                         uow.sync_events.mark_failed(row, error=error_code)
-                except Exception:
-                    pass
 
                 acks.append(
                     {
