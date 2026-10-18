@@ -65,3 +65,21 @@ class IssueORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     )
 
     door: Mapped["DoorORM"] = relationship(back_populates="issue")
+
+
+class IssueCommentORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """One entry of the issue thread. Appended only: the office and the installer
+    never overwrite each other's text (migration 0077)."""
+
+    __tablename__ = "issue_comments"
+
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    issue_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("issues.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    author_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    author_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    author_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    body: Mapped[str] = mapped_column(String(2000), nullable=False)

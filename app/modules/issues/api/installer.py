@@ -13,7 +13,8 @@ from app.modules.issues.api.installer_schemas import (
     InstallerIssueUpdateBody,
     InstallerIssuesListResponse,
 )
-from app.modules.issues.api.schemas import IssueMediaResponse
+from app.modules.issues.api.schemas import IssueCommentCreateBody, IssueCommentDTO, IssueCommentsResponse, IssueMediaResponse
+from app.modules.issues.application.comments_service import IssueCommentsService
 from app.modules.issues.application.installer_api_service import (
     InstallerIssuesApiService,
 )
@@ -80,6 +81,42 @@ def update_issue(
             issue_id=issue_id,
             comment=body.comment,
         )
+
+
+@router.get("/{issue_id}/comments", response_model=IssueCommentsResponse)
+def list_issue_comments(
+    issue_id: UUID,
+    user: CurrentUser = Depends(require_installer),
+    installer_id: UUID = Depends(get_current_installer_id),
+    uow=Depends(get_uow),
+):
+    with uow:
+        InstallerIssuesApiService.ensure_issue_visible(
+            uow, company_id=user.company_id, installer_id=installer_id, user_id=user.id, issue_id=issue_id,
+        )
+        return IssueCommentsResponse(
+            items=IssueCommentsService.list_comments(uow, company_id=user.company_id, issue_id=issue_id),
+        )
+
+
+@router.post("/{issue_id}/comments", response_model=IssueCommentDTO, status_code=201)
+def add_issue_comment(
+    issue_id: UUID,
+    body: IssueCommentCreateBody,
+    user: CurrentUser = Depends(require_installer),
+    installer_id: UUID = Depends(get_current_installer_id),
+    uow=Depends(get_uow),
+):
+    with uow:
+        issue, _door = InstallerIssuesApiService.ensure_issue_visible(
+            uow, company_id=user.company_id, installer_id=installer_id, user_id=user.id, issue_id=issue_id,
+        )
+        comment = IssueCommentsService.add_comment(
+            uow, company_id=user.company_id, issue=issue,
+            author_user_id=user.id, author_role="INSTALLER", body=body.body,
+        )
+        uow.commit()
+        return comment
 
 
 @router.get("/{issue_id}/media", response_model=IssueMediaResponse)

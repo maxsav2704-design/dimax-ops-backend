@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import CurrentUser, get_uow, require_admin
 from app.modules.issues.api.schemas import (
+    IssueCommentCreateBody,
+    IssueCommentDTO,
     AdminIssueDTO,
     AdminIssueBulkWorkflowUpdateBody,
     AdminIssuesBulkWorkflowUpdateResponse,
@@ -15,6 +17,7 @@ from app.modules.issues.api.schemas import (
     IssueCommentsResponse,
     IssueMediaResponse,
 )
+from app.modules.issues.application.comments_service import IssueCommentsService
 from app.modules.issues.application.admin_api_service import (
     IssuesAdminApiService,
 )
@@ -98,7 +101,28 @@ def list_issue_comments(
             company_id=current_user.company_id,
             issue_id=issue_id,
         )
-        return IssueCommentsResponse(items=[])
+        return IssueCommentsResponse(
+            items=IssueCommentsService.list_comments(uow, company_id=current_user.company_id, issue_id=issue_id),
+        )
+
+
+@router.post("/{issue_id}/comments", response_model=IssueCommentDTO, status_code=201)
+def add_issue_comment(
+    issue_id: uuid.UUID,
+    body: IssueCommentCreateBody,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow),
+    current_user: CurrentUser = Depends(require_admin),
+) -> IssueCommentDTO:
+    with uow:
+        issue = uow.issues.get(company_id=current_user.company_id, issue_id=issue_id)
+        if issue is None:
+            IssuesAdminApiService.get_issue(uow, company_id=current_user.company_id, issue_id=issue_id)
+        comment = IssueCommentsService.add_comment(
+            uow, company_id=current_user.company_id, issue=issue,
+            author_user_id=current_user.id, author_role="ADMIN", body=body.body,
+        )
+        uow.commit()
+        return comment
 
 
 @router.get("/{issue_id}/media", response_model=IssueMediaResponse)

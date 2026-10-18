@@ -786,6 +786,13 @@ def test_installer_can_create_issue_and_open_door(
     assert issue.title == "Broken frame"
     assert "Need check" in (issue.details or "") and "Second visit" in (issue.details or "")
 
+    # The thread: the installer adds a comment and reads the office's answer later.
+    posted = client.post(f"/api/v1/installer/issues/{issue.id}/comments", json={"body": "Frame arrives Monday"})
+    assert posted.status_code == 201, posted.text
+    thread = client.get(f"/api/v1/installer/issues/{issue.id}/comments")
+    assert thread.status_code == 200, thread.text
+    assert [item["body"] for item in thread.json()["items"]] == ["Frame arrives Monday"]
+
     issue = db_session.query(IssueORM).filter(IssueORM.door_id == door.id).one()
     assert issue.created_by_user_id == user.id
 

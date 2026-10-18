@@ -42,6 +42,10 @@ class IssueCommentsResponse(BaseModel):
     items: list[IssueCommentDTO]
 
 
+class IssueCommentCreateBody(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
 class IssueMediaAssetDTO(BaseModel):
     id: uuid.UUID
     file_name: str | None = None

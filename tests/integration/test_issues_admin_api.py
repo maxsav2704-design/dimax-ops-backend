@@ -379,3 +379,26 @@ def test_system_risk_issue_never_takes_a_door_that_already_has_an_issue(db_sessi
     risk_id = repo.upsert_sync_risk(company_id=company_id, project_id=project.id)
     assert risk_id is not None
     assert db_session.get(IssueORM, risk_id).door_id == free_door.id
+
+
+def test_issue_comment_thread_is_appended_by_office_and_installer(client_admin_real_uow, client_installer, db_session, company_id, make_door_type):
+    project, door, issue = _seed_issue(db_session, company_id=company_id, make_door_type=make_door_type)
+
+    empty = client_admin_real_uow.get(f"/api/v1/admin/issues/{issue.id}/comments")
+    assert empty.status_code == 200 and empty.json()["items"] == [], empty.text
+
+    created = client_admin_real_uow.post(f"/api/v1/admin/issues/{issue.id}/comments", json={"body": "Checked on site, waiting for the frame."})
+    assert created.status_code == 201, created.text
+    assert created.json()["body"] == "Checked on site, waiting for the frame."
+    assert created.json()["author_name"]
+
+    blank = client_admin_real_uow.post(f"/api/v1/admin/issues/{issue.id}/comments", json={"body": "   "})
+    assert blank.status_code == 422, blank.text
+
+    listed = client_admin_real_uow.get(f"/api/v1/admin/issues/{issue.id}/comments")
+    assert listed.status_code == 200, listed.text
+    assert [item["body"] for item in listed.json()["items"]] == ["Checked on site, waiting for the frame."]
+
+    # The installer who does not see the issue cannot read or write its thread.
+    foreign = client_installer.get(f"/api/v1/installer/issues/{issue.id}/comments")
+    assert foreign.status_code in (403, 404), foreign.text
