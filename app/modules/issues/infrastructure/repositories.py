@@ -3,15 +3,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.issues.domain.enums import IssueStatus, IssueWorkflowState
 from app.modules.issues.infrastructure.models import IssueORM
 
-SYNC_RISK_TITLE = "SYNC_RISK"
-DELIVERY_OUTBOX_RISK_TITLE = "DELIVERY_OUTBOX_RISK"
 
 
 class IssueRepository:
@@ -180,139 +177,6 @@ class IssueRepository:
             .offset(offset)
             .all()
         )
-
-    def _find_sync_risk_issue(
-        self, *, company_id: uuid.UUID, project_id: uuid.UUID
-    ) -> IssueORM | None:
-        return (
-            self.session.query(IssueORM)
-            .join(DoorORM, DoorORM.id == IssueORM.door_id)
-            .filter(
-                IssueORM.company_id == company_id,
-                DoorORM.project_id == project_id,
-                IssueORM.title == SYNC_RISK_TITLE,
-            )
-            .first()
-        )
-
-    def _find_delivery_outbox_risk_issue(
-        self, *, company_id: uuid.UUID, project_id: uuid.UUID
-    ) -> IssueORM | None:
-        return (
-            self.session.query(IssueORM)
-            .join(DoorORM, DoorORM.id == IssueORM.door_id)
-            .filter(
-                IssueORM.company_id == company_id,
-                DoorORM.project_id == project_id,
-                IssueORM.title == DELIVERY_OUTBOX_RISK_TITLE,
-            )
-            .first()
-        )
-
-    def _free_door_for_system_issue(self, *, company_id: uuid.UUID, project_id: uuid.UUID) -> DoorORM | None:
-        """A door of the project that has no issue yet, chosen deterministically.
-
-        A door holds at most one issue, so a system risk issue (sync, delivery)
-        must never take the slot of a real door issue or hit the unique key
-        inside a GET. No free door means no system issue for this project."""
-        return (
-            self.session.query(DoorORM)
-            .filter(
-                DoorORM.company_id == company_id,
-                DoorORM.project_id == project_id,
-                ~exists().where(IssueORM.door_id == DoorORM.id),
-            )
-            .order_by(DoorORM.unit_label, DoorORM.id)
-            .first()
-        )
-
-    def upsert_sync_risk(
-        self, *, company_id: uuid.UUID, project_id: uuid.UUID
-    ) -> uuid.UUID | None:
-        row = self._find_sync_risk_issue(
-            company_id=company_id, project_id=project_id
-        )
-        if row and row.status == IssueStatus.OPEN:
-            return row.id
-        if row and row.status != IssueStatus.OPEN:
-            row.status = IssueStatus.OPEN
-            row.details = "Installer sync is in DANGER state (offline/lag)."
-            self.session.flush()
-            return row.id
-        door = self._free_door_for_system_issue(company_id=company_id, project_id=project_id)
-        if not door:
-            return None
-        new = IssueORM(
-            company_id=company_id,
-            door_id=door.id,
-            status=IssueStatus.OPEN,
-            title=SYNC_RISK_TITLE,
-            details="Installer sync is in DANGER state (offline/lag).",
-        )
-        self.session.add(new)
-        self.session.flush()
-        return new.id
-
-    def close_sync_risk(
-        self, *, company_id: uuid.UUID, project_id: uuid.UUID
-    ) -> bool:
-        row = self._find_sync_risk_issue(
-            company_id=company_id, project_id=project_id
-        )
-        if not row or row.status != IssueStatus.OPEN:
-            return False
-        row.status = IssueStatus.CLOSED
-        self.session.flush()
-        return True
-
-    def upsert_delivery_outbox_risk(
-        self,
-        *,
-        company_id: uuid.UUID,
-        project_id: uuid.UUID,
-        details: str,
-    ) -> tuple[uuid.UUID | None, bool]:
-        row = self._find_delivery_outbox_risk_issue(
-            company_id=company_id,
-            project_id=project_id,
-        )
-        if row and row.status == IssueStatus.OPEN:
-            row.details = details[:2000]
-            self.session.flush()
-            return row.id, False
-        if row and row.status != IssueStatus.OPEN:
-            row.status = IssueStatus.OPEN
-            row.details = details[:2000]
-            self.session.flush()
-            return row.id, True
-
-        door = self._free_door_for_system_issue(company_id=company_id, project_id=project_id)
-        if not door:
-            return None, False
-
-        new = IssueORM(
-            company_id=company_id,
-            door_id=door.id,
-            status=IssueStatus.OPEN,
-            title=DELIVERY_OUTBOX_RISK_TITLE,
-            details=details[:2000],
-        )
-        self.session.add(new)
-        self.session.flush()
-        return new.id, True
-
-    def close_delivery_outbox_risk(
-        self, *, company_id: uuid.UUID, project_id: uuid.UUID
-    ) -> tuple[uuid.UUID | None, bool]:
-        row = self._find_delivery_outbox_risk_issue(
-            company_id=company_id,
-            project_id=project_id,
-        )
-        if not row or row.status != IssueStatus.OPEN:
-            return (row.id if row else None), False
-        row.status = IssueStatus.CLOSED
-        self.session.flush()
-        return row.id, True
 
     def save(self, issue: IssueORM) -> None:
         self.session.add(issue)

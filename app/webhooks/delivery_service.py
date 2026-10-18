@@ -9,6 +9,13 @@ from app.modules.audit.application.service import AuditService
 from app.modules.journal.domain.enums import JournalDeliveryStatus
 from app.modules.outbox.domain.enums import DeliveryStatus, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
+from app.modules.projects.infrastructure.risk_models import RISK_DELIVERY_OUTBOX
+
+
+def _recalc_project_health(uow, *, company_id: uuid.UUID, project_id: uuid.UUID) -> None:
+    from app.modules.projects.application.status_service import ProjectStatusService
+
+    ProjectStatusService.recalc_and_set(uow=uow, company_id=company_id, project_id=project_id)
 from app.webhooks.models import WebhookEventORM
 
 SYSTEM_ACTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
@@ -398,23 +405,25 @@ class OutboxDeliveryWebhookService:
                 f"provider={provider}; status={provider_status or 'unknown'}; "
                 f"failed_count={failed_count}; error={(provider_error or message.provider_error or '-')[:200]}"
             )
-            issue_id, changed = uow.issues.upsert_delivery_outbox_risk(
+            risk_id, changed = uow.project_risks.open_risk(
                 company_id=message.company_id,
                 project_id=project_id,
+                kind=RISK_DELIVERY_OUTBOX,
                 details=details,
             )
-            if changed and issue_id is not None:
+            if changed and risk_id is not None:
                 AuditService.add(
                     uow,
                     company_id=message.company_id,
                     actor_user_id=SYSTEM_ACTOR_ID,
-                    entity_type="issue",
-                    entity_id=issue_id,
+                    entity_type="project_risk",
+                    entity_id=risk_id,
                     action="OUTBOX_DELIVERY_RISK_OPEN",
                     reason=details[:500],
                     before=None,
-                    after={"status": "OPEN", "title": "DELIVERY_OUTBOX_RISK"},
+                    after={"status": "OPEN", "kind": RISK_DELIVERY_OUTBOX, "project_id": str(project_id)},
                 )
+                _recalc_project_health(uow, company_id=message.company_id, project_id=project_id)
             return
 
         if message.delivery_status == DeliveryStatus.DELIVERED:
@@ -426,19 +435,21 @@ class OutboxDeliveryWebhookService:
             if failed_count > 0:
                 return
 
-            issue_id, changed = uow.issues.close_delivery_outbox_risk(
+            risk_id, changed = uow.project_risks.close_risk(
                 company_id=message.company_id,
                 project_id=project_id,
+                kind=RISK_DELIVERY_OUTBOX,
             )
-            if changed and issue_id is not None:
+            if changed and risk_id is not None:
                 AuditService.add(
                     uow,
                     company_id=message.company_id,
                     actor_user_id=SYSTEM_ACTOR_ID,
-                    entity_type="issue",
-                    entity_id=issue_id,
+                    entity_type="project_risk",
+                    entity_id=risk_id,
                     action="OUTBOX_DELIVERY_RISK_CLOSE",
                     reason=f"Recovered after delivery via provider={provider}",
-                    before={"status": "OPEN", "title": "DELIVERY_OUTBOX_RISK"},
-                    after={"status": "CLOSED", "title": "DELIVERY_OUTBOX_RISK"},
+                    before={"status": "OPEN", "kind": RISK_DELIVERY_OUTBOX},
+                    after={"status": "CLOSED", "kind": RISK_DELIVERY_OUTBOX, "project_id": str(project_id)},
                 )
+                _recalc_project_health(uow, company_id=message.company_id, project_id=project_id)

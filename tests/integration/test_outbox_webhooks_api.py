@@ -10,9 +10,9 @@ from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
-from app.modules.issues.domain.enums import IssueStatus
+from app.modules.issues.domain.enums import IssueStatus  # noqa: F401
 from app.modules.issues.infrastructure.models import IssueORM
-from app.modules.issues.infrastructure.repositories import DELIVERY_OUTBOX_RISK_TITLE
+from app.modules.projects.infrastructure.risk_models import RISK_DELIVERY_OUTBOX, ProjectRiskORM
 from app.modules.journal.domain.enums import JournalDeliveryStatus, JournalStatus
 from app.modules.journal.infrastructure.models import JournalORM
 from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, OutboxStatus
@@ -139,16 +139,18 @@ def test_twilio_status_webhook_updates_outbox_and_creates_then_closes_delivery_r
     journal = db_session.query(JournalORM).filter(JournalORM.id == msg.correlation_id).one()
     assert journal.whatsapp_delivery_status == JournalDeliveryStatus.FAILED
 
+    # The risk lives on the project, not on a door issue (migration 0078).
     issue = (
-        db_session.query(IssueORM)
+        db_session.query(ProjectRiskORM)
         .filter(
-            IssueORM.company_id == company_id,
-            IssueORM.title == DELIVERY_OUTBOX_RISK_TITLE,
+            ProjectRiskORM.company_id == company_id,
+            ProjectRiskORM.kind == RISK_DELIVERY_OUTBOX,
         )
         .first()
     )
     assert issue is not None
-    assert issue.status == IssueStatus.OPEN
+    assert issue.status == "OPEN"
+    assert db_session.query(IssueORM).filter(IssueORM.company_id == company_id, IssueORM.title == "DELIVERY_OUTBOX_RISK").count() == 0
 
     webhook_count_before = (
         db_session.query(WebhookEventORM)
@@ -194,14 +196,14 @@ def test_twilio_status_webhook_updates_outbox_and_creates_then_closes_delivery_r
     assert msg.delivery_status == DeliveryStatus.DELIVERED
     assert msg.status == OutboxStatus.SENT
     assert journal.whatsapp_delivery_status == JournalDeliveryStatus.DELIVERED
-    assert issue.status == IssueStatus.CLOSED
+    assert issue.status == "CLOSED"
 
     actions = {
         row.action
         for row in db_session.query(AuditLogORM)
         .filter(
             AuditLogORM.company_id == company_id,
-            AuditLogORM.entity_type.in_(["outbox_message", "issue"]),
+            AuditLogORM.entity_type.in_(["outbox_message", "project_risk"]),
         )
         .all()
     }

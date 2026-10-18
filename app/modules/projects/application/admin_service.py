@@ -1607,6 +1607,10 @@ class ProjectAdminService:
             "status": _status_value(project.status),
             "lifecycle_status": project.lifecycle_status,
             "health_status": project.health_status,
+            "open_risks": [
+                {"kind": risk.kind, "status": risk.status, "details": risk.details, "opened_at": risk.opened_at}
+                for risk in uow.project_risks.list_open_by_project(company_id=company_id, project_id=project_id)
+            ],
             "developer": {
                 "name": project.developer_company,
                 "contact_name": project.contact_name,

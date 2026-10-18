@@ -433,6 +433,13 @@ class ProjectDeveloperDetailsDTO(BaseModel):
     call_deep_link: str | None = None
 
 
+class ProjectRiskDTO(BaseModel):
+    kind: str
+    status: str
+    details: str | None = None
+    opened_at: datetime | None = None
+
+
 class ProjectDetailsResponse(BaseModel):
     id: UUID
     name: str
@@ -444,6 +451,8 @@ class ProjectDetailsResponse(BaseModel):
     status: str
     lifecycle_status: ProjectLifecycleStatus = ProjectLifecycleStatus.ACTIVE
     health_status: ProjectHealthStatus = ProjectHealthStatus.NORMAL
+    # Open system risks (installer sync, outbox delivery), see migration 0078.
+    open_risks: list[ProjectRiskDTO] = []
     developer: ProjectDeveloperDetailsDTO | None = None
     developer_company: str | None
     contact_name: str | None

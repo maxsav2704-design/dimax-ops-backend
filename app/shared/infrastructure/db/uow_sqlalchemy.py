@@ -11,6 +11,7 @@ from app.modules.companies.infrastructure.repositories import (
 )
 from app.modules.doors.infrastructure.repositories import DoorRepository
 from app.modules.issues.infrastructure.repositories import IssueRepository
+from app.modules.projects.infrastructure.risk_repository import ProjectRiskRepository
 from app.modules.projects.infrastructure.repositories import (
     ProjectImportRunRepository,
     ProjectRepository,
@@ -64,6 +65,7 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
         self.company_plans = CompanyPlanRepository(self.session)
         self.doors = DoorRepository(self.session)
         self.issues = IssueRepository(self.session)
+        self.project_risks = ProjectRiskRepository(self.session)
         self.projects = ProjectRepository(self.session)
         self.project_import_runs = ProjectImportRunRepository(self.session)
         self.audit = AuditRepository(self.session)

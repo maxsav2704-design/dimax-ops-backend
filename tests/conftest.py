@@ -43,6 +43,7 @@ from app.modules.rates.infrastructure.price_lists_repository import FactoryPrice
 from app.modules.installers.infrastructure.repositories import InstallerRepository
 from app.modules.library.infrastructure.repositories import ProductLibraryRepository
 from app.modules.issues.infrastructure.repositories import IssueRepository
+from app.modules.projects.infrastructure.risk_repository import ProjectRiskRepository
 from app.modules.journal.infrastructure.repositories import JournalRepository
 from app.modules.outbox.infrastructure.repositories import OutboxRepository
 from app.modules.documents.infrastructure.repositories import DocumentRepository
@@ -95,6 +96,7 @@ class TestUnitOfWork:
         self.product_library = ProductLibraryRepository(self.session)
         self.doors = DoorRepository(self.session)
         self.issues = IssueRepository(self.session)
+        self.project_risks = ProjectRiskRepository(self.session)
         self.journals = JournalRepository(self.session)
         self.outbox = OutboxRepository(self.session)
         self.documents = DocumentRepository(self.session)

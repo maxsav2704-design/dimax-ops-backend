@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.core.config import settings
+from app.modules.projects.infrastructure.risk_models import RISK_SYNC
 from app.shared.infrastructure.observability import get_logger, log_event
 
 # System actor for auto-actions (audit log)
@@ -328,16 +329,32 @@ class SyncHealthService:
             if ok_installer_ids
             else []
         )
+        # A project whose installer is in danger keeps its danger risk even if
+        # another installer on it is fine.
+        ok_project_ids = [pid for pid in ok_project_ids if pid not in set(danger_project_ids)]
+        changed_project_ids: list[uuid.UUID] = []
         for pid in danger_project_ids:
-            uow.issues.upsert_sync_risk(
+            _risk_id, changed = uow.project_risks.open_risk(
                 company_id=company_id,
                 project_id=pid,
+                kind=RISK_SYNC,
+                details="Installer sync is in DANGER state (offline/lag).",
             )
+            if changed:
+                changed_project_ids.append(pid)
         for pid in ok_project_ids:
-            uow.issues.close_sync_risk(
+            _risk_id, changed = uow.project_risks.close_risk(
                 company_id=company_id,
                 project_id=pid,
+                kind=RISK_SYNC,
             )
+            if changed:
+                changed_project_ids.append(pid)
+        if changed_project_ids:
+            from app.modules.projects.application.status_service import ProjectStatusService
+
+            for pid in changed_project_ids:
+                ProjectStatusService.recalc_and_set(uow=uow, company_id=company_id, project_id=pid)
 
     @staticmethod
     def _auto_mark_projects_problem(uow, *, company_id: uuid.UUID) -> None:

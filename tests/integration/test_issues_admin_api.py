@@ -358,27 +358,27 @@ def test_authenticated_media_url_returns_404_until_media_store_exists(client_ins
     assert resp.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_system_risk_issue_never_takes_a_door_that_already_has_an_issue(db_session, company_id, make_door_type):
-    from app.modules.issues.infrastructure.repositories import IssueRepository
+def test_system_risks_live_on_the_project_not_on_a_door(db_session, company_id, make_door_type):
+    from app.modules.projects.infrastructure.risk_models import RISK_SYNC
+    from app.modules.projects.infrastructure.risk_repository import ProjectRiskRepository
 
     project, door, issue = _seed_issue(db_session, company_id=company_id, make_door_type=make_door_type)
-    repo = IssueRepository(db_session)
+    repo = ProjectRiskRepository(db_session)
 
-    # The only door already holds a real issue: no slot, no crash, the real issue untouched.
-    assert repo.upsert_sync_risk(company_id=company_id, project_id=project.id) is None
+    risk_id, changed = repo.open_risk(company_id=company_id, project_id=project.id, kind=RISK_SYNC, details="offline")
+    assert changed is True
+    same_id, changed_again = repo.open_risk(company_id=company_id, project_id=project.id, kind=RISK_SYNC, details="offline 2")
+    assert same_id == risk_id and changed_again is False
+    assert [risk.details for risk in repo.list_open_by_project(company_id=company_id, project_id=project.id)] == ["offline 2"]
+    # The door's real issue is untouched and the company still has exactly one issue.
     db_session.refresh(issue)
-    assert issue.title != "SYNC_RISK"
+    assert issue.title == "Install blocked"
+    assert db_session.query(IssueORM).filter(IssueORM.company_id == company_id).count() == 1
 
-    free_door = DoorORM(
-        company_id=company_id, project_id=project.id, door_type_id=door.door_type_id,
-        unit_label="A-102", our_price=door.our_price, status=door.status, installer_id=door.installer_id,
-        reason_id=None, comment=None, installed_at=None, is_locked=False,
-    )
-    db_session.add(free_door)
-    db_session.flush()
-    risk_id = repo.upsert_sync_risk(company_id=company_id, project_id=project.id)
-    assert risk_id is not None
-    assert db_session.get(IssueORM, risk_id).door_id == free_door.id
+    closed_id, closed = repo.close_risk(company_id=company_id, project_id=project.id, kind=RISK_SYNC)
+    assert closed_id == risk_id and closed is True
+    assert repo.close_risk(company_id=company_id, project_id=project.id, kind=RISK_SYNC) == (risk_id, False)
+    assert repo.list_open_by_project(company_id=company_id, project_id=project.id) == []
 
 
 def test_issue_comment_thread_is_appended_by_office_and_installer(client_admin_real_uow, client_installer, db_session, company_id, make_door_type):

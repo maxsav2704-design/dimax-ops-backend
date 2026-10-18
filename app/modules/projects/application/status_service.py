@@ -39,6 +39,12 @@ class ProjectStatusService:
         has_blocker = any(
             getattr(door, "status", None) == DoorStatus.ISSUE_OPEN for door in doors
         ) or bool(open_issues)
+        # System risks (installer sync, outbox delivery) live on the project: they
+        # put it at risk, they never block it like a reported door issue does.
+        risk_repo = getattr(uow, "project_risks", None)
+        has_system_risk = bool(
+            risk_repo.list_open_by_project(company_id=company_id, project_id=project_id)
+        ) if risk_repo is not None else False
         has_pending = any(
             getattr(door, "status", None)
             not in {DoorStatus.INSTALLED, DoorStatus.CANCELLED, DoorStatus.LOCKED}
@@ -56,7 +62,7 @@ class ProjectStatusService:
             ProjectHealthStatus.BLOCKED
             if has_blocker
             else ProjectHealthStatus.AT_RISK
-            if is_overdue
+            if is_overdue or has_system_risk
             else ProjectHealthStatus.NORMAL
         )
         legacy_status = (
