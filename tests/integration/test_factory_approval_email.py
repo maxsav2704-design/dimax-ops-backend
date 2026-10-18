@@ -2,7 +2,7 @@ import base64
 import json
 import os
 import re
-from datetime import timedelta
+from datetime import timedelta, timezone, datetime
 from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -112,6 +112,10 @@ def test_smtp_failure_is_redacted_and_retryable(client, approval_case, db_sessio
     assert outbox_worker.run_once() == 0
     db_session.refresh(row)
     assert row.status.value == "PENDING" and row.attempts == 1 and token not in row.last_error
+    # The retry is backed off (286bace); the next run picks it up once the delay has passed.
+    assert row.scheduled_at > datetime.now(timezone.utc)
+    row.scheduled_at = datetime.now(timezone.utc)
+    db_session.commit()
     outbox_worker.email_sender.send.side_effect = None
     assert outbox_worker.run_once() == 1
 

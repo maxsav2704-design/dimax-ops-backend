@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM
+from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM, ProjectAddonPlanORM
 from app.modules.audit.application.service import AuditService
 from app.modules.audit.infrastructure.models import AuditLogORM
 from app.modules.doors.domain.enums import DoorStatus
@@ -55,6 +55,11 @@ def missing(case, db, kind="DOOR", channel="batch", legacy=False):
             target = AddonTypeORM(company_id=case.company, name="Unpriced adjustment", unit="pcs", is_active=True)
             db.add(target)
             db.flush()
+            # The office plans the work; only the factory price is missing (unplanned facts are refused).
+            db.add(ProjectAddonPlanORM(
+                company_id=case.company, project_id=case.project, addon_type_id=target.id,
+                qty_planned=Decimal("1"), client_price=Decimal("20"), installer_price=Decimal("0"),
+            ))
             case.addon = target.id
         db.commit()
         case.items = [*items, {"kind": kind, "target_id": target.id, "installer_price": "9.01"}]

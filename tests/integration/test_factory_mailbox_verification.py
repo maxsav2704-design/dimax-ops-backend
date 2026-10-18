@@ -1,7 +1,7 @@
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import timedelta, timezone, datetime
 from threading import Barrier
 from unittest.mock import Mock, patch
 from uuid import UUID
@@ -183,6 +183,10 @@ def test_worker_redacts_smtp_errors_and_retries_once(client_raw, approval_case, 
     db_session.refresh(message)
     assert message.status.value == "PENDING" and message.attempts == 1
     assert TEST_CODE not in message.last_error and body["token"] not in message.last_error
+    # The retry is backed off (286bace); the next run picks it up once the delay has passed.
+    assert message.scheduled_at > datetime.now(timezone.utc)
+    message.scheduled_at = datetime.now(timezone.utc)
+    db_session.commit()
     outbox_worker.email_sender.send.side_effect = None
     assert outbox_worker.run_once() == 1
     assert outbox_worker.run_once() == 0
