@@ -41,6 +41,13 @@ def test_sync_danger_opens_a_project_risk_and_recovery_closes_it(
     assert detail.json()["health_status"] == "AT_RISK"
     assert [risk["kind"] for risk in detail.json()["open_risks"]] == ["SYNC"]
 
+    # A stale health (e.g. a risk moved by a migration) is repaired by the next run.
+    db_session.refresh(project)
+    project.health_status = "NORMAL"
+    db_session.commit()
+    assert client_admin_real_uow.post("/api/v1/admin/sync/health/run").status_code == 200
+    assert client_admin_real_uow.get(f"/api/v1/admin/projects/{project.id}").json()["health_status"] == "AT_RISK"
+
     # The installer is back online and up to date: the risk closes, the project is normal again.
     db_session.refresh(state)
     state.last_seen_at = datetime.now(timezone.utc)

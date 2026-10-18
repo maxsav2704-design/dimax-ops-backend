@@ -332,16 +332,17 @@ class SyncHealthService:
         # A project whose installer is in danger keeps its danger risk even if
         # another installer on it is fine.
         ok_project_ids = [pid for pid in ok_project_ids if pid not in set(danger_project_ids)]
-        changed_project_ids: list[uuid.UUID] = []
+        # Every project in danger is recalculated, not only the ones whose risk just
+        # opened: a risk moved by a migration or a health edit must not leave the
+        # project's health stale.
+        changed_project_ids: list[uuid.UUID] = list(dict.fromkeys(danger_project_ids))
         for pid in danger_project_ids:
-            _risk_id, changed = uow.project_risks.open_risk(
+            uow.project_risks.open_risk(
                 company_id=company_id,
                 project_id=pid,
                 kind=RISK_SYNC,
                 details="Installer sync is in DANGER state (offline/lag).",
             )
-            if changed:
-                changed_project_ids.append(pid)
         for pid in ok_project_ids:
             _risk_id, changed = uow.project_risks.close_risk(
                 company_id=company_id,
