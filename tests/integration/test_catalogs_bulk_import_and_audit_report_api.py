@@ -218,6 +218,7 @@ def test_reports_audit_catalogs_include_installer_rate_actions(client_admin_real
             "installer_id": installer_id,
             "door_type_id": door_type_id,
             "price": "180.00",
+            "effective_from": "2037-01-01T00:00:00Z",
         },
     )
     assert rate_create.status_code == 201, rate_create.text
@@ -289,6 +290,7 @@ def test_reports_audit_installer_rates_endpoint_and_export(client_admin_real_uow
             "installer_id": installer_id,
             "door_type_id": door_type_id,
             "price": "210.00",
+            "effective_from": "2037-01-01T00:00:00Z",
         },
     )
     assert create_rate.status_code == 201, create_rate.text

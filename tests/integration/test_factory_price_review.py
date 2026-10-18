@@ -3,7 +3,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM
+from decimal import Decimal
+
+from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM, ProjectAddonPlanORM
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.earnings.infrastructure.models import CompletedWorkORM
@@ -193,6 +195,11 @@ def test_missing_price_evidence_survives_later_list_and_retries(
             db_session.add(target_row)
             db_session.flush()
             target = target_row.id
+            # The office plans the work; only the factory price is missing.
+            db_session.add(ProjectAddonPlanORM(
+                company_id=case.company, project_id=case.project, addon_type_id=target,
+                qty_planned=Decimal("1"), client_price=Decimal("20"), installer_price=Decimal("0"),
+            ))
             case.addon = target
         db_session.commit()
         case.items.append({"kind": kind, "target_id": target, "installer_price": "700"})

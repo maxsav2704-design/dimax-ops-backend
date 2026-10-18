@@ -3,6 +3,7 @@ import io
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
@@ -226,6 +227,8 @@ def test_tenant_isolation_including_corrupt_foreign_links(case, client_admin_rea
         assert "PRIVATE" not in str(data)
         assert orders(client_admin_real_uow, project_id=str(project.id))["total"] == 0
     finally:
+        db_session.rollback()
+        db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only cleanup below the 0076 guard
         for entity in (work, issue, door, project, foreign):
             db_session.delete(entity)
             db_session.flush()

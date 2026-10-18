@@ -7,7 +7,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 
 from app.modules.audit.application.service import AuditService
+from app.shared.domain.errors import ForbiddenScope
 from app.api.v1.deps import (
+    ensure_admin_can_view_rates,
     CurrentUser,
     ensure_admin_can_manage_imports,
     get_uow,
@@ -42,6 +44,15 @@ from app.modules.projects.api.schemas import (
     ProjectUpdateBody,
 )
 from app.modules.projects.application.admin_service import ProjectAdminService
+
+
+def _can_view_rates(uow, user: CurrentUser) -> bool:
+    """Same capability lookup as the money endpoints (stored admin profile), as a flag."""
+    try:
+        ensure_admin_can_view_rates(uow, user)
+    except ForbiddenScope:
+        return False
+    return True
 
 
 router = APIRouter(prefix="/admin/projects", tags=["Admin / Projects"])
@@ -462,7 +473,7 @@ def project_details(
             project_id=project_id,
             order_number=order_number,
             locale=request.headers.get("accept-language", "en") if request else "en",
-            include_prices=bool(user.can_view_rates),
+            include_prices=_can_view_rates(uow, user),
         )
 
 

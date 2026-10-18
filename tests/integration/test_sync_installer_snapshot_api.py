@@ -330,7 +330,7 @@ def test_installer_issue_access_respects_project_deletion(sync_replay_case, db_s
     assert updated.status_code == (404 if deleted else 200), updated.text
     db_session.expire_all()
     issue = db_session.get(IssueORM, uuid.UUID(issue_id))
-    assert issue.details == ("Original comment" if deleted else "Updated comment")
+    assert issue.details == ("Original comment" if deleted else "Original comment\n\nUpdated comment")
 
 
 def test_installer_sync_rejects_ack_cursor_ahead_of_server(

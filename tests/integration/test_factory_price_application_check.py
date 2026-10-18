@@ -89,6 +89,7 @@ def test_status_alone_is_not_factory_evidence(client, priced, db_session, mode):
 @pytest.mark.parametrize("tamper", ["price", "hash", "snapshot", "empty_snapshot"])
 def test_exact_confirmed_snapshot_is_required(client, priced, db_session, tamper):
     if tamper == "price":
+        db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # superuser tamper, below the 0076 guard
         db_session.execute(text("UPDATE factory_price_list_items SET installer_price=999 WHERE price_list_id=:id"), {"id": priced["id"]})
     else:
         receipt = db_session.get(FactoryPriceApprovalORM, UUID(priced["receipt_id"]))

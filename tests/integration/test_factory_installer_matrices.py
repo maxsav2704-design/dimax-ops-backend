@@ -3,6 +3,7 @@ import io
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app.modules.addons.infrastructure.models import ProjectAddonFactORM, ProjectAddonPlanORM
 from app.modules.doors.application.commands import MarkDoorInstalled
@@ -101,6 +102,7 @@ def test_open_issues_follow_current_responsible_not_historical_performer(case, c
     db_session.get(DoorORM, case.door).installer_id = second.id
     # The second installer has their own recorded addon; attribution must come from the ledger.
     addon_work = db_session.query(CompletedWorkORM).filter_by(company_id=case.company, work_kind="ADDON").one()
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
     addon_work.installer_id = second.id
     db_session.add(IssueORM(company_id=case.company, door_id=case.door, title="QA open issue"))
     db_session.commit()
@@ -225,6 +227,7 @@ def test_foreign_work_excluded_and_missing_project_keeps_earned_amount(case, cli
     db_session.add(foreign_project)
     db_session.commit()
     work = db_session.query(CompletedWorkORM).filter_by(company_id=case.company).one()
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
     work.project_id = foreign_project.id
     foreign_work = CompletedWorkORM(company_id=foreign_company.id, project_id=foreign_project.id,
         installer_id=foreign_installer.id, work_kind="DOOR", door_id=case.door,
@@ -235,6 +238,7 @@ def test_foreign_work_excluded_and_missing_project_keeps_earned_amount(case, cli
     db_session.commit()
     try:
         for project_id in (foreign_project.id, None):
+            db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
             work.project_id = project_id
             db_session.commit()
             data = matrix(client_admin_real_uow, PATHS[1])
@@ -244,6 +248,8 @@ def test_foreign_work_excluded_and_missing_project_keeps_earned_amount(case, cli
             assert item["installer_id"] == str(case.installer)
             assert Decimal(item["payroll_total"]) == 250
     finally:
+        db_session.rollback()
+        db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only cleanup below the 0076 guard
         db_session.delete(foreign_work)
         db_session.delete(foreign_project)
         db_session.delete(foreign_installer)

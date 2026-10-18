@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app.modules.doors.application.commands import MarkDoorInstalled
 from app.modules.doors.application.use_cases import DoorUseCases
@@ -106,6 +107,7 @@ def test_price_changes_and_reassignment_do_not_move_historical_kpi(case, db_sess
 def test_period_is_half_open_and_uses_execution_not_door_status_timestamp(case, db_session, client_admin_real_uow):
     activate(case)
     assert submit(case, "DOOR", "install").status_code == 200
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
     db_session.query(CompletedWorkORM).filter_by(company_id=case.company).one().completed_at = DAY
     db_session.get(DoorORM, case.door).installed_at = DAY + timedelta(days=2)
     db_session.commit()
@@ -151,6 +153,7 @@ def test_stale_installed_status_after_reversal_is_a_gap_not_new_payroll(case, db
 def test_later_cancel_removes_old_performance_and_reinstall_credits_new_performer(case, db_session, client_admin_real_uow, make_reason, make_installer):
     activate(case)
     assert submit(case, "DOOR", "install").status_code == 200
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
     db_session.query(CompletedWorkORM).filter_by(company_id=case.company).one().completed_at = DAY
     db_session.commit()
     response = client_admin_real_uow.post(f"/api/v1/admin/doors/{case.door}/override", json={
@@ -171,6 +174,7 @@ def test_later_cancel_removes_old_performance_and_reinstall_credits_new_performe
 def test_correction_preserves_completion_period_and_client_snapshot(case, db_session, client_admin_real_uow):
     assert submit(case, "DOOR", "install").status_code == 200
     work = db_session.query(CompletedWorkORM).filter_by(company_id=case.company).one()
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
     work.completed_at = DAY
     db_session.commit()
     response = client_admin_real_uow.post("/api/v1/admin/earnings/corrections", json={
@@ -223,6 +227,7 @@ def test_missing_client_price_keeps_payroll_and_tenant_isolation(case, db_sessio
         door_type_id=case.door_type, unit_label="private", our_price=9999, status=DoorStatus.IN_PROGRESS)
     db_session.add(foreign_door)
     db_session.flush()
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
     work.door_id = foreign_door.id
     db_session.get(DoorORM, case.door).status = DoorStatus.IN_PROGRESS
     foreign_work = CompletedWorkORM(company_id=foreign.id, project_id=project.id,
@@ -240,6 +245,7 @@ def test_missing_client_price_keeps_payroll_and_tenant_isolation(case, db_sessio
         exported = client_admin_real_uow.get(f"{PATH}/export")
         assert "Private" not in exported.text and "9999" not in exported.text
     finally:
+        db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # test-only tamper below the 0076 guard
         work.door_id = case.door
         db_session.delete(foreign_work)
         db_session.flush()
