@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr
 
 
 class Settings(BaseSettings):
@@ -13,6 +14,19 @@ class Settings(BaseSettings):
     JWT_ACCESS_TTL_MIN: int = 15
     JWT_REFRESH_TTL_DAYS: int = 30
     PLATFORM_API_TOKEN: str = ""
+    OPENAI_API_KEY: SecretStr = SecretStr("")
+    AI_ENABLED: bool = False
+    AI_MODEL: str = ""
+    AI_MAX_STEPS: int = Field(default=4, ge=1, le=8)
+    AI_MAX_TOOL_CALLS: int = Field(default=8, ge=1, le=16)
+    AI_TIMEOUT_SEC: int = Field(default=60, ge=5, le=120)
+    AI_MAX_OUTPUT_TOKENS: int = Field(default=2048, ge=256, le=4096)
+    # DIMAX AI agent (2026-10-19): business actions are proposals until an admin confirms them.
+    AI_ACTIONS_ENABLED: bool = False
+    # "openai" calls the Responses API; "mock" is a deterministic demo provider for stacks without a key.
+    AI_PROVIDER: str = "openai"
+    AI_PROPOSAL_TTL_SEC: int = Field(default=1800, ge=60, le=86400)
+    AI_MAX_PROPOSALS_PER_TASK: int = Field(default=3, ge=1, le=10)
 
     SEED_COMPANY_NAME: str = "DIMAX GROUP"
     SEED_ADMIN_EMAIL: str = "admin@dimax.local"

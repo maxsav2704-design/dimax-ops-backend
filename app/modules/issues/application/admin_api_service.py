@@ -9,6 +9,8 @@ from app.modules.doors.domain.enums import DoorStatus
 from app.modules.issues.application.sync_payload import publish_issue_change
 from app.modules.projects.application.status_service import ProjectStatusService
 from app.modules.issues.api.schemas import AdminIssueDTO
+from app.modules.issues.application.installer_api_service import _append_report
+from app.modules.issues.infrastructure.models import IssueORM
 from app.modules.issues.domain.enums import (
     IssuePriority,
     IssueStatus,
@@ -105,6 +107,77 @@ class IssuesAdminApiService:
         if row is None:
             raise NotFound("Issue not found", details={"issue_id": str(issue_id)})
         return AdminIssueDTO(**_serialize_issue(row))
+
+    @staticmethod
+    def report_issue(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        door_id: uuid.UUID,
+        title: str | None,
+        details: str | None,
+        priority: str | None = None,
+        source: str = "ADMIN_API",
+    ) -> AdminIssueDTO:
+        """The office reports an obstacle/defect on a position. Same semantics as the
+        installer report (one issue per door, append when open, reopen when closed);
+        installation facts, prices and assignment are not touched."""
+        door = uow.doors.get(company_id=company_id, door_id=door_id, for_update=True, active_project_only=True)
+        if door is None:
+            raise NotFound("Door not found", details={"door_id": str(door_id)})
+        title = (title or "").strip() or None
+        details = (details or "").strip() or None
+        if title is None and details is None:
+            raise ValidationError("issue title or details is required", field="title")
+        if title is not None and len(title) > 200:
+            raise ValidationError("issue title must be at most 200 characters", field="title")
+        if details is not None and len(details) > 2000:
+            raise ValidationError("issue details must be at most 2000 characters", field="details")
+        chosen_priority = IssuePriority(priority) if priority else None
+
+        issue = uow.issues.get_by_door(company_id=company_id, door_id=door.id)
+        before = _snapshot(issue) if issue is not None else None
+        if issue is None:
+            issue = IssueORM(
+                company_id=company_id, door_id=door.id, status=IssueStatus.OPEN,
+                workflow_state=IssueWorkflowState.NEW, priority=chosen_priority or IssuePriority.P3,
+                title=title, details=details, created_by_user_id=actor_user_id, owner_user_id=actor_user_id,
+            )
+        elif issue.status == IssueStatus.CLOSED:
+            issue.status = IssueStatus.OPEN
+            issue.workflow_state = IssueWorkflowState.NEW
+            issue.priority = chosen_priority or IssuePriority.P3
+            issue.title = title
+            issue.details = details
+            issue.created_by_user_id = actor_user_id
+            issue.owner_user_id = actor_user_id
+        else:
+            issue.title = issue.title or title
+            issue.details = _append_report(issue.details, title, details)
+            if chosen_priority is not None:
+                issue.priority = chosen_priority
+        uow.issues.save(issue)
+
+        from_status = door.status
+        if not door.is_locked and door.status in {DoorStatus.NOT_INSTALLED, DoorStatus.IN_PROGRESS}:
+            door.status = DoorStatus.ISSUE_OPEN
+        door.version = int(getattr(door, "version", 0) or 0) + 1
+        uow.doors.save(door)
+        uow.session.flush()
+        ProjectStatusService.recalc_and_set(uow=uow, company_id=company_id, project_id=door.project_id)
+        record_door_transition(
+            uow, company_id=company_id, actor_user_id=actor_user_id, door=door,
+            from_status=from_status, source=source, reason=title or details,
+        )
+        uow.session.flush()
+        publish_issue_change(uow, issue=issue, door=door)
+        AuditService.add(
+            uow, company_id=company_id, actor_user_id=actor_user_id,
+            entity_type="issue", entity_id=issue.id, action="ISSUE_REPORTED",
+            reason=source, before=before, after=_snapshot(issue),
+        )
+        return AdminIssueDTO(**_serialize_issue(issue))
 
     @staticmethod
     def update_issue_status(

@@ -9,6 +9,7 @@ from app.modules.issues.api.schemas import (
     IssueCommentCreateBody,
     IssueCommentDTO,
     AdminIssueDTO,
+    AdminIssueReportBody,
     AdminIssueBulkWorkflowUpdateBody,
     AdminIssuesBulkWorkflowUpdateResponse,
     AdminIssueWorkflowUpdateBody,
@@ -54,6 +55,22 @@ def list_issues(
             offset=offset,
         )
         return AdminIssuesListResponse(items=items)
+
+
+@router.post("", response_model=AdminIssueDTO, status_code=201)
+def report_issue(
+    body: AdminIssueReportBody,
+    uow: SqlAlchemyUnitOfWork = Depends(get_uow),
+    current_user: CurrentUser = Depends(require_admin),
+) -> AdminIssueDTO:
+    with uow:
+        issue = IssuesAdminApiService.report_issue(
+            uow, company_id=current_user.company_id, actor_user_id=current_user.id,
+            door_id=body.door_id, title=body.title, details=body.details,
+            priority=body.priority.value if body.priority else None,
+        )
+        uow.commit()
+        return issue
 
 
 @router.patch("/workflow/bulk", response_model=AdminIssuesBulkWorkflowUpdateResponse)

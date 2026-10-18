@@ -6,6 +6,7 @@ _MODEL_MODULES = (
     "app.modules.identity.infrastructure.models",
     "app.modules.identity.infrastructure.refresh_tokens_models",
     "app.modules.audit.infrastructure.models",
+    "app.modules.ai.infrastructure.models",
     "app.modules.door_types.infrastructure.models",
     "app.modules.reasons.infrastructure.models",
     "app.modules.installers.infrastructure.models",

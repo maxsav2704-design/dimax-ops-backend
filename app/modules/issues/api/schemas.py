@@ -57,6 +57,14 @@ class IssueMediaResponse(BaseModel):
     items: list[IssueMediaAssetDTO]
 
 
+class AdminIssueReportBody(BaseModel):
+    """Office report of an obstacle/defect on a position (also the DIMAX AI action)."""
+    door_id: uuid.UUID
+    title: str | None = Field(default=None, max_length=200)
+    details: str | None = Field(default=None, max_length=2000)
+    priority: IssuePriority | None = None
+
+
 class AdminIssueStatusUpdateBody(BaseModel):
     status: IssueStatus
     details: str | None = Field(default=None, max_length=2000)
