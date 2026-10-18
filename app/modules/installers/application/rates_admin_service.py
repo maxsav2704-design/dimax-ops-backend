@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.shared.domain.errors import Conflict
+
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -78,9 +80,23 @@ class RatesAdminService:
         self.session.flush()
         return obj
 
+    @staticmethod
+    def ensure_not_in_force(rate: InstallerRateORM) -> None:
+        """Product rule: a price change is a new version with a later effective_from;
+        a version already in force is history and is neither edited nor deleted."""
+        effective_from = rate.effective_from
+        if effective_from.tzinfo is None:
+            effective_from = effective_from.replace(tzinfo=timezone.utc)
+        if effective_from <= datetime.now(timezone.utc):
+            raise Conflict(
+                "This rate version is already in force and is kept as history; add a new version with a later effective_from",
+                field="effective_from",
+            )
+
     def update(
         self, rate: InstallerRateORM, data
     ) -> InstallerRateORM:
+        self.ensure_not_in_force(rate)
         payload = data.model_dump(exclude_unset=True)
         if "price" in payload:
             rate.price = payload["price"]
@@ -90,4 +106,5 @@ class RatesAdminService:
         return rate
 
     def delete(self, rate: InstallerRateORM) -> None:
+        self.ensure_not_in_force(rate)
         self.session.delete(rate)

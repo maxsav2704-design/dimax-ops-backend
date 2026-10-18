@@ -19,6 +19,7 @@ from app.modules.projects.domain.enums import ProjectLifecycleStatus, ProjectSta
 from app.modules.projects.application.status_service import ProjectStatusService
 from app.modules.projects.application.sync_payload import build_project_sync_payload
 from app.modules.doors.application.sync_payload import build_door_sync_payload
+from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.sync.domain.enums import SyncChangeType
 
 
@@ -310,6 +311,14 @@ class ProjectUseCases:
         if not project:
             raise NotFound(
                 "Project not found", details={"project_id": str(project_id)}
+            )
+        # Recorded earnings are immutable history: the project that carries them stays.
+        if uow.session.query(CompletedWorkORM.id).filter(
+            CompletedWorkORM.company_id == company_id, CompletedWorkORM.project_id == project_id,
+        ).first() is not None:
+            raise Conflict(
+                "Project has recorded earnings and cannot be deleted; archive it instead",
+                field="project_id",
             )
 
         removed_by_installer: dict[uuid.UUID, list[uuid.UUID]] = {}

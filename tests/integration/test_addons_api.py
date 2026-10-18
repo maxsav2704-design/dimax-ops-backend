@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -512,6 +513,18 @@ def _submit_addon(case, *, quantity="1.50", channel="sync", event_id="addon-fina
         "events": [{"client_event_id": event_id, "type": "ADDON_FACT_CREATE",
                     "project_id": str(case.project.id), "payload": body}],
     })
+
+
+def test_addon_fact_done_at_is_never_in_the_future(addon_payroll_case, db_session):
+    case = addon_payroll_case
+    future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    response = case.client.post(f"/api/v1/installer/addons/projects/{case.project.id}/facts", json={
+        "addon_type_id": str(case.addon.id), "qty_done": "1.00", "comment": "clock ahead",
+        "client_event_id": "evt-future-clock", "done_at": future,
+    })
+    assert response.status_code == 200, response.text
+    fact = db_session.query(ProjectAddonFactORM).filter_by(project_id=case.project.id).one()
+    assert fact.done_at <= datetime.now(timezone.utc)
 
 
 @pytest.mark.parametrize("quantity", ["1.001", "NaN", "Infinity", "10000000000"])

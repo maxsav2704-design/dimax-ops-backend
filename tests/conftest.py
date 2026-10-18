@@ -152,6 +152,8 @@ def company_id(db_session: Session) -> Generator[uuid.UUID, None, None]:
         yield cid
     finally:
         db_session.rollback()
+        # Teardown only: the immutability triggers (0076) must not keep test data alive.
+        db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))
         db_session.execute(
             text("DELETE FROM factory_earning_prices WHERE company_id = :cid"),
             {"cid": cid},

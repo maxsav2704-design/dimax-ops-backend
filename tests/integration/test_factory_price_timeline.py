@@ -251,6 +251,7 @@ def test_audit_failure_rolls_back_price_transition(book, company_id, admin_user,
 @pytest.mark.parametrize("tamper", ["price", "activation_hash", "receipt_hash", "snapshot"])
 def test_historical_quote_requires_unchanged_evidence(book, company_id, admin_user, db_session, tamper):
     transition(company_id, admin_user.id, book[3])
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # superuser tamper / cleanup, below the immutability triggers
     if tamper == "price":
         db_session.execute(text("UPDATE factory_price_list_items SET installer_price=999 WHERE price_list_id=:pid"), {"pid": book[3].id})
     elif tamper == "activation_hash":

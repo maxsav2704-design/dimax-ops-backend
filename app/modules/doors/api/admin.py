@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from app.api.v1.deps import CurrentUser, get_uow, require_admin
+from app.modules.audit.application.service import AuditService
 from app.modules.doors.application.commands import (
     AdminOverrideDoor,
     MarkDoorInstalled,
@@ -38,6 +39,11 @@ def admin_mark_installed(
                 door_id=door_id,
             ),
         )
+        AuditService.add(
+            uow, company_id=user.company_id, actor_user_id=user.id,
+            entity_type="door", entity_id=door_id, action="DOOR_ADMIN_INSTALL",
+            after={"status": str(result.get("status"))},
+        )
     return DoorActionResponse(**result)
 
 
@@ -58,6 +64,11 @@ def admin_mark_not_installed(
                 reason_id=body.reason_id,
                 comment=body.comment,
             ),
+        )
+        AuditService.add(
+            uow, company_id=user.company_id, actor_user_id=user.id,
+            entity_type="door", entity_id=door_id, action="DOOR_ADMIN_NOT_INSTALLED",
+            reason=body.comment, after={"status": str(result.get("status")), "reason_id": str(body.reason_id)},
         )
     return DoorActionResponse(**result)
 

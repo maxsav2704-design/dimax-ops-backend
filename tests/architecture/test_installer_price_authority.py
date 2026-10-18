@@ -26,7 +26,7 @@ FORGED_FIELDS = {
 
 def test_installer_http_work_schemas_reject_every_pricing_or_approval_field():
     for schema, valid in [
-        (AddFactBody, {"addon_type_id": uuid.uuid4(), "qty_done": "1.50"}),
+        (AddFactBody, {"addon_type_id": uuid.uuid4(), "qty_done": "1.50", "client_event_id": "evt-1"}),
         (InstallerDoorInstallBody, {}),
         (InstallerDoorStatusUpdateBody, {"status": "INSTALLED"}),
     ]:

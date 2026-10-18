@@ -23,6 +23,8 @@ class KpiResponse(BaseModel):
 
     missing_rates_installed_doors: int
     missing_addon_plans_done: int
+    # Installed doors whose client price is 0 (imported without a price): revenue is understated by them.
+    zero_client_price_installed_doors: int = 0
 
     # Effective installations per day, oldest first, for the dashboard sparkline (14 days up to period_to).
     installed_series_14d: list[int] = []

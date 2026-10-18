@@ -270,3 +270,62 @@ def test_database_rejects_duplicate_payroll_correction_entry_type(
         == "uq_completed_work_correction_ref_entry_type"
     )
     db_session.rollback()
+
+
+def test_database_keeps_recorded_earnings_and_confirmed_prices_immutable(
+    db_session, company_id, admin_user, make_installer, make_door_type,
+):
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    from app.modules.rates.infrastructure.price_list_models import FactoryPriceListItemORM, FactoryPriceListORM
+
+    project_id, door_id, installer_id, door_type_id = _seed_door(
+        db_session, company_id=company_id, make_installer=make_installer, make_door_type=make_door_type,
+    )
+    work = CompletedWorkORM(
+        company_id=company_id, project_id=project_id, door_id=door_id, installer_id=installer_id,
+        completed_at=datetime.now(timezone.utc), quantity=Decimal("1.00"),
+        rate_snapshot=Decimal("40.00"), amount_snapshot=Decimal("40.00"), work_kind="DOOR", entry_type="ORIGINAL",
+    )
+    db_session.add(work)
+    db_session.commit()
+
+    for statement in (
+        "UPDATE completed_work SET amount_snapshot = 1 WHERE id = :id",
+        "UPDATE completed_work SET rate_snapshot = 1 WHERE id = :id",
+        "UPDATE completed_work SET installer_id = installer_id, entry_type = 'CORRECTION' WHERE id = :id",
+        "DELETE FROM completed_work WHERE id = :id",
+    ):
+        with pytest.raises(DBAPIError):
+            db_session.execute(text(statement), {"id": work.id})
+        db_session.rollback()
+    # A parent delete may still detach the row (the ledger row stays).
+    db_session.execute(text("UPDATE completed_work SET project_id = NULL WHERE id = :id"), {"id": work.id})
+    db_session.commit()
+
+    price_list = FactoryPriceListORM(
+        company_id=company_id, version=1, request_id=uuid.uuid4(), request_fingerprint="f" * 64,
+        status="CONFIRMED", currency="ILS", reason="Immutability test", agreement_reference="AGR-1",
+        created_by=admin_user.id,
+    )
+    db_session.add(price_list)
+    db_session.flush()
+    item = FactoryPriceListItemORM(
+        company_id=company_id, price_list_id=price_list.id, kind="DOOR", door_type_id=door_type_id,
+        name="Door", unit="pcs", installer_price=Decimal("250.00"),
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    for statement, params in (
+        ("UPDATE factory_price_list_items SET installer_price = 1 WHERE id = :id", {"id": item.id}),
+        ("DELETE FROM factory_price_list_items WHERE id = :id", {"id": item.id}),
+        ("DELETE FROM factory_price_lists WHERE id = :id", {"id": price_list.id}),
+    ):
+        with pytest.raises(DBAPIError):
+            db_session.execute(text(statement), params)
+        db_session.rollback()
+    # Non-identity columns of the list itself stay writable (status transitions are application logic).
+    db_session.execute(text("UPDATE factory_price_lists SET agreement_reference = 'AGR-2' WHERE id = :id"), {"id": price_list.id})
+    db_session.commit()

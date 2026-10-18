@@ -72,6 +72,23 @@ def _enqueue_whatsapp_fallback_email(
     return True
 
 
+def _commit_message(session, message) -> None:
+    """Persist one message's outcome right away: a database error on a later
+    message of the batch must not roll back (and later resend) this one.
+    The deployment runs a single outbox worker, so the released row lock is safe."""
+    try:
+        session.commit()
+    except Exception as exc:  # noqa: BLE001
+        session.rollback()
+        log_event(
+            logger,
+            "outbox.message.commit_failed",
+            level="error",
+            outbox_id=message.id,
+            error_type=type(exc).__name__,
+        )
+
+
 def run_once(limit: int = 20) -> int:
     session = SessionLocal()
     try:
@@ -170,6 +187,7 @@ def run_once(limit: int = 20) -> int:
                     channel=m.channel,
                     attempts=m.attempts,
                 )
+                _commit_message(session, m)
 
             except Exception as e:
                 payload = m.payload if isinstance(m.payload, dict) else {}
@@ -225,6 +243,7 @@ def run_once(limit: int = 20) -> int:
                     fallback_email_enqueued=fallback_email_enqueued,
                     error=err,
                 )
+                _commit_message(session, m)
 
         session.commit()
         if msgs:

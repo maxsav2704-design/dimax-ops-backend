@@ -159,6 +159,7 @@ def test_installer_rates_crud_actions_write_audit_logs(
             "installer_id": str(installer.id),
             "door_type_id": str(door_type.id),
             "price": "150.00",
+            "effective_from": "2037-01-01T00:00:00Z",
         },
     )
     assert create_resp.status_code == 201, create_resp.text
@@ -229,6 +230,7 @@ def test_installer_rates_bulk_actions_write_audit_logs(
             "installer_id": str(installer.id),
             "door_type_id": str(door_type_a.id),
             "price": "150.00",
+            "effective_from": "2037-01-01T00:00:00Z",
         },
     )
     assert create_a.status_code == 201, create_a.text
@@ -240,11 +242,12 @@ def test_installer_rates_bulk_actions_write_audit_logs(
             "installer_id": str(installer.id),
             "door_type_id": str(door_type_b.id),
             "price": "160.00",
+            "effective_from": "2037-01-01T00:00:00Z",
         },
     )
     assert create_b.status_code == 201, create_b.text
     rate_b = create_b.json()["id"]
-    bulk_effective_from = datetime(2026, 3, 2, 0, 0, tzinfo=timezone.utc).isoformat()
+    bulk_effective_from = datetime(2037, 3, 2, 0, 0, tzinfo=timezone.utc).isoformat()
 
     bulk_set_resp = client.post(
         "/api/v1/admin/installer-rates/bulk",
@@ -359,3 +362,45 @@ def test_journal_send_writes_audit_log(
     assert row.after["enqueued"]["email"] is True
     assert row.after["enqueued"]["whatsapp"] is False
     assert row.after["outbox_ids"]["email"] is not None
+
+
+def test_project_and_door_office_actions_write_audit_logs(client_admin_real_uow, db_session, company_id, make_installer, make_door_type):
+    import uuid as _uuid
+    from decimal import Decimal
+
+    from app.modules.doors.domain.enums import DoorStatus
+    from app.modules.doors.infrastructure.models import DoorORM
+    from app.modules.projects.domain.enums import ProjectStatus
+    from app.modules.projects.infrastructure.models import ProjectORM
+
+    installer = make_installer(full_name="Audited Installer")
+    project = ProjectORM(company_id=company_id, name=f"Audited {_uuid.uuid4().hex[:6]}", address="Street 3", status=ProjectStatus.OK)
+    db_session.add(project)
+    db_session.flush()
+    door = DoorORM(
+        company_id=company_id, project_id=project.id, door_type_id=make_door_type().id, unit_label="AU-01",
+        our_price=Decimal("100.00"), status=DoorStatus.NOT_INSTALLED, installer_id=None,
+        reason_id=None, comment=None, installed_at=None, is_locked=False,
+    )
+    db_session.add(door)
+    db_session.commit()
+
+    assert client_admin_real_uow.patch(f"/api/v1/admin/projects/{project.id}", json={"name": "Audited renamed"}).status_code == 200
+    assigned = client_admin_real_uow.post("/api/v1/admin/projects/doors/bulk-assign-installer",
+                                          json={"door_ids": [str(door.id)], "installer_id": str(installer.id)})
+    assert assigned.status_code == 200, assigned.text
+    rate = client_admin_real_uow.post("/api/v1/admin/installer-rates", json={
+        "installer_id": str(installer.id), "door_type_id": str(door.door_type_id), "price": "40.00",
+    })
+    assert rate.status_code == 201, rate.text
+    installed = client_admin_real_uow.post(f"/api/v1/admin/doors/{door.id}/install")
+    assert installed.status_code == 200, installed.text
+    assert client_admin_real_uow.delete(f"/api/v1/admin/projects/{project.id}").status_code in (200, 409)
+
+    actions = {
+        row.action for row in db_session.query(AuditLogORM).filter(
+            AuditLogORM.company_id == company_id,
+            AuditLogORM.entity_id.in_([project.id, door.id, installer.id]),
+        ).all()
+    }
+    assert {"PROJECT_UPDATE", "DOORS_ASSIGN", "DOOR_ADMIN_INSTALL"} <= actions, actions

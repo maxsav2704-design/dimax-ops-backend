@@ -2472,11 +2472,18 @@ def test_reports_payroll_uses_installed_rate_snapshot(
     assert installed_door.status == DoorStatus.INSTALLED
     assert installed_door.installer_rate_snapshot == Decimal("100.00")
 
-    update_rate_resp = client_admin_real_uow.patch(
-        f"/api/v1/admin/installer-rates/{rate_id}",
-        json={"price": "170.00"},
+    # A version in force is history: the office adds a newer version instead.
+    newer_rate_resp = client_admin_real_uow.post(
+        "/api/v1/admin/installer-rates",
+        json={
+            "installer_id": str(installer.id),
+            "door_type_id": str(door_type.id),
+            "price": "170.00",
+            "effective_from": "2037-01-01T00:00:00Z",
+        },
     )
-    assert update_rate_resp.status_code == 200, update_rate_resp.text
+    assert newer_rate_resp.status_code == 200 or newer_rate_resp.status_code == 201, newer_rate_resp.text
+    assert rate_id
 
     kpi_resp = client_admin_real_uow.get("/api/v1/admin/reports/kpi")
     assert kpi_resp.status_code == 200, kpi_resp.text
@@ -3512,3 +3519,20 @@ def test_reports_audit_issues_endpoint_and_export(
         in csv_body
     )
     assert "ISSUE_WORKFLOW_BULK_UPDATE" in csv_body
+
+
+def test_kpi_counts_installed_doors_without_a_client_price(client_admin_real_uow, db_session, company_id, make_installer, make_door_type):
+    installer = make_installer(full_name="Zero Price Installer")
+    project = ProjectORM(company_id=company_id, name=f"Zero price {uuid.uuid4().hex[:6]}", address="Street 0", status=ProjectStatus.OK)
+    db_session.add(project)
+    db_session.flush()
+    db_session.add(DoorORM(
+        company_id=company_id, project_id=project.id, door_type_id=make_door_type().id, unit_label="Z-01",
+        our_price=Decimal("0"), status=DoorStatus.INSTALLED, installer_id=installer.id,
+        reason_id=None, comment=None, installed_at=datetime.now(timezone.utc), is_locked=True,
+    ))
+    db_session.commit()
+
+    resp = client_admin_real_uow.get("/api/v1/admin/reports/kpi")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["zero_client_price_installed_doors"] >= 1

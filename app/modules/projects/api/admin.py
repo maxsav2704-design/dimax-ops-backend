@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 
+from app.modules.audit.application.service import AuditService
 from app.api.v1.deps import (
     CurrentUser,
     ensure_admin_can_manage_imports,
@@ -117,11 +118,17 @@ def update_project(
     uow=Depends(get_uow),
 ):
     with uow:
+        payload = body.model_dump(exclude_unset=True)
         ProjectAdminService.update_project(
             uow,
             company_id=user.company_id,
             project_id=project_id,
-            payload=body.model_dump(exclude_unset=True),
+            payload=payload,
+        )
+        AuditService.add(
+            uow, company_id=user.company_id, actor_user_id=user.id,
+            entity_type="project", entity_id=project_id, action="PROJECT_UPDATE",
+            after={key: str(value) for key, value in payload.items()},
         )
     return OkResponse()
 
@@ -137,6 +144,10 @@ def delete_project(
             uow,
             company_id=user.company_id,
             project_id=project_id,
+        )
+        AuditService.add(
+            uow, company_id=user.company_id, actor_user_id=user.id,
+            entity_type="project", entity_id=project_id, action="PROJECT_DELETE",
         )
     return OkResponse()
 
@@ -495,9 +506,16 @@ def bulk_assign_installer_to_doors(
     uow=Depends(get_uow),
 ):
     with uow:
-        return ProjectAdminService.bulk_assign_installer_to_doors(
+        result = ProjectAdminService.bulk_assign_installer_to_doors(
             uow,
             company_id=user.company_id,
             door_ids=body.door_ids,
             installer_id=body.installer_id,
         )
+        AuditService.add(
+            uow, company_id=user.company_id, actor_user_id=user.id,
+            entity_type="installer", entity_id=body.installer_id, action="DOORS_ASSIGN",
+            after={"door_ids": [str(door_id) for door_id in result.get("assigned_door_ids", [])],
+                   "assigned": result.get("assigned"), "skipped": result.get("skipped")},
+        )
+        return result

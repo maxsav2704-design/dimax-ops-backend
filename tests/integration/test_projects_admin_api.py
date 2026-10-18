@@ -1009,3 +1009,32 @@ def test_projects_multi_tenant_isolation(
             {"pid": foreign_project.id},
         )
         db_session.commit()
+
+
+def test_project_with_recorded_earnings_cannot_be_deleted(client_admin_real_uow, db_session, company_id, make_installer, make_door_type):
+    from datetime import datetime, timezone
+
+    from app.modules.earnings.infrastructure.models import CompletedWorkORM
+
+    installer = make_installer(full_name="Ledger Keeper")
+    project = ProjectORM(company_id=company_id, name=f"Earned {uuid.uuid4().hex[:6]}", address="Street 2", status=ProjectStatus.OK)
+    db_session.add(project)
+    db_session.flush()
+    door = DoorORM(
+        company_id=company_id, project_id=project.id, door_type_id=make_door_type().id, unit_label="E-01",
+        our_price=Decimal("100.00"), status=DoorStatus.INSTALLED, installer_id=installer.id,
+        reason_id=None, comment=None, installed_at=datetime.now(timezone.utc), is_locked=True,
+    )
+    db_session.add(door)
+    db_session.flush()
+    db_session.add(CompletedWorkORM(
+        company_id=company_id, project_id=project.id, door_id=door.id, installer_id=installer.id,
+        completed_at=datetime.now(timezone.utc), quantity=Decimal("1.00"),
+        rate_snapshot=Decimal("40.00"), amount_snapshot=Decimal("40.00"), work_kind="DOOR", entry_type="ORIGINAL",
+    ))
+    db_session.commit()
+
+    resp = client_admin_real_uow.delete(f"/api/v1/admin/projects/{project.id}")
+    assert resp.status_code == 409, resp.text
+    db_session.expire_all()
+    assert db_session.get(ProjectORM, project.id).deleted_at is None

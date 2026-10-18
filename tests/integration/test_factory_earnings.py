@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.modules.addons.application.use_cases import AddonsUseCases
 from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM, ProjectAddonPlanORM
@@ -283,7 +283,7 @@ def test_price_evidence_cannot_cross_company_boundary(case, db_session):
     activate(case)
     assert_applied(submit(case, "DOOR", "install"), "install")
     _, proof = earning(db_session, case)
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DBAPIError):  # immutability trigger (0076) or the foreign key, either refuses
         with db_session.begin_nested():
             proof.company_id = uuid4()
             db_session.flush()

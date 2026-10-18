@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app.modules.addons.domain.enums import AddonFactSource
 from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM
@@ -479,6 +480,7 @@ def test_admin_earnings_ledger_export_csv_matches_filters(
         unit_label="EXPORT-OTHER",
         amount=Decimal("90.00"),
     )
+    db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # superuser tamper / cleanup, below the immutability triggers
     original.completed_at = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     original_door = db_session.get(DoorORM, original.door_id)
     assert original_door is not None
@@ -578,6 +580,7 @@ def test_admin_earnings_ledger_does_not_leak_foreign_company_rows(
         assert "Foreign company payroll row" not in export_resp.text
     finally:
         db_session.rollback()
+        db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # superuser tamper / cleanup, below the immutability triggers
         db_session.query(CompletedWorkORM).filter(
             CompletedWorkORM.id == foreign_row_id
         ).delete(synchronize_session=False)
@@ -634,6 +637,7 @@ def test_admin_earnings_correction_rejects_foreign_company_original(
         assert leaked_audits == []
     finally:
         db_session.rollback()
+        db_session.execute(text("SET LOCAL session_replication_role = 'replica'"))  # superuser tamper / cleanup, below the immutability triggers
         db_session.query(CompletedWorkORM).filter(
             CompletedWorkORM.correction_ref_id == foreign_row_id
         ).delete(synchronize_session=False)

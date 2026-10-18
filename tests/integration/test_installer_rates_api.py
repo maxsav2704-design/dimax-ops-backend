@@ -13,11 +13,12 @@ def test_installer_rates_unique_and_delete_flow(client, make_installer, make_doo
     installer = make_installer(full_name="Rate Installer", phone="+10000000002")
     door_type = make_door_type(name="Main Door")
 
+    # A version not yet in force may still be deleted; one in force is history (see the test below).
     payload = {
         "installer_id": str(installer.id),
         "door_type_id": str(door_type.id),
         "price": "150.00",
-        "effective_from": "2026-01-01T00:00:00Z",
+        "effective_from": "2037-01-01T00:00:00Z",
     }
 
     create_resp = client.post("/api/v1/admin/installer-rates", json=payload)
@@ -80,6 +81,7 @@ def test_installer_rates_bulk_set_price_and_delete_flow(
             "installer_id": str(installer.id),
             "door_type_id": str(door_type_a.id),
             "price": "120.00",
+            "effective_from": "2037-02-01T00:00:00Z",
         },
     )
     assert create_a.status_code == 201, create_a.text
@@ -91,6 +93,7 @@ def test_installer_rates_bulk_set_price_and_delete_flow(
             "installer_id": str(installer.id),
             "door_type_id": str(door_type_b.id),
             "price": "140.00",
+            "effective_from": "2037-02-01T00:00:00Z",
         },
     )
     assert create_b.status_code == 201, create_b.text
@@ -285,3 +288,30 @@ def test_installer_rates_timeline_supports_as_of_resolution(
         },
     )
     assert Decimal(str(payload["effective_rate"]["price"])) == Decimal("120.00")
+
+
+def test_installer_rate_in_force_is_history_not_editable(client, make_installer, make_door_type):
+    installer = make_installer(full_name="History Rate Installer", phone="+10000000777")
+    door_type = make_door_type(name="History Door")
+    created = client.post("/api/v1/admin/installer-rates", json={
+        "installer_id": str(installer.id), "door_type_id": str(door_type.id),
+        "price": "90.00", "effective_from": "2026-01-01T00:00:00Z",
+    })
+    assert created.status_code == 201, created.text
+    rate_id = created.json()["id"]
+
+    edit = client.patch(f"/api/v1/admin/installer-rates/{rate_id}", json={"price": "95.00"})
+    assert edit.status_code == 409, edit.text
+    delete = client.delete(f"/api/v1/admin/installer-rates/{rate_id}")
+    assert delete.status_code == 409, delete.text
+    bulk = client.post("/api/v1/admin/installer-rates/bulk", json={"ids": [rate_id], "operation": "delete"})
+    assert bulk.status_code in (409, 200), bulk.text
+    still = client.get(f"/api/v1/admin/installer-rates/{rate_id}")
+    assert still.status_code == 200 and still.json()["price"] == "90.00", still.text
+
+    # The way forward is a new version.
+    newer = client.post("/api/v1/admin/installer-rates", json={
+        "installer_id": str(installer.id), "door_type_id": str(door_type.id),
+        "price": "95.00", "effective_from": "2037-01-01T00:00:00Z",
+    })
+    assert newer.status_code == 201, newer.text

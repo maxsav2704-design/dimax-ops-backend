@@ -569,6 +569,14 @@ class ReportsRepository:
         payroll_total = _dec(ledger_row.payroll) + _dec(fallback_row.payroll)
         profit_total = _dec(ledger_row.profit) + _dec(fallback_row.profit)
         missing_rates = int(fallback_row.missing_rates or 0)
+        # Doors installed without a client price: the import defaulted it to 0, which
+        # is not a price. They are counted so revenue 0 is never mistaken for real revenue.
+        zero_client_price = int(
+            self.session.query(func.count(DoorORM.id))
+            .filter(DoorORM.company_id == company_id, *installed_filter, DoorORM.our_price <= 0)
+            .scalar()
+            or 0
+        )
 
         addon_filter = [ProjectAddonFactORM.company_id == company_id]
         if date_from is not None:
@@ -657,6 +665,7 @@ class ReportsRepository:
             "problem_projects": int(problem_projects),
             "missing_rates_installed_doors": missing_rates,
             "missing_addon_plans_done": addon_missing_plan,
+            "zero_client_price_installed_doors": zero_client_price,
         }
 
     def problem_projects(

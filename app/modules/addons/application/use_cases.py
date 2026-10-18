@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.modules.addons.domain.enums import AddonFactSource
 from app.modules.addons.application.pricing import AddonPlanPricing
-from app.modules.doors.application.completion import enum_value
+from app.modules.doors.application.completion import enum_value, resolve_installation_time
 from app.modules.addons.infrastructure.models import (
     AddonTypeORM,
     ProjectAddonFactORM,
@@ -90,7 +90,7 @@ def create_completed_work_for_addon_fact(
         return None
 
     quantity = Decimal(str(fact.qty_done))
-    completed_at = fact.done_at or utcnow()
+    completed_at = resolve_installation_time(fact.done_at)
     quote = FactoryEarningsPricing.quote(
         uow, company_id=company_id, kind="ADDON", target_id=fact.addon_type_id,
         performed_at=completed_at, legacy_queue=legacy_price_queue, seen_price_list_id=seen_price_list_id,
@@ -453,7 +453,8 @@ class AddonsUseCases:
             installer_id=installer_id,
             addon_type_id=addon_type_id,
             qty_done=qty_done,
-            done_at=done_at or utcnow(),
+            # A device clock ahead of the server must not book future work (legacy mode included).
+            done_at=resolve_installation_time(done_at, received_at=execution_received_at),
             comment=comment,
             source=source,
             client_event_id=client_event_id,
