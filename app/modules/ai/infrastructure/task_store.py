@@ -95,7 +95,7 @@ class TaskStore:
                 raise Conflict("AI conversation already has a running task")
         uow.session.flush()
 
-    def start(self, body: AiTaskRequest):
+    def start(self, body: AiTaskRequest, *, claimed: bool = True):
         with self.uow_factory() as uow:
             self._lock(uow)
             row = self._existing(uow, body)
@@ -116,7 +116,7 @@ class TaskStore:
                 message=body.message, locale=body.locale, project_id=body.project_id,
                 context=body.context.model_dump(mode="json") if body.context else None, status="RUNNING",
                 attempt_id=uuid.uuid4(), attempt_count=1, lease_expires_at=now + timedelta(seconds=self.timeout_sec + 15),
-                created_at=now, updated_at=now)
+                claimed_at=now if claimed else None, created_at=now, updated_at=now)
             uow.session.add(row)
             uow.session.flush()
             uow.session.add(AiAttemptORM(company_id=self.user.company_id, owner_user_id=self.user.id,
@@ -124,7 +124,7 @@ class TaskStore:
             conversation.updated_at = now
             return self._view(row, uow), row.attempt_id
 
-    def retry(self, task_id, request_id):
+    def retry(self, task_id, request_id, *, claimed: bool = True):
         with self.uow_factory() as uow:
             self._lock(uow)
             row = self._task(uow, task_id)
@@ -147,6 +147,7 @@ class TaskStore:
             row.attempt_id = uuid.uuid4()
             row.attempt_count += 1
             row.lease_expires_at = utcnow() + timedelta(seconds=self.timeout_sec + 15)
+            row.claimed_at = utcnow() if claimed else None
             row.updated_at = utcnow()
             uow.session.add(AiAttemptORM(company_id=self.user.company_id, owner_user_id=self.user.id,
                 request_id=request_id, task_id=row.id, operation="RETRY"))

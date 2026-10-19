@@ -39,7 +39,7 @@ def ai_status(user: CurrentUser) -> AiStatus:
     elif not settings.AI_ENABLED:
         reason = "disabled"
     return AiStatus(ready=reason == "ready", reason=reason, tools=allowed_tool_names(user),
-                    provider=provider_name(), actions_enabled=actions_available(user))
+                    provider=provider_name(), actions_enabled=actions_available(user), execution=execution_mode())
 
 
 def ai_status_reason_ready() -> bool:
@@ -61,6 +61,10 @@ def build_provider():
                              model=settings.AI_MODEL.strip(), max_output_tokens=settings.AI_MAX_OUTPUT_TOKENS)
 
 
+def execution_mode() -> str:
+    return "background" if settings.AI_EXECUTION_MODE.strip().lower() == "background" else "inline"
+
+
 def store_for(user, uow):
     return TaskStore(user, lambda: uow, settings.AI_TIMEOUT_SEC)
 
@@ -69,10 +73,15 @@ def proposals_for(user, uow):
     return ProposalStore(user, lambda: uow, settings)
 
 
-def execute_task(task, attempt_id, user, uow, store):
+def execute_task(task, attempt_id, user, uow_factory, store):
+    """The one pipeline for an attempt, inline (request) or in the AI worker."""
     if attempt_id is None:
         return task
-    tools = ReadTools(user, lambda: uow, proposals=proposals_for(user, uow), task_id=task.id, conversation_id=task.conversation_id)
+    if not callable(uow_factory):
+        uow = uow_factory
+        uow_factory = lambda: uow  # noqa: E731
+    proposals = ProposalStore(user, uow_factory, settings)
+    tools = ReadTools(user, uow_factory, proposals=proposals, task_id=task.id, conversation_id=task.conversation_id)
     runner = AiRunner(provider=build_provider(), tools=tools, settings=settings)
     started = time.monotonic()
     def stats():
@@ -125,8 +134,10 @@ def register_ai_routes(router: APIRouter, require_actor) -> None:
             return existing
         require_ready()
         _allow(f"ai:{user.company_id}:{user.id}", window=60, max_req=6)
-        task, attempt_id = store.start(body)
-        return execute_task(task, attempt_id, user, uow, store)
+        inline = execution_mode() == "inline"
+        task, attempt_id = store.start(body, claimed=inline)
+        # Background mode: the worker claims the RUNNING task; the client polls it.
+        return execute_task(task, attempt_id, user, uow, store) if inline else task
 
     @router.post("/tasks/{task_id}/retry", response_model=AiTask)
     def retry_task(task_id: UUID, body: AiRetryRequest, response: Response, user: CurrentUser = Depends(require_actor),
@@ -138,8 +149,9 @@ def register_ai_routes(router: APIRouter, require_actor) -> None:
             return existing
         require_ready()
         _allow(f"ai:{user.company_id}:{user.id}", window=60, max_req=6)
-        task, attempt_id = store.retry(task_id, body.request_id)
-        return execute_task(task, attempt_id, user, uow, store)
+        inline = execution_mode() == "inline"
+        task, attempt_id = store.retry(task_id, body.request_id, claimed=inline)
+        return execute_task(task, attempt_id, user, uow, store) if inline else task
 
     @router.post("/tasks/{task_id}/cancel", response_model=AiTask)
     def cancel_task(task_id: UUID, response: Response, user: CurrentUser = Depends(require_actor), uow=Depends(get_uow)):

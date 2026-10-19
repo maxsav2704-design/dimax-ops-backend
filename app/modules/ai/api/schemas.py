@@ -65,6 +65,8 @@ class AiStatus(BaseModel):
     actions_enabled: bool = False
     # Nobody has verified a real model run on this installation; the UI must say so.
     real_model_verified: Literal[False] = False
+    # "background": the task is queued for the AI worker and the client polls it.
+    execution: Literal["inline", "background"] = "inline"
 
 
 class AiTaskRequest(AiRequest):

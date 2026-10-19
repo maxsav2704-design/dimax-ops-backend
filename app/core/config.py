@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # "openai" calls the Responses API; "mock" is a deterministic demo provider for stacks without a key.
     AI_PROVIDER: str = "openai"
     AI_PROPOSAL_TTL_SEC: int = Field(default=1800, ge=60, le=86400)
+    # "inline" runs the provider loop inside the request; "background" queues the task for app.workers.ai_worker.
+    AI_EXECUTION_MODE: str = "inline"
+    AI_WORKER_POLL_SEC: int = Field(default=2, ge=1, le=60)
     AI_MAX_PROPOSALS_PER_TASK: int = Field(default=3, ge=1, le=10)
 
     SEED_COMPANY_NAME: str = "DIMAX GROUP"

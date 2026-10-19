@@ -53,6 +53,8 @@ class AiTaskORM(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     error_code: Mapped[str | None] = mapped_column(String(64))
     # Selected object the question was asked about ({"kind": "project|door|issue", "id": ...}), migration 0079.
     context: Mapped[dict | None] = mapped_column(JSONB)
+    # Who executes the attempt: set at start in inline mode, by the AI worker in background mode (0081).
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AiAttemptORM(Base, TenantMixin):
