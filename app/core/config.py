@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # "inline" runs the provider loop inside the request; "background" queues the task for app.workers.ai_worker.
     AI_EXECUTION_MODE: str = "inline"
     AI_WORKER_POLL_SEC: int = Field(default=2, ge=1, le=60)
+    # Durable per-company budget: tasks (first attempts and retries) per UTC day.
+    AI_DAILY_TASK_LIMIT_PER_COMPANY: int = Field(default=500, ge=1, le=100000)
     AI_MAX_PROPOSALS_PER_TASK: int = Field(default=3, ge=1, le=10)
 
     SEED_COMPANY_NAME: str = "DIMAX GROUP"

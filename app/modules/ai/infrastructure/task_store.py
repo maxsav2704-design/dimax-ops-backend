@@ -5,7 +5,9 @@ import json
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import select, text
+from datetime import datetime, time as dtime, timezone
+
+from sqlalchemy import func, select, text
 
 from app.modules.ai.api.schemas import AiConversation, AiConversationPage, AiTask, AiTaskPage, AiTaskRequest
 from app.modules.ai.infrastructure.models import AiAttemptORM, AiConversationORM, AiTaskORM
@@ -14,7 +16,7 @@ from app.modules.ai.infrastructure.provider import AiProviderError
 from app.core.config import settings
 from app.modules.ai.infrastructure.read_tools import load_actor
 from app.modules.audit.application.service import AuditService
-from app.shared.domain.errors import Conflict, ForbiddenScope, NotFound
+from app.shared.domain.errors import Conflict, ForbiddenScope, NotFound, TooManyRequests
 from app.shared.infrastructure.db.base import utcnow
 
 
@@ -86,6 +88,16 @@ class TaskStore:
             row = self._existing(uow, body)
             return self._view(row, uow) if row else None
 
+    def used_today(self, uow) -> int:
+        day_start = datetime.combine(datetime.now(timezone.utc).date(), dtime.min, tzinfo=timezone.utc)
+        return int(uow.session.scalar(select(func.count(AiTaskORM.id)).where(
+            AiTaskORM.company_id == self.user.company_id, AiTaskORM.created_at >= day_start)) or 0)
+
+    def _budget(self, uow):
+        # Durable company-wide budget (tasks per UTC day), unlike the process-local request throttle.
+        if self.used_today(uow) >= settings.AI_DAILY_TASK_LIMIT_PER_COMPANY:
+            raise TooManyRequests("The company's daily DIMAX AI limit is reached", details={"code": "AI_COMPANY_BUDGET"})
+
     def _idle(self, uow, conversation_id):
         running = uow.session.scalars(self._owned(AiTaskORM).where(
             AiTaskORM.conversation_id == conversation_id, AiTaskORM.status == "RUNNING")).all()
@@ -101,6 +113,7 @@ class TaskStore:
             row = self._existing(uow, body)
             if row:
                 return self._view(row, uow), None
+            self._budget(uow)
             now = utcnow()
             if body.conversation_id:
                 conversation = self._conversation(uow, body.conversation_id)
@@ -142,6 +155,7 @@ class TaskStore:
             if latest.id != row.id:
                 raise Conflict("Only the latest AI task can be retried")
             self._idle(uow, row.conversation_id)
+            self._budget(uow)
             row.status = "RUNNING"
             row.error_code = None
             row.attempt_id = uuid.uuid4()

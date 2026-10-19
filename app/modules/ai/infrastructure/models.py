@@ -97,3 +97,13 @@ class AiProposalORM(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AiCompanyRuleORM(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
+    """Owner-approved company rules for the agent; one row per version (0082)."""
+
+    __tablename__ = "ai_company_rules"
+    __table_args__ = (UniqueConstraint("company_id", "version", name="uq_ai_company_rules_version"),)
+    version: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(String(4000))
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))

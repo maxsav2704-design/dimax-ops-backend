@@ -10,7 +10,13 @@ from app.modules.ai.api.schemas import AiSource
 from app.modules.ai.domain.tools import TOOL_SPECS, allowed_tool_names, ensure_ai_admin
 from app.modules.doors.domain.errors import DoorNotAssigned
 from app.modules.issues.application.installer_api_service import InstallerIssuesApiService
+from datetime import datetime, timedelta, timezone
+
+from app.modules.calendar.infrastructure.models import CalendarEventAssigneeORM
+from app.modules.calendar.infrastructure.repositories import CalendarRepository
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.installers.infrastructure.models import InstallerORM
+from app.modules.journal.infrastructure.models import JournalORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.reasons.infrastructure.models import ReasonORM
 from app.modules.issues.application.comments_service import IssueCommentsService
@@ -342,3 +348,81 @@ class ReadTools:
                 "comments": [{"author": c.author_name, "created_at": c.created_at.isoformat() if c.created_at else None,
                               "body": {"untrusted_text": c.body}} for c in comments[-20:]],
                 "source": self._source("issue", i.id, i.title or d.unit_label, f"/installer/issues?project_id={p.id}&issue_id={i.id}")}
+
+    # ---- calendar, journals, workload --------------------------------------------------------------
+
+    @staticmethod
+    def _range(args):
+        try:
+            start = datetime.strptime(args.from_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            end = datetime.strptime(args.to_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+        except ValueError:
+            raise ValidationError("from_date and to_date must be calendar dates") from None
+        if end <= start or (end - start).days > 62:
+            raise ValidationError("The range must cover 1 to 62 days")
+        return start, end
+
+    def _event_items(self, uow, rows, *, with_assignees=True):
+        counts = {}
+        if with_assignees and rows:
+            counts = dict(uow.session.execute(select(CalendarEventAssigneeORM.event_id, func.count(CalendarEventAssigneeORM.id))
+                .where(CalendarEventAssigneeORM.company_id == self.user.company_id,
+                       CalendarEventAssigneeORM.event_id.in_([e.id for e in rows])).group_by(CalendarEventAssigneeORM.event_id)).all())
+        items = []
+        for e in rows:
+            item = {"id": str(e.id), "event_type": value(e.event_type), "starts_at": e.starts_at.isoformat(), "ends_at": e.ends_at.isoformat(),
+                    "project_id": str(e.project_id) if e.project_id else None,
+                    "title": {"untrusted_text": e.title}, "location": {"untrusted_text": e.location}}
+            if with_assignees:
+                item["assignees"] = int(counts.get(e.id, 0))
+            if e.project_id:
+                p = uow.projects.get(company_id=self.user.company_id, project_id=e.project_id)
+                if p is not None:
+                    path = f"/installer/projects/{p.id}" if self.user.role == "INSTALLER" else f"/projects?project_id={p.id}"
+                    item["project_name"] = p.name
+                    item["source"] = self._source("project", p.id, p.name, path)
+            items.append(item)
+        return items
+
+    def _list_calendar_events(self, uow, args):
+        start, end = self._range(args)
+        if args.project_id:
+            self._project(uow, args.project_id)
+        rows = CalendarRepository(uow.session).list_range(company_id=self.user.company_id, starts_at=start, ends_at=end,
+                                       project_id=args.project_id, limit=200)
+        return {"items": self._event_items(uow, rows), "count": len(rows), "truncated": len(rows) >= 200}
+
+    def _my_schedule(self, uow, args):
+        installer_id = require_installer_id(uow, self.user)
+        start, end = self._range(args)
+        rows = CalendarRepository(uow.session).list_range(company_id=self.user.company_id, starts_at=start, ends_at=end,
+                                       installer_id=installer_id, limit=200)
+        return {"items": self._event_items(uow, rows, with_assignees=False), "count": len(rows), "truncated": len(rows) >= 200}
+
+    def _project_journals(self, uow, args):
+        p = self._project(uow, args.project_id)
+        rows = uow.session.scalars(select(JournalORM).where(JournalORM.company_id == self.user.company_id, JournalORM.project_id == p.id)
+                                   .order_by(JournalORM.created_at.desc()).limit(50)).all()
+        return {"project_id": str(p.id), "project_name": p.name,
+                "items": [{"id": str(j.id), "status": value(j.status), "title": {"untrusted_text": j.title},
+                           "signed": j.signed_at is not None, "signed_at": j.signed_at.isoformat() if j.signed_at else None,
+                           "snapshot_version": j.snapshot_version, "email_delivery_status": value(j.email_delivery_status),
+                           "whatsapp_delivery_status": value(j.whatsapp_delivery_status),
+                           "created_at": j.created_at.isoformat() if j.created_at else None} for j in rows],
+                "source": self._source("project", p.id, p.name, f"/projects?project_id={p.id}")}
+
+    def _installer_workload(self, uow, args):
+        i = uow.session.get(InstallerORM, args.installer_id)
+        if i is None or i.company_id != self.user.company_id or i.deleted_at is not None:
+            raise NotFound("Installer not found")
+        counts = uow.session.execute(select(DoorORM.status, func.count(DoorORM.id)).where(
+            DoorORM.company_id == self.user.company_id, DoorORM.installer_id == i.id).group_by(DoorORM.status)).all()
+        projects = uow.session.scalar(select(func.count(func.distinct(DoorORM.project_id))).where(
+            DoorORM.company_id == self.user.company_id, DoorORM.installer_id == i.id))
+        issues = uow.session.scalar(select(func.count(IssueORM.id)).join(DoorORM, DoorORM.id == IssueORM.door_id).where(
+            IssueORM.company_id == self.user.company_id, DoorORM.company_id == self.user.company_id,
+            DoorORM.installer_id == i.id, IssueORM.status == "OPEN"))
+        return {"id": str(i.id), "full_name": i.full_name, "status": i.status, "is_active": i.is_active,
+                "door_status_counts": {value(status): count for status, count in counts},
+                "total_doors": sum(count for _, count in counts), "projects": int(projects or 0), "open_issues": int(issues or 0),
+                "source": self._source("installer", i.id, i.full_name, f"/installers?installer_id={i.id}")}

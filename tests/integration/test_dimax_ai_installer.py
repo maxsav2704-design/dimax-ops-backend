@@ -95,7 +95,7 @@ def test_installer_tool_set_is_its_own_and_has_no_installation_or_money_tools(mo
     monkeypatch.setattr(settings, "AI_ACTIONS_ENABLED", True)
     names = allowed_tool_names(user)
     assert names == ["my_projects", "my_project_summary", "my_project_doors", "my_door", "my_project_issues", "my_issue",
-                     "propose_my_issue_report", "propose_my_issue_comment"]
+                     "my_schedule", "propose_my_issue_report", "propose_my_issue_comment"]
     assert not any(name in names for name in ("search_projects", "list_project_doors", "propose_issue_report", "search_installers"))
     for definition in tool_definitions(user):
         schema = definition["parameters"]

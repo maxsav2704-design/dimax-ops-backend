@@ -16,6 +16,7 @@ from app.api.v1.rate_limit import _allow
 from app.core.config import settings
 from app.modules.ai.api.schemas import (AiConfirmRequest, AiConversationPage, AiProposal, AiRequest, AiRetryRequest,
                                         AiStatus, AiTask, AiTaskPage, AiTaskRequest)
+from app.modules.ai.application.rules_service import AiRulesService
 from app.modules.ai.application.runner import AiRunner
 from app.modules.ai.domain.tools import actions_available, allowed_tool_names
 from app.modules.ai.infrastructure.mock_provider import MockProvider
@@ -30,7 +31,7 @@ def provider_name() -> str:
     return "mock" if settings.AI_PROVIDER.strip().lower() == "mock" else "openai"
 
 
-def ai_status(user: CurrentUser) -> AiStatus:
+def ai_status(user: CurrentUser, uow=None) -> AiStatus:
     reason = "ready"
     if provider_name() == "openai" and not settings.OPENAI_API_KEY.get_secret_value().strip():
         reason = "missing_api_key"
@@ -38,8 +39,15 @@ def ai_status(user: CurrentUser) -> AiStatus:
         reason = "missing_model"
     elif not settings.AI_ENABLED:
         reason = "disabled"
+    rules_version, used = None, 0
+    if uow is not None:
+        with uow:
+            current = AiRulesService.current(uow, user.company_id)
+            rules_version = current.version if current else None
+            used = TaskStore(user, lambda: uow, settings.AI_TIMEOUT_SEC).used_today(uow)
     return AiStatus(ready=reason == "ready", reason=reason, tools=allowed_tool_names(user),
-                    provider=provider_name(), actions_enabled=actions_available(user), execution=execution_mode())
+                    provider=provider_name(), actions_enabled=actions_available(user), execution=execution_mode(),
+                    rules_version=rules_version, daily_limit=settings.AI_DAILY_TASK_LIMIT_PER_COMPANY, daily_used=used)
 
 
 def ai_status_reason_ready() -> bool:
@@ -88,8 +96,11 @@ def execute_task(task, attempt_id, user, uow_factory, store):
         return {"tools": runner.tools_used, "provider_requests": runner.provider_requests,
                 "duration_ms": round((time.monotonic() - started) * 1000)}
     try:
+        with uow_factory() as rules_uow:
+            current = AiRulesService.current(rules_uow, user.company_id)
+            rules = (current.version, current.text) if current is not None else None
         result = runner.run(AiRequest(message=task.message, locale=task.locale, project_id=task.project_id, context=task.context), task.id,
-            history=store.history(task.id, attempt_id), check_running=lambda: store.check_running(task.id, attempt_id))
+            history=store.history(task.id, attempt_id), check_running=lambda: store.check_running(task.id, attempt_id), rules=rules)
         return store.finish(task.id, attempt_id, result, **stats())
     except Forbidden:
         store.fail(task.id, attempt_id, "AI_ACCESS_CHANGED", **stats())
@@ -104,9 +115,9 @@ def execute_task(task, attempt_id, user, uow_factory, store):
 
 def register_ai_routes(router: APIRouter, require_actor) -> None:
     @router.get("/status", response_model=AiStatus)
-    def status(response: Response, user: CurrentUser = Depends(require_actor)):
+    def status(response: Response, user: CurrentUser = Depends(require_actor), uow=Depends(get_uow)):
         response.headers["Cache-Control"] = "no-store"
-        return ai_status(user)
+        return ai_status(user, uow)
 
     @router.get("/conversations", response_model=AiConversationPage)
     def conversations(response: Response, limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=10000),

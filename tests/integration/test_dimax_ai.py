@@ -98,7 +98,7 @@ def test_ai_does_not_bypass_role_or_profile(ai_client, role, scope):
 
 def test_finance_only_receives_tools_it_can_read():
     user = CurrentUser(uuid.uuid4(), uuid.uuid4(), "ADMIN", "FINANCE")
-    assert allowed_tool_names(user) == ["search_installers"]
+    assert allowed_tool_names(user) == ["search_installers", "installer_workload"]
     for definition in tool_definitions(user):
         schema = definition["parameters"]
         assert definition["strict"] is True and schema["additionalProperties"] is False

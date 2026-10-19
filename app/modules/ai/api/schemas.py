@@ -54,6 +54,8 @@ class AiReply(BaseModel):
     steps: list[AiStep] = []
     proposal_ids: list[UUID] = []
     provider: Literal["openai", "mock"] = "openai"
+    # Version of the company rules the answer was produced under (None when none are set).
+    rules_version: int | None = None
 
 
 class AiStatus(BaseModel):
@@ -67,6 +69,30 @@ class AiStatus(BaseModel):
     real_model_verified: Literal[False] = False
     # "background": the task is queued for the AI worker and the client polls it.
     execution: Literal["inline", "background"] = "inline"
+    rules_version: int | None = None
+    daily_limit: int = 0
+    daily_used: int = 0
+
+
+class AiRules(BaseModel):
+    version: int
+    text: str
+    updated_at: datetime | None
+    updated_by: str | None
+
+
+class AiRulesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(max_length=4000)
+
+
+class AiCheck(BaseModel):
+    ok: bool
+    provider: Literal["openai", "mock"]
+    model: str | None
+    latency_ms: int
+    code: str | None = None
+    answer_preview: str | None = None
 
 
 class AiTaskRequest(AiRequest):
