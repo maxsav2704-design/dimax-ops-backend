@@ -54,14 +54,20 @@ class MockProvider:
                     outputs.append({})
         step = len(outputs) + 1
         wants_issue = any(word in low for word in ISSUE_WORDS)
+        pick = lambda *candidates: next((name for name in candidates if name in names), None)  # noqa: E731
+        doors_tool = pick("list_project_doors", "my_project_doors")
+        comment_tool = pick("propose_issue_comment", "propose_my_issue_comment")
+        report_tool = pick("propose_issue_report", "propose_my_issue_report")
 
         if not outputs:
-            if isinstance(context, dict) and "door_status_counts" in context and "list_project_doors" in names:
-                return _call("list_project_doors", {"project_id": context["id"], "status": "NOT_INSTALLED", "limit": 20, "offset": 0}, f"mock-{step}")
-            if isinstance(context, dict) and "workflow_state" in context and wants_issue and "propose_issue_comment" in names:
-                return _call("propose_issue_comment", {"issue_id": context["id"], "body": message[:2000]}, f"mock-{step}")
+            if isinstance(context, dict) and "door_status_counts" in context and doors_tool:
+                return _call(doors_tool, {"project_id": context["id"], "status": "NOT_INSTALLED", "limit": 20, "offset": 0}, f"mock-{step}")
+            if isinstance(context, dict) and "workflow_state" in context and wants_issue and comment_tool:
+                return _call(comment_tool, {"issue_id": context["id"], "body": message[:2000]}, f"mock-{step}")
             if "search_projects" in names:
                 return _call("search_projects", {"q": None, "limit": 10, "offset": 0}, f"mock-{step}")
+            if "my_projects" in names:
+                return _call("my_projects", {"limit": 10, "offset": 0}, f"mock-{step}")
             return _answer(self._text(lang, "no_tools") + "\n\n" + LABEL[lang])
 
         last = outputs[-1]
@@ -71,9 +77,12 @@ class MockProvider:
         if "error" in last:
             return _answer(self._text(lang, "error", last["error"]) + "\n\n" + LABEL[lang])
         rows = last.get("items") or []
-        if wants_issue and "propose_issue_report" in names and rows and "unit_label" in rows[0]:
+        if wants_issue and report_tool and rows and "unit_label" in rows[0]:
             door = next((row for row in rows if str(row.get("unit_label", "")).lower() in low), rows[0])
-            return _call("propose_issue_report", {"door_id": door["id"], "title": message[:200], "details": None, "priority": "P3"}, f"mock-{step}")
+            arguments = {"door_id": door["id"], "title": message[:200], "details": None}
+            if report_tool == "propose_issue_report":
+                arguments["priority"] = "P3"
+            return _call(report_tool, arguments, f"mock-{step}")
         labels = [str(row.get("unit_label") or row.get("name") or row.get("full_name") or row.get("title") or "") for row in rows[:10]]
         return _answer(self._text(lang, "listing", {"count": len(rows), "more": bool(last.get("has_more")), "labels": labels})
                        + "\n\n" + LABEL[lang])

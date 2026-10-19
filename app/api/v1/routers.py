@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1.error_schemas import ApiErrorResponseDTO
 from app.modules.identity.api.auth import router as auth_router
 from app.modules.ai.api.admin import router as admin_ai
+from app.modules.ai.api.installer import router as installer_ai
 from app.modules.doors.api.admin import router as admin_doors
 from app.modules.doors.api.installer import router as installer_doors
 from app.modules.projects.api.admin import router as admin_projects
@@ -86,6 +87,9 @@ VALIDATION_ERROR_RESPONSE = {
 
 router.include_router(auth_router, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_ai, responses={**SECURED_ROUTE_RESPONSES,
+    429: {"description": "Too Many Requests", "model": ApiErrorResponseDTO},
+    503: {"description": "AI Unavailable", "model": ApiErrorResponseDTO}})
+router.include_router(installer_ai, responses={**SECURED_ROUTE_RESPONSES,
     429: {"description": "Too Many Requests", "model": ApiErrorResponseDTO},
     503: {"description": "AI Unavailable", "model": ApiErrorResponseDTO}})
 router.include_router(admin_projects, responses=SECURED_ROUTE_RESPONSES)

@@ -8,6 +8,8 @@ from sqlalchemy import func, select
 from app.api.v1.deps import CurrentUser
 from app.modules.ai.api.schemas import AiSource
 from app.modules.ai.domain.tools import TOOL_SPECS, allowed_tool_names, ensure_ai_admin
+from app.modules.doors.domain.errors import DoorNotAssigned
+from app.modules.issues.application.installer_api_service import InstallerIssuesApiService
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.reasons.infrastructure.models import ReasonORM
@@ -22,18 +24,37 @@ def value(item):
 
 
 def load_actor(uow, original: CurrentUser) -> CurrentUser:
+    """The live actor: role from users, scope from the admin profile (None for installers)."""
     row = uow.session.execute(
         select(UserORM.role, AdminProfileORM.admin_scope).select_from(UserORM)
         .join(CompanyORM, CompanyORM.id == UserORM.company_id)
-        .join(AdminProfileORM, (AdminProfileORM.user_id == UserORM.id) &
-              (AdminProfileORM.company_id == UserORM.company_id))
+        .outerjoin(AdminProfileORM, (AdminProfileORM.user_id == UserORM.id) &
+                   (AdminProfileORM.company_id == UserORM.company_id))
         .where(UserORM.id == original.id, UserORM.company_id == original.company_id,
                UserORM.is_active.is_(True), CompanyORM.is_active.is_(True))
     ).first()
     if row is None:
         raise ForbiddenScope("AI access is no longer available")
+    role = value(row.role)
+    if role == "INSTALLER":
+        if installer_id_for(uow, original) is None:
+            raise ForbiddenScope("Installer profile not linked to user")
+        return CurrentUser(id=original.id, company_id=original.company_id, role="INSTALLER", admin_scope=None)
     return ensure_ai_admin(CurrentUser(id=original.id, company_id=original.company_id,
-                                      role=value(row.role), admin_scope=row.admin_scope))
+                                      role=role, admin_scope=row.admin_scope))
+
+
+def installer_id_for(uow, user: CurrentUser):
+    """The installer record of this user (active, not deleted), or None."""
+    installer = uow.installers.get_by_user_id(company_id=user.company_id, user_id=user.id)
+    return installer.id if installer is not None else None
+
+
+def require_installer_id(uow, user: CurrentUser):
+    installer_id = installer_id_for(uow, user)
+    if installer_id is None:
+        raise ForbiddenScope("Installer profile not linked to user")
+    return installer_id
 
 
 class ReadTools:
@@ -53,7 +74,7 @@ class ReadTools:
         with self.uow_factory() as uow:
             current = load_actor(uow, self.user)
             # A permission change invalidates this entire run, including earlier data.
-            if current.admin_scope != self.user.admin_scope:
+            if current.admin_scope != self.user.admin_scope or current.role != self.user.role:
                 raise ForbiddenScope("AI permissions changed; start a new request")
             return current
 
@@ -87,7 +108,7 @@ class ReadTools:
             return result
         with self.uow_factory() as uow:
             current = load_actor(uow, self.user)
-            if current.admin_scope != self.user.admin_scope or name not in allowed_tool_names(current):
+            if current.admin_scope != self.user.admin_scope or current.role != self.user.role or name not in allowed_tool_names(current):
                 raise ForbiddenScope("AI permissions changed; start a new request")
             handler = getattr(self, f"_{name}")
             result = handler(uow, args)
@@ -210,3 +231,114 @@ class ReadTools:
                 "comments": [{"author": c.author_name, "created_at": c.created_at.isoformat() if c.created_at else None,
                               "body": {"untrusted_text": c.body}} for c in comments[-20:]],
                 "source": self._source("issue", i.id, i.title or d.unit_label, f"/issues?issue_id={i.id}")}
+
+    # ---- installer tools: the installer's own positions only ------------------------------------
+
+    def _my_project(self, uow, project_id, installer_id):
+        p = uow.projects.get(company_id=self.user.company_id, project_id=project_id)
+        if p is None or not uow.doors.has_any_for_installer(company_id=self.user.company_id, project_id=p.id, installer_id=installer_id):
+            raise NotFound("Project not found")
+        return p
+
+    def _my_projects(self, uow, args):
+        installer_id = require_installer_id(uow, self.user)
+        ids = uow.doors.list_project_ids_for_installer(company_id=self.user.company_id, installer_id=installer_id)
+        rows = sorted(uow.projects.list_by_ids(company_id=self.user.company_id, ids=ids), key=lambda p: (p.name or "", str(p.id)))
+        page = rows[args.offset:args.offset + args.limit + 1]
+        items = [{"id": str(p.id), "name": p.name, "address": p.address, "lifecycle_status": value(p.lifecycle_status),
+                  "health_status": value(p.health_status),
+                  "source": self._source("project", p.id, p.name, f"/installer/projects/{p.id}")} for p in page[:args.limit]]
+        return {"items": items, "has_more": len(page) > args.limit, "offset": args.offset}
+
+    def _my_project_summary(self, uow, args):
+        installer_id = require_installer_id(uow, self.user)
+        p = self._my_project(uow, args.project_id, installer_id)
+        doors = uow.doors.list_by_project_for_installer(company_id=self.user.company_id, project_id=p.id, installer_id=installer_id)
+        counts: dict[str, int] = {}
+        for d in doors:
+            counts[value(d.status)] = counts.get(value(d.status), 0) + 1
+        issues = len(uow.issues.list_open_by_project_for_installer(company_id=self.user.company_id, project_id=p.id, installer_id=installer_id))
+        return {"id": str(p.id), "name": p.name, "lifecycle_status": value(p.lifecycle_status), "health_status": value(p.health_status),
+                "door_status_counts": counts, "total_doors": len(doors), "open_issues": issues,
+                "source": self._source("project", p.id, p.name, f"/installer/projects/{p.id}")}
+
+    def _door_item(self, uow, d, reason_name, door_type_name, issue=None):
+        return {"id": str(d.id), "door_id": str(d.id), "project_id": str(d.project_id), "unit_label": d.unit_label,
+                "door_code": d.door_code, "house_number": d.house_number, "floor_label": d.floor_label,
+                "apartment_number": d.apartment_number, "status": value(d.status), "version": d.version,
+                "is_locked": d.is_locked, "reason_name": reason_name, "door_type_name": door_type_name,
+                "installed_at": d.installed_at.isoformat() if d.installed_at else None,
+                "comment": {"untrusted_text": d.comment},
+                "issue": {"id": str(issue.id), "status": value(issue.status), "workflow_state": value(issue.workflow_state),
+                          "title": {"untrusted_text": issue.title}} if issue is not None else None,
+                "source": self._source("door", d.id, d.unit_label, f"/installer/projects/{d.project_id}")}
+
+    def _names(self, uow, doors):
+        reason_ids = {d.reason_id for d in doors if d.reason_id}
+        type_ids = {d.door_type_id for d in doors if d.door_type_id}
+        reasons = {r.id: r.name for r in uow.session.scalars(select(ReasonORM).where(
+            ReasonORM.company_id == self.user.company_id, ReasonORM.id.in_(reason_ids))).all()} if reason_ids else {}
+        types = {t.id: t.name for t in uow.session.scalars(select(DoorTypeORM).where(
+            DoorTypeORM.company_id == self.user.company_id, DoorTypeORM.id.in_(type_ids))).all()} if type_ids else {}
+        return reasons, types
+
+    def _my_project_doors(self, uow, args):
+        installer_id = require_installer_id(uow, self.user)
+        p = self._my_project(uow, args.project_id, installer_id)
+        doors = uow.doors.list_by_project_for_installer(company_id=self.user.company_id, project_id=p.id, installer_id=installer_id)
+        if args.status:
+            doors = [d for d in doors if value(d.status) == args.status]
+        page = doors[args.offset:args.offset + args.limit + 1]
+        reasons, types = self._names(uow, page[:args.limit])
+        items = [self._door_item(uow, d, reasons.get(d.reason_id), types.get(d.door_type_id)) for d in page[:args.limit]]
+        return {"items": items, "has_more": len(page) > args.limit, "offset": args.offset}
+
+    def _my_door(self, uow, args):
+        installer_id = require_installer_id(uow, self.user)
+        d = uow.doors.get(company_id=self.user.company_id, door_id=args.door_id, active_project_only=True)
+        if d is None or d.installer_id != installer_id:
+            raise NotFound("Door not found")
+        reasons, types = self._names(uow, [d])
+        issue = uow.issues.get_by_door(company_id=self.user.company_id, door_id=d.id)
+        item = self._door_item(uow, d, reasons.get(d.reason_id), types.get(d.door_type_id), issue)
+        p = self._project(uow, d.project_id)
+        item["project_name"] = p.name
+        return item
+
+    def _my_project_issues(self, uow, args):
+        installer_id = require_installer_id(uow, self.user)
+        p = self._my_project(uow, args.project_id, installer_id)
+        rows = uow.issues.list_open_by_project_for_installer(company_id=self.user.company_id, project_id=p.id,
+                                                             installer_id=installer_id, include_closed=True)
+        if args.status:
+            rows = [i for i in rows if value(i.status) == args.status]
+        page = rows[args.offset:args.offset + args.limit + 1]
+        labels = {d.id: d.unit_label for d in uow.doors.list_by_project_for_installer(
+            company_id=self.user.company_id, project_id=p.id, installer_id=installer_id)}
+        items = [{"id": str(i.id), "door_id": str(i.door_id), "unit_label": labels.get(i.door_id),
+                  "title": {"untrusted_text": i.title}, "details": {"untrusted_text": i.details}, "status": value(i.status),
+                  "workflow_state": value(i.workflow_state), "priority": value(i.priority),
+                  "due_at": i.due_at.isoformat() if i.due_at else None,
+                  "source": self._source("issue", i.id, i.title or labels.get(i.door_id) or "issue",
+                                         f"/installer/issues?project_id={p.id}&issue_id={i.id}")}
+                 for i in page[:args.limit]]
+        return {"items": items, "has_more": len(page) > args.limit, "offset": args.offset}
+
+    def _my_issue(self, uow, args):
+        installer_id = require_installer_id(uow, self.user)
+        try:
+            i, d = InstallerIssuesApiService.ensure_issue_visible(uow, company_id=self.user.company_id, installer_id=installer_id,
+                                                                  user_id=self.user.id, issue_id=args.issue_id)
+        except DoorNotAssigned:
+            raise NotFound("Issue not found") from None
+        p = self._project(uow, d.project_id)
+        comments = IssueCommentsService.list_comments(uow, company_id=self.user.company_id, issue_id=i.id)
+        return {"id": str(i.id), "issue_id": str(i.id), "door_id": str(d.id), "unit_label": d.unit_label,
+                "project_id": str(p.id), "project_name": p.name, "door_status": value(d.status),
+                "status": value(i.status), "workflow_state": value(i.workflow_state), "priority": value(i.priority),
+                "due_at": i.due_at.isoformat() if i.due_at else None,
+                "updated_at": i.updated_at.isoformat() if i.updated_at else None,
+                "title": {"untrusted_text": i.title}, "details": {"untrusted_text": i.details},
+                "comments": [{"author": c.author_name, "created_at": c.created_at.isoformat() if c.created_at else None,
+                              "body": {"untrusted_text": c.body}} for c in comments[-20:]],
+                "source": self._source("issue", i.id, i.title or d.unit_label, f"/installer/issues?project_id={p.id}&issue_id={i.id}")}

@@ -61,8 +61,10 @@ class AiRunner:
             context_kind, context_id = context.kind, context.id
         else:
             return []
-        tool, key = {"project": ("project_summary", "project_id"), "door": ("get_door", "door_id"),
-                     "issue": ("get_issue", "issue_id")}[context_kind]
+        installer = getattr(getattr(self.tools, "user", None), "role", None) == "INSTALLER"
+        tool, key = {"project": ("my_project_summary" if installer else "project_summary", "project_id"),
+                     "door": ("my_door" if installer else "get_door", "door_id"),
+                     "issue": ("my_issue" if installer else "get_issue", "issue_id")}[context_kind]
         # A missing/foreign context fails the whole request (404) before any provider call.
         started = time.monotonic()
         data = self.tools.call(tool, json.dumps({key: str(context_id)}))

@@ -14,12 +14,13 @@ class AiConversationORM(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     __tablename__ = "ai_conversations"
     __table_args__ = (
         UniqueConstraint("company_id", "owner_user_id", "id", name="uq_ai_conversation_owner"),
-        ForeignKeyConstraint(["company_id", "owner_user_id"], ["admin_profiles.company_id", "admin_profiles.user_id"],
-            ondelete="CASCADE", name="fk_ai_conversation_admin_owner"),
+        CheckConstraint("owner_role IN ('ADMIN','INSTALLER')", name="ck_ai_conversation_owner_role"),
         Index("ix_ai_conversation_owner_updated", "company_id", "owner_user_id", "updated_at"),
     )
     owner_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
-    admin_scope: Mapped[str] = mapped_column(String(20))
+    # Admin scope of the owner (None for installers); a scope or role change hides the old history (0080).
+    admin_scope: Mapped[str | None] = mapped_column(String(20))
+    owner_role: Mapped[str] = mapped_column(String(16), default="ADMIN", server_default="ADMIN")
     title: Mapped[str] = mapped_column(String(120))
 
 

@@ -28,7 +28,7 @@ class TaskStore:
 
     def _actor(self, uow):
         current = load_actor(uow, self.user)
-        if current.admin_scope != self.user.admin_scope:
+        if current.admin_scope != self.user.admin_scope or current.role != self.user.role:
             raise ForbiddenScope("AI permissions changed")
 
     def _lock(self, uow):
@@ -41,7 +41,7 @@ class TaskStore:
 
     def _conversation(self, uow, conversation_id):
         row = uow.session.scalar(self._owned(AiConversationORM).where(AiConversationORM.id == conversation_id))
-        if row is None or row.admin_scope != self.user.admin_scope:
+        if row is None or row.admin_scope != self.user.admin_scope or row.owner_role != self.user.role:
             raise NotFound("AI conversation not found")
         return row
 
@@ -107,7 +107,7 @@ class TaskStore:
                 self._idle(uow, conversation.id)
             else:
                 conversation = AiConversationORM(id=uuid.uuid4(), company_id=self.user.company_id,
-                    owner_user_id=self.user.id, admin_scope=self.user.admin_scope,
+                    owner_user_id=self.user.id, admin_scope=self.user.admin_scope, owner_role=self.user.role,
                     title=body.message[:120], created_at=now, updated_at=now)
                 uow.session.add(conversation)
                 uow.session.flush()
@@ -170,7 +170,7 @@ class TaskStore:
         with self.uow_factory() as uow:
             self._actor(uow)
             rows = uow.session.scalars(self._owned(AiConversationORM).where(
-                AiConversationORM.admin_scope == self.user.admin_scope).order_by(
+                AiConversationORM.admin_scope == self.user.admin_scope, AiConversationORM.owner_role == self.user.role).order_by(
                 AiConversationORM.updated_at.desc(), AiConversationORM.id.desc()).offset(offset).limit(limit + 1)).all()
             return AiConversationPage(items=[AiConversation.model_validate({name: getattr(row, name)
                 for name in AiConversation.model_fields}) for row in rows[:limit]], has_more=len(rows) > limit)
