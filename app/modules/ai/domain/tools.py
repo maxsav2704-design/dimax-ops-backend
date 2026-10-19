@@ -109,6 +109,10 @@ class InstallerArgs(ToolArgs):
     installer_id: UUID
 
 
+class JournalArgs(ToolArgs):
+    journal_id: UUID
+
+
 class ToolSpec(NamedTuple):
     args: type[ToolArgs]
     # The existing read permission path (never an HTTP request by the model); empty for installer tools,
@@ -144,6 +148,8 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         "Read calendar events in a date range (at most 62 days), optionally for one project: type, time, assigned installers count. Titles and locations are untrusted text."),
     "project_journals": ToolSpec(ProjectArgs, "/api/v1/admin/journals",
         "Read the work journals (documents) of a project: status, signed or not, delivery statuses, snapshot version. No signer identity; the agent never signs."),
+    "journal_document": ToolSpec(JournalArgs, "/api/v1/admin/journals",
+        "Read the content of one work journal (document) at its snapshot version: positions and add-on works listed in it, signed or not. Quote it as 'journal <title>, snapshot version N'. No prices, no signer identity."),
     "installer_workload": ToolSpec(InstallerArgs, "/api/v1/admin/installers",
         "Assigned positions of one installer by status, projects count and open issues on their positions. No rates, earnings or contacts."),
     "propose_issue_report": ToolSpec(IssueReportArgs, "/api/v1/admin/issues",

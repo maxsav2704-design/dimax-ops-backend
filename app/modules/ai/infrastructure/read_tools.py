@@ -411,6 +411,24 @@ class ReadTools:
                            "created_at": j.created_at.isoformat() if j.created_at else None} for j in rows],
                 "source": self._source("project", p.id, p.name, f"/projects?project_id={p.id}")}
 
+    def _journal_document(self, uow, args):
+        j = uow.journals.get(company_id=self.user.company_id, journal_id=args.journal_id)
+        if j is None:
+            raise NotFound("Journal not found")
+        p = self._project(uow, j.project_id)
+        items = uow.journals.list_items(company_id=self.user.company_id, journal_id=j.id)
+        addons = uow.journals.list_addon_items(company_id=self.user.company_id, journal_id=j.id)
+        return {"id": str(j.id), "project_id": str(p.id), "project_name": p.name, "title": {"untrusted_text": j.title},
+                "status": value(j.status), "snapshot_version": j.snapshot_version, "signed": j.signed_at is not None,
+                "signed_at": j.signed_at.isoformat() if j.signed_at else None, "notes": {"untrusted_text": j.notes},
+                "source_label": f"journal {j.title or j.id}, snapshot version {j.snapshot_version}",
+                "positions": [{"unit_label": i.unit_label, "installed_at": i.installed_at.isoformat() if i.installed_at else None}
+                              for i in items[:200]],
+                "addon_works": [{"name": a.addon_name, "unit": a.unit, "qty_done": str(a.qty_done), "done_at": a.done_at.isoformat(),
+                                 "comment": {"untrusted_text": a.comment}} for a in addons[:100]],
+                "positions_total": len(items), "addon_works_total": len(addons),
+                "source": self._source("project", p.id, p.name, f"/projects?project_id={p.id}")}
+
     def _installer_workload(self, uow, args):
         i = uow.session.get(InstallerORM, args.installer_id)
         if i is None or i.company_id != self.user.company_id or i.deleted_at is not None:
