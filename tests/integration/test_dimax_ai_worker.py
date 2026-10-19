@@ -147,3 +147,13 @@ def test_worker_serves_the_mock_provider_without_a_key(ai_client, monkeypatch):
     assert run_once() == 1
     done = client.get(f"{API}/tasks/{task['id']}").json()
     assert done["status"] == "COMPLETED" and done["reply"]["provider"] == "mock"
+
+
+def test_worker_marks_a_missing_context_with_a_named_code(ai_client, background, monkeypatch, db_session):
+    client, _ = ai_client
+    monkeypatch.setattr(ResponsesProvider, "respond", lambda *a, **k: pytest.fail("Foreign context must not reach the provider"))
+    task = client.post(f"{API}/tasks", json=payload("Что здесь?", context={"kind": "project", "id": str(uuid.uuid4())})).json()
+    assert task["status"] == "RUNNING"
+    assert run_once() == 1
+    done = client.get(f"{API}/tasks/{task['id']}").json()
+    assert done["status"] == "FAILED" and done["error_code"] == "AI_CONTEXT_NOT_FOUND" and done["reply"] is None

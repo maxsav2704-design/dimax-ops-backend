@@ -24,7 +24,7 @@ from app.modules.ai.infrastructure.proposal_store import ProposalStore
 from app.modules.ai.infrastructure.provider import AiProviderError, ResponsesProvider
 from app.modules.ai.infrastructure.read_tools import ReadTools
 from app.modules.ai.infrastructure.task_store import TaskStore
-from app.shared.domain.errors import Forbidden
+from app.shared.domain.errors import Forbidden, NotFound
 
 
 def provider_name() -> str:
@@ -104,6 +104,11 @@ def execute_task(task, attempt_id, user, uow_factory, store):
         return store.finish(task.id, attempt_id, result, **stats())
     except Forbidden:
         store.fail(task.id, attempt_id, "AI_ACCESS_CHANGED", **stats())
+        raise
+    except NotFound:
+        # The selected object is not visible to this actor (deleted, foreign or not assigned): inline callers
+        # still get 404; a queued task carries the named code so the client can say what happened.
+        store.fail(task.id, attempt_id, "AI_CONTEXT_NOT_FOUND", **stats())
         raise
     except AiProviderError as exc:
         store.fail(task.id, attempt_id, exc.code, **stats())
