@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.error_schemas import ApiErrorResponseDTO
+from app.modules.accounting.api.admin import router as admin_accounting
 from app.modules.identity.api.auth import router as auth_router
 from app.modules.ai.api.admin import router as admin_ai
 from app.modules.ai.api.installer import router as installer_ai
@@ -86,6 +87,7 @@ VALIDATION_ERROR_RESPONSE = {
 }
 
 router.include_router(auth_router, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_accounting, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_ai, responses={**SECURED_ROUTE_RESPONSES,
     429: {"description": "Too Many Requests", "model": ApiErrorResponseDTO},
     503: {"description": "AI Unavailable", "model": ApiErrorResponseDTO}})

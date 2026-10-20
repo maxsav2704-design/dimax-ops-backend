@@ -1,0 +1,13 @@
+{
+  "notice": "DEMO ONLY - invented factory-to-DIMAX prices; not approved and not usable for billing.",
+  "factory_name": "DEMO Factory",
+  "reference": "DEMO-CONTRACT-20261110",
+  "proposed_from": "2026-11-10",
+  "items": [
+    {"kind": "INSTALLATION", "stage_code": "", "unit_price_ex_vat": "400.00"},
+    {"kind": "STAGE", "stage_code": "FRAME", "unit_price_ex_vat": "150.00"},
+    {"kind": "STAGE", "stage_code": "LEAF", "unit_price_ex_vat": "200.00"},
+    {"kind": "STAGE", "stage_code": "FINAL_ADJUSTMENT", "unit_price_ex_vat": "50.00"},
+    {"kind": "ADDON", "stage_code": "", "unit_price_ex_vat": "60.00"}
+  ]
+}

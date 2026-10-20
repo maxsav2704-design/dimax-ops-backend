@@ -3,6 +3,7 @@ from __future__ import annotations
 from importlib import import_module
 
 _MODEL_MODULES = (
+    "app.modules.accounting.infrastructure.models",
     "app.modules.identity.infrastructure.models",
     "app.modules.identity.infrastructure.refresh_tokens_models",
     "app.modules.audit.infrastructure.models",
