@@ -1,4 +1,4 @@
-# Commercial drafts
+# Commercial contracts and confirmation
 
 Factory-to-DIMAX preparation only. This is separate from the existing
 `factory_price_lists`, whose `installer_price` is installer remuneration.
@@ -7,7 +7,9 @@ The first increment supports OWNER-only contract drafts and append-only price
 draft versions for ILS prices excluding VAT. Every operation rechecks the active
 OWNER profile inside its UoW. The database only allows DRAFT, and responses
 explicitly report `factory_confirmed=false`, `usable_for_billing=false`.
-There are no approval, activation, billing, execution or earning operations.
+Standalone draft snapshots are not factory decisions. Confirmation of an exact
+terms/price pair is separate; there are no activation, billing, execution or
+earning operations in this module.
 
 Routes:
 - GET/POST `/api/v1/admin/accounting/contracts`
@@ -43,10 +45,9 @@ formulas; unresolved due-date anchors, business-day rules, withholding bases
 and tax rounding are not invented. The agreed period is 10th inclusive to next
 10th exclusive in Asia/Jerusalem; ILS prices exclude VAT. No tax rate is assumed.
 
-Terms and prices have independent draft histories; this increment does not
-silently bind an old price to newer terms. Future confirmation/activation must
-bind the exact contract terms and price versions. Project exceptions, verified
-counterparty identity, approval and effective selection remain later work.
+Terms and prices have independent draft histories; confirmation never silently
+binds an old price to newer terms. Project exceptions, verified counterparty
+identity and effective selection remain later work.
 Proposed dates are not effective dates. Installer earnings never read this table.
 
 Invented rates live in `tests/fixtures/commercial_demo_prices.json`. Tests use a
@@ -67,3 +68,43 @@ configured database and mounts workspace sources. Inspect command, mounts and
 current revision before stopping/restarting it; pending migrations need a
 separate deployment/backup decision. See the workspace acceptance record for
 actual migration and restoration results.
+
+## Exact-version confirmation (0086)
+
+OWNER reviews the latest terms and price together, then sends an invitation to
+the existing OWNER-approved factory contact. Contract contact fields do not grant
+approval authority. A request UUID, exact snapshot hash, both version IDs and the
+expected contact ID protect retry and stale-review handling. Admin responses
+contain no token or code. The invitation and mailbox challenge use purpose-bound
+AES-GCM outbox payloads and the existing verification limits (five attempts,
+ten code requests, 60-second resend delay, ten-minute codes).
+
+Endpoints below `.../contracts/{contract_id}`:
+- GET `approval-preview?terms_id=...&price_id=...`
+- GET/POST `approvals`; GET `approvals/{id}`; POST `approvals/{id}/revoke`
+
+Public POST `/api/v1/public/commercial-approvals/{preview,request-code,confirm}`
+is rate-limited and has no-store responses. The `/commercial-approval#token`
+page removes the fragment, sends no admin JWT/cookies, requires the full name,
+mailbox code and explicit consent to both displayed version numbers and digest.
+Opening a link has no confirming effect. A replaced contact, either newer draft,
+revocation or expiry invalidates a pending invitation, including queued email.
+Exact retries cannot duplicate a recorded decision. Historical decisions remain
+in OWNER history after expiry or later amendments; they are not silently revoked.
+
+Migration 0086 adds tenant/contract composite references, request uniqueness,
+one pending invitation per contract and one confirmed decision per pair. The
+invitation identity/snapshot and terminal states are immutable; an invited price
+cannot be rewritten through its header or items. Terms already have a blanket
+immutability trigger. Downgrade refuses to erase any approval or its audit trail.
+Audit failure rolls back decision and evidence atomically. The external-audit
+constraint adds only COMMERCIAL_APPROVAL confirmation and preserves the existing
+import-inbox actor rule.
+
+Draft DTO status and `factory_confirmed=false` describe the standalone proposal,
+not an effective contract. Pair-specific confirmation status belongs to
+`commercial_approvals`; `usable_for_billing` remains false on every response.
+No installer ledger, price list, work status or journal signature is changed.
+Demo contracts may exercise this flow only in APP_ENV=test, remain marked in
+the page/email/receipt and never become real billing evidence. Real delivery
+requires configured encrypted email and a public HTTPS application URL.

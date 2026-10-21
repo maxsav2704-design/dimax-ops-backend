@@ -46,6 +46,7 @@ class CommercialContractORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class CommercialPriceVersionORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "commercial_price_versions"
     __table_args__ = (
+        UniqueConstraint("company_id", "contract_id", "id", name="uq_commercial_price_contract_id"),
         UniqueConstraint("company_id", "id", name="uq_commercial_price_tenant"),
         ForeignKeyConstraint(
             ["company_id", "contract_id"], ["commercial_contracts.company_id", "commercial_contracts.id"],
@@ -77,6 +78,7 @@ class CommercialPriceVersionORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class CommercialContractTermsORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "commercial_contract_terms"
     __table_args__ = (
+        UniqueConstraint("company_id", "contract_id", "id", name="uq_commercial_terms_contract_id"),
         ForeignKeyConstraint(
             ["company_id", "contract_id"], ["commercial_contracts.company_id", "commercial_contracts.id"],
             ondelete="RESTRICT", name="fk_commercial_terms_contract",

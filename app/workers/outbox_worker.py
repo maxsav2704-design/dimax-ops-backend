@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.config import settings
+from app.modules.accounting.application.approval_email import (
+    KIND as COMMERCIAL_INVITATION, CODE_KIND as COMMERCIAL_CODE, deliver as deliver_commercial,
+)
 from app.integrations.email.smtp_sender import SmtpEmailSender
 from app.integrations.storage.storage_service import StorageService
 from app.integrations.whatsapp.twilio_sender import TwilioWhatsAppSender
@@ -113,6 +116,8 @@ def run_once(limit: int = 20) -> int:
                     deliver_code(m, email_sender)
                 elif m.channel == OutboxChannel.EMAIL and payload.get("kind") in {WORK_INVITATION, WORK_CODE}:
                     deliver_work_price(m, email_sender)
+                elif m.channel == OutboxChannel.EMAIL and payload.get("kind") in {COMMERCIAL_INVITATION, COMMERCIAL_CODE}:
+                    deliver_commercial(m, email_sender)
                 elif m.channel == OutboxChannel.EMAIL:
                     attachment_path = None
                     object_key = payload.get("object_key")
@@ -191,7 +196,8 @@ def run_once(limit: int = 20) -> int:
 
             except Exception as e:
                 payload = m.payload if isinstance(m.payload, dict) else {}
-                factory_invitation = payload.get("kind") in {FACTORY_INVITATION, FACTORY_CODE, WORK_INVITATION, WORK_CODE}
+                factory_invitation = payload.get("kind") in {FACTORY_INVITATION, FACTORY_CODE, WORK_INVITATION, WORK_CODE,
+                                                            COMMERCIAL_INVITATION, COMMERCIAL_CODE}
                 err = "Factory invitation email could not be submitted" if factory_invitation else str(e)
                 if factory_invitation and isinstance(e, UnavailableInvitation):
                     err = "Factory invitation is unavailable; create a new invitation if needed"
