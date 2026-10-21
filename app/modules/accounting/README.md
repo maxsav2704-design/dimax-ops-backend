@@ -60,5 +60,10 @@ invented fixtures must never be submitted there.
 
 Migration 0085 follows 0084, which depends on workspace migration 0083_import_inbox.
 Deployment must include that predecessor; it is another agent's work and is not
-included in this module's commit. No normal/demo DB migration is performed by
-the acceptance checks. See the workspace acceptance record for actual results.
+included in this module's commit. Isolated acceptance commands target only the
+disposable database. Do not assume restoring an ordinary container is read-only:
+the existing local API startup command runs `alembic upgrade head` against its
+configured database and mounts workspace sources. Inspect command, mounts and
+current revision before stopping/restarting it; pending migrations need a
+separate deployment/backup decision. See the workspace acceptance record for
+actual migration and restoration results.
