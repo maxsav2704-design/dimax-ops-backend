@@ -6,6 +6,7 @@ from app.api.v1.deps import CurrentUser, get_uow, require_admin
 from app.modules.accounting.application.dto import (
     CommercialPriceDetail, CommercialPricePage, ContractDraft, ContractPage,
     CreateCommercialPriceDraft, CreateContractDraft,
+    ContractTermsDetail, ContractTermsPage, CreateContractTermsDraft,
 )
 from app.modules.accounting.application.service import CommercialDraftService
 from app.shared.domain.errors import ForbiddenScope
@@ -42,6 +43,33 @@ def list_prices(
 ):
     with uow:
         return CommercialDraftService.prices(uow, user, contract_id, limit=limit, offset=offset)
+
+
+@router.get("/{contract_id}/terms", response_model=ContractTermsPage)
+def list_terms(
+    contract_id: UUID, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+    user=Depends(require_draft_owner), uow=Depends(get_uow),
+):
+    with uow:
+        return CommercialDraftService.terms(uow, user, contract_id, limit=limit, offset=offset)
+
+
+@router.post("/{contract_id}/terms", response_model=ContractTermsDetail)
+def create_terms(
+    contract_id: UUID, body: CreateContractTermsDraft,
+    user=Depends(require_draft_owner), uow=Depends(get_uow),
+):
+    with uow:
+        return CommercialDraftService.create_terms(uow, user, contract_id, body)
+
+
+@router.get("/{contract_id}/terms/{terms_id}", response_model=ContractTermsDetail)
+def get_terms(
+    contract_id: UUID, terms_id: UUID,
+    user=Depends(require_draft_owner), uow=Depends(get_uow),
+):
+    with uow:
+        return CommercialDraftService.get_terms(uow, user, contract_id, terms_id)
 
 
 @router.post("/{contract_id}/prices", response_model=CommercialPriceDetail)

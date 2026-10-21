@@ -74,6 +74,51 @@ class CommercialPriceVersionORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
 
 
+class CommercialContractTermsORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "commercial_contract_terms"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["company_id", "contract_id"], ["commercial_contracts.company_id", "commercial_contracts.id"],
+            ondelete="RESTRICT", name="fk_commercial_terms_contract",
+        ),
+        UniqueConstraint("company_id", "contract_id", "version", name="uq_commercial_terms_version"),
+        UniqueConstraint("company_id", "request_id", name="uq_commercial_terms_request"),
+        CheckConstraint("version > 0 AND status = 'DRAFT'", name="ck_commercial_terms_draft"),
+        CheckConstraint("billing_basis IN ('FULL_INSTALLATION', 'STAGES')", name="ck_commercial_terms_basis"),
+        CheckConstraint("proposed_until IS NULL OR proposed_until >= proposed_from", name="ck_commercial_terms_dates"),
+        CheckConstraint(
+            "btrim(factory_legal_name) <> '' AND btrim(registration_number) <> '' AND btrim(address) <> '' "
+            "AND btrim(payment_terms) <> '' AND btrim(retention_terms) <> '' "
+            "AND btrim(reason) <> '' AND btrim(agreement_reference) <> ''",
+            name="ck_commercial_terms_labels",
+        ),
+    )
+
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    contract_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
+    factory_legal_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    registration_number: Mapped[str] = mapped_column(String(80), nullable=False)
+    address: Mapped[str] = mapped_column(String(1000), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(200))
+    contact_email: Mapped[str | None] = mapped_column(String(254))
+    contact_phone: Mapped[str | None] = mapped_column(String(40))
+    proposed_from: Mapped[date] = mapped_column(Date, nullable=False)
+    proposed_until: Mapped[date | None] = mapped_column(Date)
+    billing_basis: Mapped[str] = mapped_column(String(24), nullable=False)
+    payment_terms: Mapped[str] = mapped_column(String(4000), nullable=False)
+    retention_terms: Mapped[str] = mapped_column(String(4000), nullable=False)
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    agreement_reference: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False,
+    )
+    created_by_name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
 class CommercialPriceItemORM(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "commercial_price_items"
     __table_args__ = (

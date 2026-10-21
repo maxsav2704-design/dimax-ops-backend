@@ -6,9 +6,10 @@ from uuid import UUID, uuid4
 from app.modules.accounting.application.dto import (
     CommercialLine, CommercialPriceDetail, CommercialPricePage, CommercialPriceSummary,
     ContractDraft, ContractPage, CreateCommercialPriceDraft, CreateContractDraft,
+    ContractTermsDetail, ContractTermsFields, ContractTermsPage, ContractTermsSummary, CreateContractTermsDraft,
 )
 from app.modules.accounting.infrastructure.models import (
-    CommercialContractORM, CommercialPriceItemORM, CommercialPriceVersionORM,
+    CommercialContractORM, CommercialContractTermsORM, CommercialPriceItemORM, CommercialPriceVersionORM,
 )
 from app.modules.accounting.infrastructure.repositories import CommercialDraftRepository
 from app.modules.audit.application.service import AuditService
@@ -92,6 +93,68 @@ class CommercialDraftService:
         rows, total, latest = repo.prices(user.company_id, contract_id, limit, offset)
         return CommercialPricePage(items=[cls._summary(row, contract) for row in rows],
                                    total=total, latest_version=latest)
+
+    @staticmethod
+    def _terms_summary(row, contract):
+        values = {key: getattr(row, key) for key in (
+            "id", "contract_id", "version", "status", "proposed_from", "proposed_until", "reason",
+            "agreement_reference", "created_by", "created_by_name", "created_at",
+        )}
+        return ContractTermsSummary(**values, is_demo=contract.is_demo)
+
+    @classmethod
+    def _terms_detail(cls, row, contract):
+        values = cls._terms_summary(row, contract).model_dump()
+        values.update({key: getattr(row, key) for key in ContractTermsFields.model_fields})
+        return ContractTermsDetail(**values)
+
+    @classmethod
+    def terms(cls, uow, user, contract_id: UUID, *, limit: int, offset: int):
+        repo = cls._repo(uow, user)
+        contract = cls._contract(repo, user, contract_id)
+        rows, total, latest = repo.terms(user.company_id, contract_id, limit, offset)
+        return ContractTermsPage(items=[cls._terms_summary(row, contract) for row in rows],
+                                 total=total, latest_version=latest)
+
+    @classmethod
+    def get_terms(cls, uow, user, contract_id: UUID, terms_id: UUID):
+        repo = cls._repo(uow, user)
+        contract = cls._contract(repo, user, contract_id)
+        row = repo.terms_version(user.company_id, contract_id, terms_id)
+        if row is None:
+            raise NotFound("Contract terms version not found")
+        return cls._terms_detail(row, contract)
+
+    @classmethod
+    def create_terms(cls, uow, user, contract_id: UUID, body: CreateContractTermsDraft):
+        repo = cls._repo(uow, user)
+        if not repo.lock_company(user.company_id):
+            raise ForbiddenScope("Company is inactive")
+        contract = cls._contract(repo, user, contract_id)
+        payload = body.model_dump(mode="json", exclude={"request_id"})
+        fingerprint = _fingerprint({**payload, "contract_id": str(contract_id)})
+        existing = repo.terms_request(user.company_id, body.request_id)
+        if existing:
+            if existing.request_fingerprint != fingerprint:
+                raise Conflict("Request ID already belongs to different contract terms")
+            return cls._terms_detail(existing, contract)
+        _, _, latest = repo.terms(user.company_id, contract_id, 1, 0)
+        if latest != body.expected_latest_version:
+            raise Conflict("Contract terms changed; reload before creating a new version",
+                           meta={"latest_version": latest})
+        fields = body.model_dump(exclude={"request_id", "expected_latest_version"})
+        row = CommercialContractTermsORM(
+            id=uuid4(), company_id=user.company_id, contract_id=contract_id, version=latest + 1,
+            status="DRAFT", request_id=body.request_id, request_fingerprint=fingerprint,
+            created_by=user.id, created_by_name=repo.actor_name(user.company_id, user.id), **fields,
+        )
+        repo.add(row)
+        # Audit points to the immutable version, not duplicated personal/contact data.
+        AuditService.add(uow, company_id=user.company_id, actor_user_id=user.id,
+                         entity_type="COMMERCIAL_TERMS", entity_id=row.id, action="CREATE",
+                         after={"contract_id": str(contract_id), "version": row.version,
+                                "status": "DRAFT", "is_demo": contract.is_demo})
+        return cls._terms_detail(row, contract)
 
     @classmethod
     def get_price(cls, uow, user, contract_id: UUID, price_id: UUID):

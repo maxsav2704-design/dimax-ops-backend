@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounting.infrastructure.models import (
-    CommercialContractORM, CommercialPriceItemORM, CommercialPriceVersionORM,
+    CommercialContractORM, CommercialContractTermsORM, CommercialPriceItemORM, CommercialPriceVersionORM,
 )
 from app.modules.addons.infrastructure.models import AddonTypeORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
@@ -57,6 +57,33 @@ class CommercialDraftRepository:
     def price_request(self, company_id: UUID, request_id: UUID):
         return self.session.scalar(select(CommercialPriceVersionORM).where(
             CommercialPriceVersionORM.company_id == company_id, CommercialPriceVersionORM.request_id == request_id,
+        ))
+
+    def terms_request(self, company_id: UUID, request_id: UUID):
+        return self.session.scalar(select(CommercialContractTermsORM).where(
+            CommercialContractTermsORM.company_id == company_id, CommercialContractTermsORM.request_id == request_id,
+        ))
+
+    def terms_version(self, company_id: UUID, contract_id: UUID, terms_id: UUID):
+        return self.session.scalar(select(CommercialContractTermsORM).where(
+            CommercialContractTermsORM.company_id == company_id,
+            CommercialContractTermsORM.contract_id == contract_id, CommercialContractTermsORM.id == terms_id,
+        ))
+
+    def terms(self, company_id: UUID, contract_id: UUID, limit: int, offset: int):
+        scope = (CommercialContractTermsORM.company_id == company_id,
+                 CommercialContractTermsORM.contract_id == contract_id)
+        rows = self.session.scalars(select(CommercialContractTermsORM).where(*scope).order_by(
+            CommercialContractTermsORM.version.desc(),
+        ).limit(limit).offset(offset)).all()
+        total, latest = self.session.execute(select(
+            func.count(), func.coalesce(func.max(CommercialContractTermsORM.version), 0),
+        ).where(*scope)).one()
+        return rows, total, latest
+
+    def actor_name(self, company_id: UUID, user_id: UUID):
+        return self.session.scalar(select(UserORM.full_name).where(
+            UserORM.company_id == company_id, UserORM.id == user_id,
         ))
 
     def price(self, company_id: UUID, contract_id: UUID, price_id: UUID):
