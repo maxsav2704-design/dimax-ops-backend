@@ -20,7 +20,8 @@ class AuditLogORM(Base, UUIDPrimaryKeyMixin, TimestampMixin, TenantMixin):
     __table_args__ = (CheckConstraint(
         "actor_user_id IS NOT NULL OR (entity_type IN ('FACTORY_PRICE_APPROVAL', 'WORK_PRICE_APPROVAL', 'COMMERCIAL_APPROVAL') AND action = 'CONFIRM' "
         "AND coalesce(after->>'actor_kind', '') = 'FACTORY_REPRESENTATIVE' "
-        "AND coalesce(after->>'factory_contact_id', '') <> '')", name="ck_audit_external_factory_actor"),)
+        "AND coalesce(after->>'factory_contact_id', '') <> '') "
+        "OR (entity_type = 'import_inbox' AND coalesce(after->>'source', '') IN ('FOLDER', 'EMAIL'))", name="ck_audit_external_factory_actor"),)
 
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
 

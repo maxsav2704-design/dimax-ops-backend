@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import uuid
 from datetime import date
 
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    DateTime,
     Enum,
     ForeignKey,
     Index,
@@ -129,3 +132,32 @@ class ProjectImportRunORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mapping_profile: Mapped[str] = mapped_column(String(64), nullable=False, default="auto_v1")
     result_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class ImportInboxItemORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """A factory document that arrived by upload, folder or mailbox (0083). Imports go through the door import service."""
+
+    __tablename__ = "project_import_inbox"
+    __table_args__ = (
+        UniqueConstraint("company_id", "content_sha256", name="uq_project_import_inbox_content"),
+        Index("ix_project_import_inbox_company_created", "company_id", "created_at"),
+    )
+
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(400), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    detected_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    order_numbers: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    matched_project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    match_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    candidate_project_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    import_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

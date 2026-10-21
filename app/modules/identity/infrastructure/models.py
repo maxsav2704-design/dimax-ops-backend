@@ -15,6 +15,8 @@ class CompanyORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Import inbox policy (0083): clean, unambiguously matched factory files are imported without a click.
+    import_auto_commit: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
 
 class UserORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):

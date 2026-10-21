@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -477,3 +479,36 @@ class ProjectDetailsResponse(BaseModel):
 
 class OkResponse(BaseModel):
     ok: bool = True
+
+
+class ImportInboxItemDTO(BaseModel):
+    id: UUID
+    source: str
+    source_ref: str | None = None
+    filename: str
+    status: str
+    detected_profile: str | None = None
+    order_numbers: list[str] = []
+    matched_project_id: UUID | None = None
+    matched_project_name: str | None = None
+    match_reason: str | None = None
+    candidate_projects: list[dict] = []
+    analysis: dict | None = None
+    import_result: dict | None = None
+    error: str | None = None
+    created_at: datetime
+    decided_at: datetime | None = None
+
+
+class ImportInboxListResponse(BaseModel):
+    items: list[ImportInboxItemDTO]
+    auto_commit: bool
+
+
+class ImportInboxCommitBody(BaseModel):
+    project_id: UUID | None = None
+    allow_partial_import: bool = False
+
+
+class ImportInboxPolicyDTO(BaseModel):
+    auto_commit: bool

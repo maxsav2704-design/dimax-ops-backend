@@ -15,7 +15,12 @@ from app.api.v1.deps import (
     get_uow,
     require_admin,
 )
+from app.modules.projects.application.import_inbox_service import ImportInboxService
 from app.modules.projects.api.schemas import (
+    ImportInboxCommitBody,
+    ImportInboxItemDTO,
+    ImportInboxListResponse,
+    ImportInboxPolicyDTO,
     AssignInstallerBody,
     BulkAssignInstallerBody,
     BulkAssignInstallerResponse,
@@ -56,6 +61,91 @@ def _can_view_rates(uow, user: CurrentUser) -> bool:
 
 
 router = APIRouter(prefix="/admin/projects", tags=["Admin / Projects"])
+
+
+# ---- document import inbox (0083): upload without a project, matched and imported automatically when clean ----
+
+def _inbox_view(uow, user, item) -> ImportInboxItemDTO:
+    ids = [item.matched_project_id] if item.matched_project_id else []
+    ids += [UUID(x) for x in (item.candidate_project_ids or [])]
+    names = ImportInboxService.project_names(uow, company_id=user.company_id, project_ids=ids)
+    return ImportInboxItemDTO(
+        id=item.id, source=item.source, source_ref=item.source_ref, filename=item.filename, status=item.status,
+        detected_profile=item.detected_profile, order_numbers=list(item.order_numbers or []),
+        matched_project_id=item.matched_project_id, matched_project_name=names.get(item.matched_project_id) if item.matched_project_id else None,
+        match_reason=item.match_reason,
+        candidate_projects=[{"id": x, "name": names.get(UUID(x))} for x in (item.candidate_project_ids or [])],
+        analysis=item.analysis, import_result=item.import_result, error=item.error, created_at=item.created_at, decided_at=item.decided_at,
+    )
+
+
+@router.get("/import-inbox", response_model=ImportInboxListResponse)
+def list_import_inbox(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        items = ImportInboxService.list_items(uow, company_id=user.company_id, status=status, limit=limit, offset=offset)
+        return ImportInboxListResponse(items=[_inbox_view(uow, user, item) for item in items],
+                                       auto_commit=ImportInboxService.auto_commit_enabled(uow, user.company_id))
+
+
+@router.get("/import-inbox/policy", response_model=ImportInboxPolicyDTO)
+def get_import_inbox_policy(user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        return ImportInboxPolicyDTO(auto_commit=ImportInboxService.auto_commit_enabled(uow, user.company_id))
+
+
+@router.put("/import-inbox/policy", response_model=ImportInboxPolicyDTO)
+def put_import_inbox_policy(body: ImportInboxPolicyDTO, user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    if user.admin_scope != "OWNER":
+        raise ForbiddenScope("Only the company owner may change the import policy")
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        enabled = ImportInboxService.set_auto_commit(uow, company_id=user.company_id, actor_user_id=user.id, enabled=body.auto_commit)
+        uow.commit()
+        return ImportInboxPolicyDTO(auto_commit=enabled)
+
+
+@router.post("/import-inbox", response_model=ImportInboxItemDTO, status_code=201)
+async def upload_to_import_inbox(
+    file: UploadFile = File(...),
+    project_id: UUID | None = Form(default=None),
+    user: CurrentUser = Depends(require_admin),
+    uow=Depends(get_uow),
+):
+    content = await file.read()
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        item, _created = ImportInboxService.ingest(uow, company_id=user.company_id, actor_user_id=user.id,
+                                                   filename=file.filename or "", content=content, source="UPLOAD", project_id=project_id)
+        uow.commit()
+        return _inbox_view(uow, user, item)
+
+
+@router.post("/import-inbox/{item_id}/commit", response_model=ImportInboxItemDTO)
+def commit_import_inbox_item(item_id: UUID, body: ImportInboxCommitBody, user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        item = ImportInboxService.get(uow, company_id=user.company_id, item_id=item_id)
+        ImportInboxService.commit(uow, item, actor_user_id=user.id, project_id=body.project_id, allow_partial=body.allow_partial_import)
+        uow.commit()
+        return _inbox_view(uow, user, item)
+
+
+@router.post("/import-inbox/{item_id}/dismiss", response_model=ImportInboxItemDTO)
+def dismiss_import_inbox_item(item_id: UUID, user: CurrentUser = Depends(require_admin), uow=Depends(get_uow)):
+    with uow:
+        ensure_admin_can_manage_imports(uow, user)
+        item = ImportInboxService.get(uow, company_id=user.company_id, item_id=item_id)
+        ImportInboxService.dismiss(uow, item, actor_user_id=user.id)
+        uow.commit()
+        return _inbox_view(uow, user, item)
 
 
 @router.get("", response_model=ProjectListResponse)

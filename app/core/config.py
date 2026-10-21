@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     AI_WORKER_POLL_SEC: int = Field(default=2, ge=1, le=60)
     # Durable per-company budget: tasks (first attempts and retries) per UTC day.
     AI_DAILY_TASK_LIMIT_PER_COMPANY: int = Field(default=500, ge=1, le=100000)
+    # Document import inbox (0083): watched folder and/or mailbox feeding the import inbox.
+    IMPORT_INBOX_DIR: str = ""
+    IMPORT_INBOX_COMPANY_ID: str = ""
+    IMPORT_INBOX_POLL_SEC: int = Field(default=30, ge=5, le=3600)
+    IMPORT_INBOX_IMAP_HOST: str = ""
+    IMPORT_INBOX_IMAP_PORT: int = 993
+    IMPORT_INBOX_IMAP_USER: str = ""
+    IMPORT_INBOX_IMAP_PASSWORD: SecretStr = SecretStr("")
+    IMPORT_INBOX_IMAP_FOLDER: str = "INBOX"
+    IMPORT_INBOX_IMAP_COMPANY_ID: str = ""
+    IMPORT_INBOX_ALLOWED_SENDERS: str = ""
     AI_MAX_PROPOSALS_PER_TASK: int = Field(default=3, ge=1, le=10)
 
     SEED_COMPANY_NAME: str = "DIMAX GROUP"

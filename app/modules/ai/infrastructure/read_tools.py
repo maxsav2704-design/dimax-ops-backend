@@ -429,6 +429,25 @@ class ReadTools:
                 "positions_total": len(items), "addon_works_total": len(addons),
                 "source": self._source("project", p.id, p.name, f"/projects?project_id={p.id}")}
 
+    def _import_inbox(self, uow, args):
+        from app.api.v1.deps import ensure_admin_can_manage_imports
+        from app.modules.projects.application.import_inbox_service import ImportInboxService
+        ensure_admin_can_manage_imports(uow, self.user)  # same guard as the import endpoints
+        rows = ImportInboxService.list_items(uow, company_id=self.user.company_id, limit=args.limit + 1, offset=args.offset)
+        names = ImportInboxService.project_names(uow, company_id=self.user.company_id,
+                                                 project_ids=[r.matched_project_id for r in rows if r.matched_project_id])
+        items = []
+        for r in rows[:args.limit]:
+            item = {"id": str(r.id), "source": r.source, "status": r.status, "filename": {"untrusted_text": r.filename},
+                    "matched_project_id": str(r.matched_project_id) if r.matched_project_id else None,
+                    "matched_project_name": names.get(r.matched_project_id) if r.matched_project_id else None,
+                    "match_reason": r.match_reason, "analysis": r.analysis, "import_result": r.import_result,
+                    "error": {"untrusted_text": r.error} if r.error else None, "created_at": r.created_at.isoformat()}
+            if r.matched_project_id and names.get(r.matched_project_id):
+                item["source_link"] = self._source("project", r.matched_project_id, names[r.matched_project_id], f"/projects?project_id={r.matched_project_id}")
+            items.append(item)
+        return {"items": items, "has_more": len(rows) > args.limit, "offset": args.offset}
+
     def _installer_workload(self, uow, args):
         i = uow.session.get(InstallerORM, args.installer_id)
         if i is None or i.company_id != self.user.company_id or i.deleted_at is not None:
