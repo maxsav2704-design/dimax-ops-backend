@@ -66,17 +66,17 @@ jobs:
         run: cp .env.example .env
 
       - name: Start db
-        run: docker compose up -d db
+        run: docker compose -p dimax-backup-ci -f docker-compose.yml up -d db
 
       - name: Apply migrations
-        run: docker compose run --rm --no-deps api alembic upgrade head
+        run: docker compose -p dimax-backup-ci -f docker-compose.yml run --rm --no-deps api alembic upgrade head
 
       - name: Backup/restore smoke
-        run: python scripts/db_backup_restore_smoke.py
+        run: python scripts/db_backup_restore_smoke.py --compose-file docker-compose.yml --project-name dimax-backup-ci
 
       - name: Teardown
         if: always()
-        run: docker compose down -v
+        run: docker compose -p dimax-backup-ci -f docker-compose.yml down -v
 
   architecture-contract:
     runs-on: ubuntu-latest
