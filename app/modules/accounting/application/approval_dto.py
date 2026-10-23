@@ -80,6 +80,7 @@ class CommercialApprovalSummary(BaseModel):
     delivery_status: str
     status: Literal["PENDING", "CONFIRMED", "REVOKED", "EXPIRED", "SUPERSEDED", "CONTACT_CHANGED"]
     is_demo: bool
+    agreement_id: UUID | None = None  # set once an OWNER put this decision into effect (0087)
     usable_for_billing: Literal[False] = False
 
 

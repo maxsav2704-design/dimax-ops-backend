@@ -21,6 +21,7 @@ class CommercialApprovalORM(Base, UUIDPrimaryKeyMixin):
         ForeignKeyConstraint(["company_id", "factory_contact_id"],
             ["factory_contacts.company_id", "factory_contacts.id"], ondelete="RESTRICT", name="fk_commercial_approval_contact"),
         UniqueConstraint("company_id", "request_id", name="uq_commercial_approval_request"),
+        UniqueConstraint("company_id", "contract_id", "id", name="uq_commercial_approval_contract_id"),  # 0087 composite FK target
         CheckConstraint("expires_at > created_at", name="ck_commercial_approval_expiry"),
         CheckConstraint("mailbox_requests BETWEEN 0 AND 10 AND mailbox_attempts BETWEEN 0 AND 5", name="ck_commercial_approval_limits"),
         CheckConstraint("(mailbox_code_hash IS NULL AND mailbox_challenge_id IS NULL AND mailbox_code_expires_at IS NULL AND mailbox_requested_at IS NULL) OR (mailbox_code_hash IS NOT NULL AND mailbox_challenge_id IS NOT NULL AND mailbox_code_expires_at IS NOT NULL AND mailbox_requested_at IS NOT NULL AND mailbox_code_expires_at > mailbox_requested_at AND mailbox_requests > 0)", name="ck_commercial_approval_challenge"),

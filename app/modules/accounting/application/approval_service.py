@@ -124,9 +124,11 @@ class CommercialApprovalService:
             status = "SUPERSEDED"
         fields = {key: getattr(row, key) for key in CommercialApprovalSummary.model_fields
                   if hasattr(row, key)}
+        from app.modules.accounting.application.agreement_service import CommercialAgreementRepository
         return CommercialApprovalSummary(**fields, status=status, is_demo=row.snapshot["is_demo"],
             terms_version=row.snapshot["terms"]["version"], price_version=row.snapshot["price"]["version"],
-            delivery_status=repo.delivery_status(row))
+            delivery_status=repo.delivery_status(row),
+            agreement_id=CommercialAgreementRepository(uow.session).for_approval(row.id))
 
     @classmethod
     def history(cls, uow, user, contract_id, limit=20, offset=0):
