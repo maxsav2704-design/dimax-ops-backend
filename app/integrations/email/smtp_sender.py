@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import smtplib
+import ssl
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -41,7 +42,7 @@ class SmtpEmailSender:
             settings.SMTP_HOST, settings.SMTP_PORT, timeout=20
         ) as s:
             if settings.SMTP_TLS:
-                s.starttls()
+                s.starttls(context=ssl.create_default_context())
             if settings.SMTP_USER:
                 s.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             s.send_message(msg)
