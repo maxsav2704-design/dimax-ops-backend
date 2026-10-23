@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.outbox.domain.enums import OutboxChannel
-from app.workers import outbox_worker
+from app.workers import outbox_health, outbox_worker
 
 
 @pytest.mark.parametrize("fail_on,send_error,expected_sent,expected_attempts", [
@@ -16,8 +16,9 @@ from app.workers import outbox_worker
     (None, False, 3, 3),
 ])
 def test_worker_counts_only_committed_jobs_and_stops_after_commit_error(
-    monkeypatch, fail_on, send_error, expected_sent, expected_attempts
+    monkeypatch, tmp_path, fail_on, send_error, expected_sent, expected_attempts
 ):
+    monkeypatch.setattr(outbox_health, "heartbeat_path", lambda: tmp_path / "heartbeat.json")
     session = MagicMock()
     commits = 0
 

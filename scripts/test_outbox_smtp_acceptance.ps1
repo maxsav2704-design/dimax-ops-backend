@@ -64,6 +64,7 @@ sys.exit(pytest.main([
     '/workspace/tests/integration/test_outbox_retry_policy.py',
     '/workspace/tests/integration/test_outbox_api.py',
     '/workspace/tests/test_outbox_commit_boundary.py',
+    '/workspace/tests/architecture/test_outbox_health.py',
     '/workspace/tests/test_smtp_sender.py',
     '/workspace/tests/test_smtp_tls_transport.py',
 ]))

@@ -24,6 +24,10 @@ def record_heartbeat() -> None:
         temporary.unlink(missing_ok=True)
 
 
+def invalidate_heartbeat() -> None:
+    heartbeat_path().unlink(missing_ok=True)
+
+
 def healthy() -> bool:
     try:
         record = json.loads(heartbeat_path().read_text(encoding="ascii"))

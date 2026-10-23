@@ -25,7 +25,7 @@ from app.modules.sync.application.work_price_email import (
     KIND as WORK_INVITATION, CODE_KIND as WORK_CODE, deliver as deliver_work_price,
 )
 from app.shared.infrastructure.observability import get_logger, log_event
-from app.workers.outbox_health import record_heartbeat
+from app.workers.outbox_health import invalidate_heartbeat, record_heartbeat
 
 
 email_sender = SmtpEmailSender()
@@ -84,6 +84,7 @@ def _commit_message(session, message) -> bool:
         session.commit()
         return True
     except Exception as exc:  # noqa: BLE001
+        invalidate_heartbeat()
         session.rollback()
         log_event(
             logger,
@@ -268,6 +269,7 @@ def run_once(limit: int = 20) -> int:
                 processed=processed,
                 failed=(len(msgs) - processed),
             )
+        record_heartbeat()
         return processed
 
     except Exception:
@@ -279,8 +281,11 @@ def run_once(limit: int = 20) -> int:
 
 def main() -> None:
     while True:
-        processed = run_once(limit=20)
-        record_heartbeat()
+        try:
+            processed = run_once(limit=20)
+        except Exception:
+            invalidate_heartbeat()
+            raise
         time.sleep(1 if processed > 0 else 3)
 
 
