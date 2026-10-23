@@ -5,6 +5,7 @@ class SyncEventType(str, Enum):
     DOOR_SET_STATUS = "DOOR_SET_STATUS"
     ADDON_FACT_CREATE = "ADDON_FACT_CREATE"
     ISSUE_CREATE = "ISSUE_CREATE"
+    DOOR_STAGE_COMPLETE = "DOOR_STAGE_COMPLETE"
 
 
 class SyncChangeType(str, Enum):

@@ -13,7 +13,7 @@ from app.modules.rates.application.installer_price_dto import InstallerPriceSnap
 
 class SyncEventIn(BaseModel):
     client_event_id: str = Field(min_length=8, max_length=80)
-    type: Literal["DOOR_SET_STATUS", "ADDON_FACT_CREATE", "ISSUE_CREATE"]
+    type: Literal["DOOR_SET_STATUS", "ADDON_FACT_CREATE", "ISSUE_CREATE", "DOOR_STAGE_COMPLETE"]
     project_id: UUID
     happened_at: datetime | None = None
     payload: dict[str, Any]

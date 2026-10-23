@@ -61,6 +61,8 @@ class InstallerSyncService:
         allowed = {
             "DOOR_SET_STATUS": {"door_id", "status", "reason_id", "comment", "base_version", "previous_version", "price_list_id"},
             "ADDON_FACT_CREATE": {"addon_type_id", "qty_done", "comment", "price_list_id"},
+            # A stage fact carries no price: the server values stages later from confirmed terms.
+            "DOOR_STAGE_COMPLETE": {"door_id", "stage_code", "base_version", "previous_version"},
         }.get(operation_type)
         if allowed is not None and (unexpected := sorted(payload.keys() - allowed)):
             raise ValidationError(
@@ -707,6 +709,17 @@ class InstallerSyncService:
                             received_at=row.created_at,
                             has_timezone=row.client_time_has_timezone,
                         )
+                    elif etype == SyncEventType.DOOR_STAGE_COMPLETE:
+                        InstallerSyncService._apply_door_stage_complete(
+                            uow,
+                            company_id=company_id,
+                            installer_id=installer_id,
+                            actor_user_id=actor_user_id,
+                            project_id=project_id,
+                            payload=payload,
+                            happened_at=happened_at,
+                            client_event_id=cid,
+                        )
                     elif etype == SyncEventType.ISSUE_CREATE:
                         InstallerSyncService._apply_issue_create(
                             uow,
@@ -892,6 +905,36 @@ class InstallerSyncService:
             title=title,
             details=details,
             source="OFFLINE_SYNC",
+        )
+
+    @staticmethod
+    def _apply_door_stage_complete(
+        uow,
+        *,
+        company_id: uuid.UUID,
+        installer_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        project_id: uuid.UUID,
+        payload: dict,
+        happened_at: datetime | None,
+        client_event_id: str,
+    ) -> None:
+        """Offline stage completion: the assignment, not DoorORM.installer_id, proves the installer's right."""
+        from app.modules.doors.application.stages_service import WorkStagesService
+
+        door_id = payload.get("door_id")
+        stage_code = payload.get("stage_code")
+        if not door_id or not stage_code:
+            raise ValidationError("payload requires door_id and stage_code")
+        door = uow.doors.get(company_id=company_id, door_id=uuid.UUID(str(door_id)), active_project_only=True)
+        if not door or door.project_id != project_id:
+            raise NotFound("Door not found in project")
+        base = payload.get("base_version", payload.get("previous_version"))
+        if base is not None and int(base) != int(door.version or 0):
+            raise Conflict("Stale base_version", details={"door_id": str(door.id), "current_version": int(door.version or 0)})
+        WorkStagesService.complete_stage(
+            uow, company_id=company_id, actor_user_id=actor_user_id, installer_id=installer_id, door_id=door.id,
+            stage_code=str(stage_code).upper(), happened_at=happened_at, source="OFFLINE_SYNC", client_event_id=client_event_id,
         )
 
     @staticmethod

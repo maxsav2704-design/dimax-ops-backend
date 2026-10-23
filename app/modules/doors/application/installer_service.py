@@ -7,6 +7,7 @@ from app.modules.doors.application.completion import (
     create_completed_work_for_door,
     resolve_installation_time,
 )
+from app.modules.doors.application.stages_service import ensure_not_stage_door
 from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned, InvalidTransition
@@ -78,6 +79,7 @@ class InstallerDoorService:
 
         installed_at = None
         if to_status == DoorStatus.INSTALLED:
+            ensure_not_stage_door(uow, door)
             installed_at = resolve_installation_time(happened_at)
 
         door.status = to_status

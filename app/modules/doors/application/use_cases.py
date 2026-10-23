@@ -14,6 +14,7 @@ from app.modules.doors.application.commands import (
     MarkDoorInstalled,
     MarkDoorNotInstalled,
 )
+from app.modules.doors.application.stages_service import ensure_not_stage_door
 from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned
@@ -74,6 +75,8 @@ class DoorUseCases:
                 "Door is locked (already installed). Admin override required.",
                 details={"door_id": str(cmd.door_id)},
             )
+
+        ensure_not_stage_door(uow, door)
 
         # ставим installed
         installed_at = resolve_installation_time(cmd.happened_at, received_at=utcnow())
@@ -231,6 +234,7 @@ class DoorUseCases:
         }
 
         if cmd.new_status == "INSTALLED":
+            ensure_not_stage_door(uow, door)
             installed_at = (
                 door.installed_at
                 if from_status == DoorStatus.INSTALLED and door.installed_at is not None

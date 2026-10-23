@@ -6,6 +6,7 @@ _MODEL_MODULES = (
     "app.modules.accounting.infrastructure.models",
     "app.modules.accounting.infrastructure.approval_models",
     "app.modules.accounting.infrastructure.agreement_models",
+    "app.modules.doors.infrastructure.stage_models",
     "app.modules.identity.infrastructure.models",
     "app.modules.identity.infrastructure.refresh_tokens_models",
     "app.modules.audit.infrastructure.models",

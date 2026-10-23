@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     AI_DAILY_TASK_LIMIT_PER_COMPANY: int = Field(default=500, ge=1, le=100000)
     # Commercial activation stage (0087): OWNER puts factory-confirmed pairs into effect and sees period estimates.
     COMMERCIAL_ACTIVATION_ENABLED: bool = False
+    # Work stages (0088): doors installed in stages by several installers; stage earnings come in a later step.
+    WORK_STAGES_ENABLED: bool = False
     # Document import inbox (0083): watched folder and/or mailbox feeding the import inbox.
     IMPORT_INBOX_DIR: str = ""
     IMPORT_INBOX_COMPANY_ID: str = ""

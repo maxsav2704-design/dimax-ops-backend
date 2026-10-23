@@ -11,6 +11,8 @@ from app.modules.ai.api.admin import router as admin_ai
 from app.modules.ai.api.installer import router as installer_ai
 from app.modules.doors.api.admin import router as admin_doors
 from app.modules.doors.api.installer import router as installer_doors
+from app.modules.doors.api.stages_admin import router as admin_work_stages
+from app.modules.doors.api.stages_installer import router as installer_work_stages
 from app.modules.projects.api.admin import router as admin_projects
 from app.modules.projects.api.admin_addons import router as admin_project_addons
 from app.modules.projects.api.installer import router as installer_projects
@@ -137,6 +139,8 @@ router.include_router(admin_sync_health, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(installer_sync, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_doors, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(installer_doors, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(admin_work_stages, responses=SECURED_ROUTE_RESPONSES)
+router.include_router(installer_work_stages, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_door_types, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_reasons, responses=SECURED_ROUTE_RESPONSES)
 router.include_router(admin_settings, responses=SECURED_ROUTE_RESPONSES)
