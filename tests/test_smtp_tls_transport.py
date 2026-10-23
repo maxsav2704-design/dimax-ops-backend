@@ -141,10 +141,10 @@ class CaptureHandler(socketserver.BaseRequestHandler):
 
 
 @contextmanager
-def capture_server(certificates, certificate):
+def capture_server(certificates, certificate, *, port=0):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certificates / f"{certificate}.pem", certificates / "server.key")
-    with socketserver.TCPServer(("127.0.0.1", 0), CaptureHandler) as server:
+    with socketserver.TCPServer(("127.0.0.1", port), CaptureHandler) as server:
         server.tls_context = context
         server.commands = []
         server.envelope = []

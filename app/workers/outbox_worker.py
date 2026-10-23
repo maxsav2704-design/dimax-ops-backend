@@ -75,21 +75,24 @@ def _enqueue_whatsapp_fallback_email(
     return True
 
 
-def _commit_message(session, message) -> None:
+def _commit_message(session, message) -> bool:
     """Persist one message's outcome right away: a database error on a later
     message of the batch must not roll back (and later resend) this one.
     The deployment runs a single outbox worker, so the released row lock is safe."""
+    message_id = message.id
     try:
         session.commit()
+        return True
     except Exception as exc:  # noqa: BLE001
         session.rollback()
         log_event(
             logger,
             "outbox.message.commit_failed",
             level="error",
-            outbox_id=message.id,
+            outbox_id=message_id,
             error_type=type(exc).__name__,
         )
+        return False
 
 
 def run_once(limit: int = 20) -> int:
@@ -182,18 +185,22 @@ def run_once(limit: int = 20) -> int:
                     raise RuntimeError(f"Unknown channel: {m.channel}")
 
                 repo.mark_sent(m)
+                sent_log_fields = {
+                    "outbox_id": m.id,
+                    "company_id": m.company_id,
+                    "correlation_id": m.correlation_id,
+                    "channel": m.channel,
+                    "attempts": m.attempts,
+                }
+                if not _commit_message(session, m):
+                    # Rollback released batch locks; do not continue or report success.
+                    return processed
                 processed += 1
                 log_event(
                     logger,
                     "outbox.message.sent",
-                    outbox_id=m.id,
-                    company_id=m.company_id,
-                    correlation_id=m.correlation_id,
-                    channel=m.channel,
-                    attempts=m.attempts,
+                    **sent_log_fields,
                 )
-                _commit_message(session, m)
-
             except Exception as e:
                 payload = m.payload if isinstance(m.payload, dict) else {}
                 factory_invitation = payload.get("kind") in {FACTORY_INVITATION, FACTORY_CODE, WORK_INVITATION, WORK_CODE,
@@ -249,7 +256,8 @@ def run_once(limit: int = 20) -> int:
                     fallback_email_enqueued=fallback_email_enqueued,
                     error=err,
                 )
-                _commit_message(session, m)
+                if not _commit_message(session, m):
+                    return processed
 
         session.commit()
         if msgs:
