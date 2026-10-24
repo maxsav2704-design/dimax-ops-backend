@@ -37,7 +37,32 @@ were restored; normal health and readiness returned HTTP 200.
 
 ## Evidence status
 
-2026-10-24: 27 safety unit tests passed. Remote full runtime pending.
+2026-10-24: 27 safety unit tests passed locally and in CI. Full runtime PASSED:
+
+- Run: https://github.com/maxsav2704-design/dimax-ops-backend/actions/runs/40077862961
+- Tested code: `47049549a3b7937ce1f7d1df400c20e5c0f849f2`.
+- Migration head: `0088_work_stages`; 73 public tables.
+- Source and restored schema/data/sequence fingerprints matched.
+- Two actual renderer PDFs (Hebrew/Russian) restored from the downloaded backup
+  after the original synthetic MinIO container and volume were removed.
+- PDF SHA256, length, MIME type, parser checks and journal references matched.
+- Corrupt PDF, missing PDF and a weakened role CHECK were rejected. Original
+  objects/constraint were restored and verified again.
+- Pending synthetic email rows were preserved. No workers or external delivery
+  ran in the test environment; resuming delivery after recovery is not tested.
+- All owned containers, volumes, network and temporary files were removed.
+- Runner available RAM: 14,764 MiB. Complete job: 3m18s including image builds;
+  this small synthetic run is not evidence of production recovery time.
+- Local workers restored; API `/health` and `/ready` returned HTTP 200 afterward.
+
+The first two remote runs failed on CHECK-definition text differences, not data
+loss. PostgreSQL distributes array casts when reparsing restored constraints.
+The full probe now reparses each CHECK in a temporary table inside a rolled-back
+savepoint before comparing it. It does not remove constraints from comparison,
+rewrite application migrations, or normalize SQL using regex. A real weakening
+to `CHECK (true)` is tested and rejected. The generic psql snapshot helper keeps
+its stricter raw-definition comparison; this full probe supplies normalization
+through its isolated direct-connection adapter.
 
 ## Limits
 
