@@ -73,7 +73,12 @@ def _digest_file(stream):
 
 
 def _snapshot(base, args, database):
-    tables = _query(base, args, database, """
+    return snapshot_with_query(lambda sql, **kwargs: _query(base, args, database, sql, **kwargs))
+
+
+def snapshot_with_query(query):
+    """Use the same checks with either psql or an isolated direct DB connection."""
+    tables = query("""
         SELECT quote_ident(table_schema)||'.'||quote_ident(table_name)
         FROM information_schema.tables
         WHERE table_schema='public' AND table_type='BASE TABLE'
@@ -85,7 +90,7 @@ def _snapshot(base, args, database):
     for table in tables:
         # Store only row hashes locally; sorting handles different physical row order.
         with tempfile.TemporaryFile() as hashes:
-            _query(base, args, database, f"""
+            query(f"""
                 SELECT encode(sha256(convert_to(row_to_json(t)::text,'UTF8')),'hex') AS h
                 FROM {table} AS t ORDER BY h
             """, stdout=hashes)
@@ -114,13 +119,13 @@ def _snapshot(base, args, database):
             FROM pg_sequences WHERE schemaname='public' ORDER BY sequencename""",
     ]
     for index, sql in enumerate(metadata):
-        result[f"metadata:{index}"] = hashlib.sha256(_query(base, args, database, sql)).hexdigest()
-    sequences = _query(base, args, database, """
+        result[f"metadata:{index}"] = hashlib.sha256(query(sql)).hexdigest()
+    sequences = query("""
         SELECT quote_ident(schemaname)||'.'||quote_ident(sequencename)
         FROM pg_sequences WHERE schemaname='public' ORDER BY sequencename
     """).decode().splitlines()
     for sequence in sequences:
-        result[f"sequence:{sequence}"] = _query(base, args, database, f"SELECT last_value,is_called FROM {sequence}")
+        result[f"sequence:{sequence}"] = query(f"SELECT last_value,is_called FROM {sequence}")
     return result
 
 
