@@ -64,6 +64,26 @@ def engine():
     return create_engine(settings.DATABASE_URL, poolclass=NullPool)
 
 
+def canonical_check(connection, table, definition):
+    """Reparse CHECK via PostgreSQL, as pg_restore does; never alter real tables."""
+    from sqlalchemy import text
+    quote = connection.dialect.identifier_preparer.quote
+    temporary = 'restore_check_' + uuid.uuid4().hex
+    # PostgreSQL can distribute an array cast to its elements during restore.
+    # A temporary round trip gives both sides the same parser representation.
+    with connection.begin_nested() as transaction:
+        connection.exec_driver_sql(f'CREATE TEMP TABLE {quote(temporary)} (LIKE public.{quote(table)})')
+        connection.exec_driver_sql(f'ALTER TABLE {quote(temporary)} ADD CONSTRAINT restore_check {definition}')
+        result = connection.execute(text('''
+            SELECT pg_get_constraintdef(con.oid)
+            FROM pg_constraint con JOIN pg_class c ON c.oid=con.conrelid
+            WHERE c.relnamespace=pg_my_temp_schema() AND c.relname=:name
+              AND con.conname='restore_check'
+        '''), {'name': temporary}).scalar_one()
+        transaction.rollback()
+    return result
+
+
 def fingerprint(evidence_name=None):
     from scripts.db_backup_restore_smoke import snapshot_with_query
     db = engine()
@@ -81,6 +101,11 @@ def fingerprint(evidence_name=None):
                         return 't' if value else 'f'
                     return str(value)
                 rows = connection.exec_driver_sql(sql)
+                if 'pg_get_constraintdef' in sql:
+                    rows = [tuple(row) for row in rows]
+                    rows = [(table, name, canonical_check(connection, table, definition)
+                             if definition.startswith('CHECK ') else definition, validated)
+                            for table, name, definition, validated in rows]
                 target = stdout if stdout is not None else BytesIO()
                 for row in rows:
                     target.write(('|'.join(cell(value) for value in row) + '\n').encode('utf-8'))
@@ -232,6 +257,34 @@ def verify_database():
         raise RuntimeError('Full schema/data/sequence fingerprint mismatch')
     require(refs() == load('references.json'), 'Restored PDF references differ')
     print('PASS: complete migrated schema and every public table match; PDF references preserved', flush=True)
+    from app.core.config import settings
+    from sqlalchemy.engine import make_url
+    if make_url(settings.DATABASE_URL).database == 'dimax_full_restored':
+        verify_constraint_detection(expected)
+
+
+def verify_constraint_detection(expected):
+    """Weakening a real CHECK must not pass canonicalized comparison."""
+    db = engine()
+    try:
+        with db.begin() as connection:
+            definition = connection.exec_driver_sql('''
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conrelid='public.admin_profiles'::regclass
+                  AND conname='ck_admin_profiles_scope'
+            ''').scalar_one()
+            connection.exec_driver_sql('ALTER TABLE public.admin_profiles DROP CONSTRAINT ck_admin_profiles_scope')
+            connection.exec_driver_sql('ALTER TABLE public.admin_profiles ADD CONSTRAINT ck_admin_profiles_scope CHECK (true)')
+        try:
+            require(fingerprint() != expected, 'Weakened CHECK was accepted')
+        finally:
+            with db.begin() as connection:
+                connection.exec_driver_sql('ALTER TABLE public.admin_profiles DROP CONSTRAINT ck_admin_profiles_scope')
+                connection.exec_driver_sql(f'ALTER TABLE public.admin_profiles ADD CONSTRAINT ck_admin_profiles_scope {definition}')
+        require(fingerprint() == expected, 'Synthetic CHECK was not restored')
+        print('PASS: weakened role CHECK rejected; original CHECK restored and reverified', flush=True)
+    finally:
+        db.dispose()
 
 
 def storage_backup():
