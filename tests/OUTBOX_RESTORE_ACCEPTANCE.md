@@ -52,7 +52,29 @@ python -B scripts/test_full_restore_acceptance.py --resume-outbox \
 ```
 
 Workflow: `Restored Outbox Acceptance`.
-2026-10-24: 32 host safety tests passed; remote runtime pending.
+2026-10-24: 32 safety tests passed locally and in CI. The complete isolated
+runtime passed on commit `5c4a7af634a31ba99291101bed28daa09e050c27`:
+
+https://github.com/maxsav2704-design/dimax-ops-backend/actions/runs/40079069030
+
+The runner had 14,667 MiB available RAM. It migrated/restored 73 public tables
+through `0088_work_stages`, recovered both PDFs, and completed every scenario
+above. Two saved earning rows (18.02 total), two signatures, doors and all
+other business rows remained unchanged. The initial synthetic source database
+also matched its original full fingerprint at the end. All owned resources
+and temporary files were removed. Total CI job time was 3m42s; this is not a
+production recovery-time commitment.
+
+Both risk scenarios were positively reproduced: stale restore resubmitted two
+already accepted messages; a failed commit after SMTP acceptance produced one
+duplicate acceptance. A green test therefore means the stated behavior and
+limitations were verified, NOT that arbitrary automatic recovery is safe.
+
+The first runtime attempt stopped because the test's pre-send dump was in
+container tmpfs, which disappears when PostgreSQL is stopped between phases.
+Only the acceptance runner was corrected: dumps now stay in its own disposable
+test volume until final cleanup. No working deployment, migration, application
+worker or Claude-owned change was modified in this step.
 
 ## Safe operational sequence
 
