@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from difflib import unified_diff
 from hashlib import sha256
 from io import BytesIO
 import json
@@ -63,9 +64,10 @@ def engine():
     return create_engine(settings.DATABASE_URL, poolclass=NullPool)
 
 
-def fingerprint():
+def fingerprint(evidence_name=None):
     from scripts.db_backup_restore_smoke import snapshot_with_query
     db = engine()
+    evidence = {}
     try:
         with db.connect() as connection:
             connection.exec_driver_sql("SET TIME ZONE 'UTC'")
@@ -82,7 +84,11 @@ def fingerprint():
                 target = stdout if stdout is not None else BytesIO()
                 for row in rows:
                     target.write(('|'.join(cell(value) for value in row) + '\n').encode('utf-8'))
-                return None if stdout is not None else target.getvalue()
+                if stdout is not None:
+                    return None
+                value = target.getvalue()
+                evidence[sql] = value.decode('utf-8')
+                return value
 
             result = snapshot_with_query(query)
             # pg_dump restores these too; include definitions beyond base tables.
@@ -94,6 +100,8 @@ def fingerprint():
             }
             for name, sql in catalogs.items():
                 result['catalog:' + name] = sha256(query(sql)).hexdigest()
+            if evidence_name:
+                save(evidence_name, evidence)
             return json.loads(json.dumps(result, default=lambda value: value.decode('utf-8')))
     finally:
         db.dispose()
@@ -203,14 +211,25 @@ def seed():
         db.dispose()
     save('pdf-manifest.json', files)
     save('references.json', refs())
-    snapshot = fingerprint()
+    snapshot = fingerprint('source-catalog-evidence.json')
     save('source-fingerprint.json', snapshot)
     save('schema-info.json', {'heads': expected_heads, 'tables': sum(key.startswith('public.') for key in snapshot)})
     print('PASS: real migrations at', expected_heads, '; tables=', load('schema-info.json')['tables'], '; synthetic PDFs=2', flush=True)
 
 
 def verify_database():
-    require(fingerprint() == load('source-fingerprint.json'), 'Full schema/data/sequence fingerprint mismatch')
+    actual = fingerprint('current-catalog-evidence.json')
+    expected = load('source-fingerprint.json')
+    if actual != expected:
+        print('Mismatched fingerprint keys:', sorted(key for key in actual.keys() | expected.keys()
+              if actual.get(key) != expected.get(key)), flush=True)
+        before, after = load('source-catalog-evidence.json'), load('current-catalog-evidence.json')
+        for sql in before.keys() | after.keys():
+            if before.get(sql) != after.get(sql):
+                print('Catalog query:', sql, flush=True)
+                print('\n'.join(unified_diff(before.get(sql, '').splitlines(), after.get(sql, '').splitlines(),
+                                            fromfile='source', tofile='restored'))[:6000], flush=True)
+        raise RuntimeError('Full schema/data/sequence fingerprint mismatch')
     require(refs() == load('references.json'), 'Restored PDF references differ')
     print('PASS: complete migrated schema and every public table match; PDF references preserved', flush=True)
 
