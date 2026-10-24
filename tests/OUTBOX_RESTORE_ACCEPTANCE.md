@@ -83,8 +83,8 @@ This is a runbook, not authorization to alter a working deployment:
 1. Keep outbound workers stopped before and throughout recovery. Ensure the
    service manager will not auto-start them. Do not rely on EMAIL_ENABLED alone:
    the current outbox loop processes queued EMAIL jobs independently of that flag.
-   Do not start two workers against the same queue; the current worker commits
-   per message and releases the rest of its batch locks.
+   The recovery-gate update claims one message per transaction and serializes
+   delivery/recovery decisions with a PostgreSQL transaction advisory lock.
 2. Restore DB and PDFs into an isolated target. Check snapshot cut-off time,
    schema/data fingerprints, object integrity and journal references first.
 3. Preserve the restored outbox as evidence. Never truncate/recreate it, reset
@@ -99,8 +99,8 @@ This is a runbook, not authorization to alter a working deployment:
 6. If evidence is incomplete, keep outbound processing stopped. Do not silently
    mark uncertain messages SENT (which could lose mail), or blindly retry them
    (which could duplicate it). An authorized, recorded decision is required.
-   There is no new production reconciliation UI or per-job recovery hold in
-   this change; do not resolve this by unaudited SQL edits.
+   Use the recovery API below, never unaudited SQL edits. The dedicated admin
+   visual panel is not part of this backend change.
 7. Only after the boundary is verified/reconciled, resume one worker and monitor
    failures/backoff. Recheck work/earning/signature counts and sums. Re-delivery
    is a communication action, never a reason to repeat business actions.
@@ -111,6 +111,59 @@ Automatic unattended resumption from an arbitrary old backup is NOT approved.
 Plain SMTP and a database commit do not form one atomic transaction. A durable,
 audited recovery hold/reconciliation workflow and independent provider evidence
 are needed for that use case; a stable Message-ID alone is not deduplication.
-Multi-worker races, large-volume recovery, external provider delivery receipts,
+Large-volume recovery, external provider delivery receipts,
 factory invitation validity after recovery, and a real business database are
 outside this synthetic journal-email acceptance.
+
+## Recovery gate (0089, implementation under acceptance)
+
+The previous result above describes the pre-gate baseline. The new workflow
+`outbox-recovery-gate.yml` checks the implementation separately, including a
+fresh restore of the pre-send dump and actual SMTP/PDF submission after review.
+Do not treat code being present as evidence of a successful acceptance run.
+
+Deployment sequence (no working environment was changed during development):
+
+1. Stop ALL outbound workers and prevent automatic restart BEFORE restoring.
+2. Generate a fresh UUID outside the restored database and backup files. Set
+   `OUTBOX_RECOVERY_EPOCH` to this same UUID on API and every outbound worker.
+   Never reuse an epoch from an earlier backup or recover the old deployment
+   environment blindly. This is the independent restore fence; PostgreSQL
+   cannot detect an unannounced restore when all external configuration is reused.
+3. Restore into the intended target, verify DB/PDF integrity and apply migration
+   `0089_outbox_recovery` there. Do not run this against a working DB as a test.
+4. With the new epoch, dispatch is blocked for every company until its OWNER
+   opens and releases a review. Start API, inspect `GET /api/v1/admin/outbox/recovery`.
+5. OWNER calls `POST /recovery/begin` with a nonblank reason. Every non-SENT job
+   (including exhausted, future and WhatsApp jobs) is captured. No recipient,
+   payload, signing, approval or earning operation is replayed.
+6. OWNER/OPERATIONS inspect `/recovery/items` and existing outbox details, then
+   `POST /recovery/items/{id}/decisions` with `request_id` UUID, `expected_revision`,
+   `action`, `reason`, `evidence` reference. Do not put secret links/passwords or
+   mailbox codes in evidence. For `ACCEPTED`, include timezone-aware `accepted_at`.
+7. `HOLD`: unknown outcome, retains the job but forbids dispatch and normal retry.
+   `ACCEPTED`: independently confirmed provider acceptance, marks only the outbox
+   job SENT; not inbox delivery, not journal signature or factory confirmation.
+   `RETRY`: independently checked need to send, authorizes another attempt;
+   keeps future schedule/backoff and grants one attempt if exhausted.
+8. OWNER calls `POST /recovery/release` with a reason only when no undecided
+   items remain. HOLD is an explicit reviewed decision but remains blocked.
+   A held item can later receive a new evidence-backed RETRY/ACCEPTED decision.
+   Final RETRY/ACCEPTED decisions cannot be rewritten. Release never calls a
+   business service and cannot accrue wages or confirm a price.
+9. `/recovery/decisions` returns paginated immutable history with actor, time,
+   evidence and revision. Opening, decisions and release also enter the existing
+   audit log atomically. Request replay is idempotent, stale revisions conflict.
+10. Resume workers with the same epoch. Removing the setting after a company
+    has a recovery record fails closed; stale workers cannot bypass a newer
+    opened review. Stop all workers before the next restore and rotate again.
+
+Compatibility: with no epoch and no recovery record, the pre-existing deployment
+continues normally. This does NOT automatically detect disaster recovery. Recovery
+tooling/operators MUST set the fresh epoch before starting restored services.
+Migration and deployment configuration were not applied to working data.
+
+Scope: authenticated API and durable admin decision journal, not a new admin UI.
+SMTP/DB commit uncertainty still exists during normal operation: this change
+prevents blind post-restore replay, it does not claim exactly-once email transport.
+Evidence authenticity still requires an authorized operator's provider-side check.

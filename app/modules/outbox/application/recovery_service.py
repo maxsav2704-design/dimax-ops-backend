@@ -77,6 +77,9 @@ class OutboxRecoveryService:
         run = uow.session.scalar(query.where(Recovery.epoch == epoch))
         if run is None:
             return RecoveryStatusDTO(epoch=epoch, recovery_id=None, state="REVIEW_REQUIRED")
+        latest = uow.session.scalar(query.order_by(Recovery.opened_at.desc(), Recovery.id.desc()).limit(1))
+        if latest.epoch != epoch:
+            return RecoveryStatusDTO(epoch=epoch, recovery_id=None, state="CONFIGURATION_REQUIRED")
         counts = dict(uow.session.execute(select(Item.action, func.count()).where(
             Item.company_id == user.company_id, Item.recovery_id == run.id,
         ).group_by(Item.action)).all())

@@ -12,11 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.modules.audit.infrastructure.models import AuditLogORM
-from app.modules.identity.infrastructure.models import AdminProfileORM
+from app.modules.identity.infrastructure.models import AdminProfileORM, UserORM
 from app.modules.outbox.domain.enums import OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM as Message
 from app.modules.outbox.infrastructure.recovery_gate import lock_delivery
-from app.modules.outbox.infrastructure.recovery_models import OutboxRecoveryDecisionORM as Decision
+from app.modules.outbox.infrastructure.recovery_models import OutboxRecoveryItemORM as Item
 from app.modules.outbox.infrastructure.repositories import OutboxRepository
 
 pytestmark = pytest.mark.skipif(os.getenv("DIMAX_RECOVERY_GATE_TEST") != "synthetic-only",
@@ -189,6 +189,23 @@ def test_dispatch_and_admin_share_transaction_lock(case):
         assert OutboxRepository(other).lock_next_batch(company_id=case.company) == []
         case.session.rollback()
         assert lock_delivery(other, wait=False)
+
+
+def test_installer_cannot_review_even_with_forged_admin_dependency(case):
+    items = begin(case)
+    user = case.session.get(UserORM, case.user.id)
+    user.role = "INSTALLER"
+    case.session.commit()
+    assert case.client.get(PREFIX).status_code == 403
+    assert decide(case, items[0])[0].status_code == 403
+
+
+def test_database_rejects_cross_tenant_recovery_item(case):
+    item = begin(case)[0]
+    with pytest.raises(DBAPIError), case.session.begin_nested():
+        case.session.execute(text("UPDATE outbox_recovery_items SET company_id=:foreign WHERE id=:id"),
+                             {"foreign": uuid4(), "id": item["id"]})
+    assert case.session.get(Item, item["id"]).company_id == case.company
 
 
 def test_plain_deployment_unchanged_until_recovery_activated(case, monkeypatch):
