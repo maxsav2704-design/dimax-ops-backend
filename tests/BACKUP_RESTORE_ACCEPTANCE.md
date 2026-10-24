@@ -1,18 +1,32 @@
-# Safe backup/restore rehearsal: 2026-10-23
+# Safe backup/restore rehearsal: 2026-10-24
 
 ## Current result
 
-**Tooling and safety unit tests complete; real PostgreSQL rehearsal NOT YET RUN.**
-The first runtime attempt stopped before Docker because available host RAM was
-below 256 MiB. A second attempt through a lighter shell also stopped before
-Docker, with only 29 MiB available. No test container or volume was created by
-either attempt, and working services were not stopped or restarted.
+**Eighteen safety unit tests pass; real PostgreSQL rehearsal INCOMPLETE.**
+The October 23 attempts stopped before Docker because free host RAM was below
+256 MiB. On October 24 the user authorized pausing only the five DIMAX workers,
+leaving the ordinary API, PostgreSQL and MinIO running. After that pause free RAM
+was 417 MiB and one isolated container/volume was created.
 
-Sixteen standard-library tests passed in 0.239 seconds. They mock Docker and
-database commands; they do not establish that pg_dump/pg_restore works. The first
-sandboxed unit run encountered Windows temporary-directory permission errors;
-the subsequent authorized normal-host run passed. Do not report a database
-restore PASS until the runtime command below completes, including cleanup.
+That runtime attempt failed while seeding (psql exit 2), before pg_dump/pg_restore.
+The runner removed its owned container and volume in its finally block. Inspection
+of readiness code identified a startup race: pg_isready over a Unix socket can
+accept the image's temporary initialization server, which subsequently shuts down.
+Readiness now waits for the final TCP listener inside the network-isolated
+container. Two regression tests cover retry and timeout. This fix has not yet
+been validated against a second running PostgreSQL instance.
+
+Subsequent runtime attempts refused to start at 215, 47 and 35 MiB free RAM,
+including after a short wait, even with the five workers paused. The 256 MiB
+guard was not lowered. No second test container/volume was created. The original
+five workers are restored after this attempt; the ordinary API, database and
+MinIO were not stopped or recreated. No application migration or working-data
+query was used for the rehearsal.
+
+Eighteen standard-library tests passed in 0.176 seconds. They mock Docker and
+database commands, so they do not establish a successful database restore.
+Do not report a restore PASS until the runtime command below completes,
+including cleanup. Full app-schema and object-store recovery remain unverified.
 
 ## Existing risks corrected
 
@@ -89,7 +103,8 @@ python -B -m unittest discover -s tests -p test_backup_restore_safety.py -v
 These cover dangerous arguments, missing/mixed context, existing files/databases,
 dump/restore failures, unknown createdb timeout, fingerprint/archive mismatches,
 cleanup failure, empty schema, low RAM, mutable image tags and an unavailable
-Docker daemon during cleanup inspection. Tests create only private temporary files.
+Docker daemon during cleanup inspection, final-server readiness and readiness
+timeout. Tests create only private temporary files.
 
 ## Remaining release gates
 

@@ -91,6 +91,18 @@ def expect_failure(action, text):
         raise AssertionError(f"Expected refusal: {text}")
 
 
+def wait_ready(name):
+    # The image's initialization server accepts Unix sockets only. Wait for the
+    # final TCP listener, otherwise seeding can race the initialization shutdown.
+    for _ in range(30):
+        result = docker("exec", name, "pg_isready", "-h", "127.0.0.1",
+                        "-U", "postgres", "-d", "synthetic_source", check=False)
+        if result.returncode == 0:
+            return
+        time.sleep(1)
+    raise RuntimeError("Isolated PostgreSQL did not become ready")
+
+
 def exercise(name, directory):
     args = SimpleNamespace(source_db="synthetic_source", restore_db="synthetic_restore",
                            db_user="postgres", service="db", container=name,
@@ -164,13 +176,7 @@ def main():
                "--env", "POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C",
                image, "postgres", "-c", "shared_buffers=8MB", "-c", "max_connections=8",
                "-c", "work_mem=1MB", "-c", "maintenance_work_mem=8MB")
-        for _ in range(30):
-            result = docker("exec", name, "pg_isready", "-U", "postgres", "-d", "synthetic_source", check=False)
-            if result.returncode == 0:
-                break
-            time.sleep(1)
-        else:
-            raise RuntimeError("Isolated PostgreSQL did not become ready")
+        wait_ready(name)
         if not owned_container(name, run_id):
             raise RuntimeError("Container ownership mismatch")
         with tempfile.TemporaryDirectory(prefix="dimax-restore-") as temporary:

@@ -151,6 +151,22 @@ class RestoreSafetyTests(unittest.TestCase):
 
 
 class AcceptanceGuardTests(unittest.TestCase):
+    def test_readiness_waits_for_final_tcp_server(self):
+        responses = [SimpleNamespace(returncode=1), SimpleNamespace(returncode=0)]
+        with patch.object(acceptance, "docker", side_effect=responses) as docker, \
+             patch.object(acceptance.time, "sleep") as sleep:
+            acceptance.wait_ready("owned-test")
+        self.assertEqual(docker.call_count, 2)
+        for call in docker.call_args_list:
+            self.assertEqual(call.args[3:5], ("-h", "127.0.0.1"))
+        sleep.assert_called_once_with(1)
+
+    def test_readiness_timeout_refuses_to_seed(self):
+        with patch.object(acceptance, "docker", return_value=SimpleNamespace(returncode=1)), \
+             patch.object(acceptance.time, "sleep"), \
+             self.assertRaisesRegex(RuntimeError, "did not become ready"):
+            acceptance.wait_ready("owned-test")
+
     def test_low_memory_stops_before_docker(self):
         with patch.object(acceptance, "free_memory_mib", return_value=128), \
              patch.object(acceptance, "docker") as docker, self.assertRaisesRegex(RuntimeError, "RAM"):
