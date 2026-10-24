@@ -54,6 +54,31 @@ This procedure temporarily fits a small fixture onto this memory-constrained
 machine; it does not resolve the machine's sustained capacity shortage. Do not
 start a full-stack acceptance environment on the basis of this result.
 
+## Operational handback
+
+Restoring the workers initially hit `resource temporarily unavailable` on outbox,
+leaving outbox and maintenance stopped. A host HTTP probe also timed out during
+this pressure. The API/database/MinIO containers were never restarted.
+
+Read-only WSL inspection showed 795252 KiB Cached (about 777 MiB), 0 KiB Dirty,
+and 933468 KiB MemAvailable inside the VM, while Windows had very little free RAM.
+One explicit diagnostic `sysctl -w vm.drop_caches=1` in docker-desktop released
+clean WSL page cache, without removing files, changing persistent WSL settings,
+or restarting Docker. This is a one-off cache operation, not a scheduled fix or
+a change to application/database settings. Cache rebuilding can temporarily add
+I/O; do not automate repeated cache dropping. See the
+[Microsoft WSL memory-reclaim explanation](https://devblogs.microsoft.com/commandline/memory-reclaim-in-the-windows-subsystem-for-linux-2/)
+and [kernel guidance](https://www.kernel.org/doc/html/v6.12/admin-guide/sysctl/vm.html#drop-caches).
+
+After that operation and the user's closure of unnecessary applications, Windows
+reported 294 MiB available. The individual contribution of each action was not
+measured. Starting the original outbox and maintenance containers then succeeded.
+Final docker ps confirmed all five original workers running and the unchanged API
+and database healthy; MinIO was still running. Both host /health and /ready
+returned HTTP 200, with database ready, after all five workers were restored.
+No test container or volume remains. Do not interpret a recovered local session
+as evidence that 4 GiB RAM is sufficient for sustained full-stack operation.
+
 ## Existing risks corrected
 
 The old smoke script truncated an existing dump path, interpolated unchecked
