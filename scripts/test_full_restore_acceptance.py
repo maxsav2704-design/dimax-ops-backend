@@ -176,10 +176,12 @@ def exercise(root, temporary, resources, images, *, resume_outbox=False):
     job('seed')
     if resume_outbox:
         job('prepare', outbox=True)
-    # Dump never leaves the owned test PostgreSQL container; no shell redirection.
-    docker('exec', pg, 'pg_dump', '-U', 'postgres', '-d', 'dimax_full_source', '-Fc', '-f', '/tmp/full.dump')
+    # Keep dumps in the owned test volume: /tmp is tmpfs and is lost on stop.
+    initial_dump = '/var/lib/postgresql/data/dimax-test-full.dump'
+    sent_dump = '/var/lib/postgresql/data/dimax-test-sent.dump'
+    docker('exec', pg, 'pg_dump', '-U', 'postgres', '-d', 'dimax_full_source', '-Fc', '-f', initial_dump)
     docker('exec', pg, 'createdb', '-U', 'postgres', '--template=template0', 'dimax_full_restored')
-    docker('exec', pg, 'pg_restore', '-U', 'postgres', '-d', 'dimax_full_restored', '--exit-on-error', '--single-transaction', '/tmp/full.dump')
+    docker('exec', pg, 'pg_restore', '-U', 'postgres', '-d', 'dimax_full_restored', '--exit-on-error', '--single-transaction', initial_dump)
     job('verify-db', 'dimax_full_restored')
     job('verify-db', 'dimax_full_source')
     docker('stop', '--timeout', '30', pg)
@@ -210,11 +212,11 @@ def exercise(root, temporary, resources, images, *, resume_outbox=False):
         wait_database()
         job('offline', 'dimax_full_restored', outbox=True)
         job('online', 'dimax_full_restored', outbox=True)
-        docker('exec', pg, 'pg_dump', '-U', 'postgres', '-d', 'dimax_full_restored', '-Fc', '-f', '/tmp/sent.dump')
+        docker('exec', pg, 'pg_dump', '-U', 'postgres', '-d', 'dimax_full_restored', '-Fc', '-f', sent_dump)
         for step, database, archive in (
-            ('sent-copy', 'dimax_full_sent', '/tmp/sent.dump'),
-            ('stale-copy', 'dimax_full_replay', '/tmp/full.dump'),
-            ('commit-gap', 'dimax_full_uncertain', '/tmp/full.dump'),
+            ('sent-copy', 'dimax_full_sent', sent_dump),
+            ('stale-copy', 'dimax_full_replay', initial_dump),
+            ('commit-gap', 'dimax_full_uncertain', initial_dump),
         ):
             docker('exec', pg, 'createdb', '-U', 'postgres', '--template=template0', database)
             docker('exec', pg, 'pg_restore', '-U', 'postgres', '-d', database, '--exit-on-error', '--single-transaction', archive)
