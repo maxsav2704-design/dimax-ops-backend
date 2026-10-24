@@ -24,12 +24,13 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def guard():
+def guard(allowed_databases=None):
     from sqlalchemy.engine import make_url
     from app.core.config import settings
     url = make_url(settings.DATABASE_URL)
     require(os.environ.get('DIMAX_FULL_RESTORE') == 'synthetic-only', 'Explicit acceptance flag required')
-    require(url.host == 'recovery-db' and url.database in {'dimax_full_source', 'dimax_full_restored'}, 'Unsafe database coordinates')
+    databases = allowed_databases if allowed_databases is not None else {'dimax_full_source', 'dimax_full_restored'}
+    require(url.host == 'recovery-db' and url.database in databases, 'Unsafe database coordinates')
     require(settings.MINIO_ENDPOINT == 'recovery-storage:9000' and settings.MINIO_BUCKET == BUCKET, 'Unsafe storage coordinates')
     require(not settings.EMAIL_ENABLED and not settings.WHATSAPP_ENABLED and not settings.AI_ENABLED, 'External delivery must be disabled')
     require(not Path('.env').exists(), 'No dotenv file may be present')

@@ -21,12 +21,13 @@ else:
 LABEL = 'dimax.full-restore-acceptance'
 
 
-def preflight(images):
+def preflight(images, *, resume_outbox=False):
     if any(not re.fullmatch(r'sha256:[0-9a-f]{64}', image) for image in images):
         raise ValueError('Cached immutable image IDs required')
     available = free_memory_mib()
-    if available < 768:
-        raise RuntimeError(f'At least 768 MiB free host RAM required; available={available:.0f} MiB; no resources created')
+    minimum = 1024 if resume_outbox else 768
+    if available < minimum:
+        raise RuntimeError(f'At least {minimum} MiB free host RAM required; available={available:.0f} MiB; no resources created')
     if shutil.disk_usage(Path(__file__).resolve().parents[1]).free < 1024**3:
         raise RuntimeError('At least 1 GiB free workspace disk required')
     print(f'[full-restore] free host RAM={available:.0f} MiB; phases sequential', flush=True)
@@ -75,7 +76,7 @@ class Resources:
             raise RuntimeError('Cleanup incomplete: ' + '; '.join(failures))
 
 
-def freeze_sources(root, target):
+def freeze_sources(root, target, *, resume_outbox=False):
     """Copy code only; avoid dotenv, caches, Git, databases and concurrent edits."""
     selected = []
     for folder in ('app', 'alembic'):
@@ -85,6 +86,8 @@ def freeze_sources(root, target):
             if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc' and not path.name.startswith('.env'):
                 selected.append(path.relative_to(root))
     selected += [Path('alembic.ini'), Path('scripts/db_backup_restore_smoke.py'), Path('scripts/full_restore_probe.py')]
+    if resume_outbox:
+        selected += [Path('scripts/outbox_restore_probe.py'), Path('tests/test_smtp_tls_transport.py')]
     before = {str(path): sha256((root / path).read_bytes()).hexdigest() for path in selected}
     for relative in selected:
         destination = target / relative
@@ -97,12 +100,12 @@ def freeze_sources(root, target):
     return sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()
 
 
-def exercise(root, temporary, resources, images):
+def exercise(root, temporary, resources, images, *, resume_outbox=False):
     postgres_image, app_image, storage_image = images
     source, work = temporary / 'source', temporary / 'work'
     source.mkdir()
     work.mkdir()
-    source_hash = freeze_sources(root, source)
+    source_hash = freeze_sources(root, source, resume_outbox=resume_outbox)
     print('[full-restore] frozen code SHA256=' + source_hash, flush=True)
     label = ['--label', f'{LABEL}={resources.run_id}']
     network = resources.reserve('network', 'network')
@@ -128,14 +131,16 @@ def exercise(root, temporary, resources, images):
         '--env', 'POSTGRES_DB=dimax_full_source', '--env', 'POSTGRES_PASSWORD=synthetic-local-only',
         '--env', 'POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C',
     ], ['postgres', '-c', 'shared_buffers=8MB', '-c', 'max_connections=8', '-c', 'work_mem=1MB', '-c', 'maintenance_work_mem=8MB'])
-    for _ in range(40):
-        if docker('exec', pg, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'dimax_full_source', check=False).returncode == 0:
-            break
-        time.sleep(1)
-    else:
+    def wait_database():
+        for _ in range(40):
+            if docker('exec', pg, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'dimax_full_source', check=False).returncode == 0:
+                return
+            time.sleep(1)
         raise RuntimeError('Test PostgreSQL not ready')
 
-    def job(step, database='dimax_full_source'):
+    wait_database()
+
+    def job(step, database='dimax_full_source', *, outbox=False):
         env = {
             'DIMAX_FULL_RESTORE': 'synthetic-only', 'APP_ENV': 'test',
             'DATABASE_URL': f'postgresql+psycopg2://postgres:synthetic-local-only@recovery-db:5432/{database}',
@@ -146,6 +151,8 @@ def exercise(root, temporary, resources, images):
             'MINIO_SECURE': 'false', 'PYTHONPATH': '/probe', 'PYTHONDONTWRITEBYTECODE': '1',
             'PUBLIC_BASE_URL': 'https://api.dimax.example', 'PUBLIC_APP_BASE_URL': 'https://app.dimax.example',
         }
+        if outbox:
+            env['DIMAX_OUTBOX_RESTORE'] = 'synthetic-only'
         options = ['--memory', '256m', '--memory-swap', '256m', '--workdir', '/probe',
                    '--entrypoint', 'python', '--tmpfs', '/tmp:rw,nosuid,size=32m',
                    '--mount', f'type=bind,source={source},target=/probe,readonly',
@@ -155,7 +162,8 @@ def exercise(root, temporary, resources, images):
             options += ['--user', f'{os.getuid()}:{os.getgid()}']
         for key, value in env.items():
             options += ['--env', f'{key}={value}']
-        name = container(step + '-' + database, app_image, options, ['-B', 'scripts/full_restore_probe.py', step])
+        probe = 'scripts/outbox_restore_probe.py' if outbox else 'scripts/full_restore_probe.py'
+        name = container(step + '-' + database, app_image, options, ['-B', probe, step])
         try:
             result = subprocess.run(['docker', 'wait', name], capture_output=True, timeout=600, check=False)
             logs = docker('logs', name, check=False)
@@ -166,6 +174,8 @@ def exercise(root, temporary, resources, images):
             resources.remove('container', name)
 
     job('seed')
+    if resume_outbox:
+        job('prepare', outbox=True)
     # Dump never leaves the owned test PostgreSQL container; no shell redirection.
     docker('exec', pg, 'pg_dump', '-U', 'postgres', '-d', 'dimax_full_source', '-Fc', '-f', '/tmp/full.dump')
     docker('exec', pg, 'createdb', '-U', 'postgres', '--template=template0', 'dimax_full_restored')
@@ -194,6 +204,23 @@ def exercise(root, temporary, resources, images):
     print('PASS: original synthetic MinIO container and data volume removed', flush=True)
     storage('restored-storage')
     job('restore-pdf', 'dimax_full_restored')
+    if resume_outbox:
+        # Only the owned test database starts. Normal DIMAX services are untouched.
+        docker('start', pg)
+        wait_database()
+        job('offline', 'dimax_full_restored', outbox=True)
+        job('online', 'dimax_full_restored', outbox=True)
+        docker('exec', pg, 'pg_dump', '-U', 'postgres', '-d', 'dimax_full_restored', '-Fc', '-f', '/tmp/sent.dump')
+        for step, database, archive in (
+            ('sent-copy', 'dimax_full_sent', '/tmp/sent.dump'),
+            ('stale-copy', 'dimax_full_replay', '/tmp/full.dump'),
+            ('commit-gap', 'dimax_full_uncertain', '/tmp/full.dump'),
+        ):
+            docker('exec', pg, 'createdb', '-U', 'postgres', '--template=template0', database)
+            docker('exec', pg, 'pg_restore', '-U', 'postgres', '-d', database, '--exit-on-error', '--single-transaction', archive)
+            job(step, database, outbox=True)
+        job('verify-db', 'dimax_full_source')
+        print('PASS: outbox recovery scenarios finished; stale snapshots and SMTP commit gap require operator reconciliation', flush=True)
     print('[full-restore] schema evidence=' + json.dumps(json.loads((work / 'schema-info.json').read_text())), flush=True)
 
 
@@ -201,9 +228,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('postgres', 'app', 'storage'):
         parser.add_argument('--' + name + '-image', required=True)
+    parser.add_argument('--resume-outbox', action='store_true', help='Also exercise restored outbox with loopback SMTP only')
     args = parser.parse_args()
     images = (args.postgres_image, args.app_image, args.storage_image)
-    preflight(images)
+    preflight(images, resume_outbox=args.resume_outbox)
     for image in images:
         docker('image', 'inspect', image, '--format', '{{.Id}}')
     resources = Resources(uuid4().hex)
@@ -213,7 +241,7 @@ def main():
     print('[full-restore] run=' + resources.run_id, flush=True)
     with tempfile.TemporaryDirectory(prefix='full-restore-', dir=temp_root) as temporary:
         try:
-            exercise(root, Path(temporary), resources, images)
+            exercise(root, Path(temporary), resources, images, resume_outbox=args.resume_outbox)
         finally:
             resources.cleanup()
     print('PASS: full-schema/PDF synthetic recovery; all owned resources and temporary files removed', flush=True)
