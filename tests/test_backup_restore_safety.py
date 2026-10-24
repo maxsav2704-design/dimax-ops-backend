@@ -151,6 +151,19 @@ class RestoreSafetyTests(unittest.TestCase):
 
 
 class AcceptanceGuardTests(unittest.TestCase):
+    def test_missing_volume_formats_confirm_cleanup(self):
+        for message in (b"Error response from daemon: no such volume: owned-test\n",
+                        b"Error response from daemon: get owned-test: no such volume\n"):
+            with self.subTest(message=message), patch.object(acceptance, "docker", return_value=
+                    SimpleNamespace(returncode=1, stderr=message, stdout=b"[]\n")):
+                self.assertFalse(acceptance.owned_volume("owned-test", "run"))
+
+    def test_missing_other_volume_does_not_confirm_cleanup(self):
+        response = SimpleNamespace(returncode=1, stderr=b"Error response from daemon: get other: no such volume", stdout=b"[]")
+        with patch.object(acceptance, "docker", return_value=response), \
+             self.assertRaisesRegex(RuntimeError, "cleanup not confirmed"):
+            acceptance.owned_volume("owned-test", "run")
+
     def test_readiness_waits_for_final_tcp_server(self):
         responses = [SimpleNamespace(returncode=1), SimpleNamespace(returncode=0)]
         with patch.object(acceptance, "docker", side_effect=responses) as docker, \

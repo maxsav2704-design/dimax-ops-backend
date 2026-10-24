@@ -73,7 +73,9 @@ def owned_container(name, run_id):
 def owned_volume(name, run_id):
     result = docker("volume", "inspect", name, check=False)
     if result.returncode:
-        if f"no such volume: {name}" in result.stderr.decode(errors="replace").lower():
+        error = result.stderr.decode(errors="replace").strip().lower()
+        missing = (f"no such volume: {name}", f"get {name}: no such volume")
+        if any(error == message or error == f"error response from daemon: {message}" for message in missing):
             return False
         raise RuntimeError("Cannot verify test volume state; cleanup not confirmed")
     if json.loads(result.stdout)[0].get("Labels", {}).get(LABEL) != run_id:
