@@ -115,12 +115,33 @@ Large-volume recovery, external provider delivery receipts,
 factory invitation validity after recovery, and a real business database are
 outside this synthetic journal-email acceptance.
 
-## Recovery gate (0089, implementation under acceptance)
+## Recovery gate (0089, verified 2026-10-24)
 
 The previous result above describes the pre-gate baseline. The new workflow
 `outbox-recovery-gate.yml` checks the implementation separately, including a
 fresh restore of the pre-send dump and actual SMTP/PDF submission after review.
-Do not treat code being present as evidence of a successful acceptance run.
+
+Verified code: `2d16c598bc66cafae5ea0c5f4363d6b1fe677e70`.
+CI: https://github.com/maxsav2704-design/dimax-ops-backend/actions/runs/40081452217
+
+- 36 gate/API/permission/worker/SMTP tests passed; 32 runner safety tests passed.
+- Fresh schema migrated through 0089; full restore verified 76 public tables.
+- Real restored PDF bytes checked after loopback SMTP/STARTTLS delivery.
+- Restored pre-send jobs stayed blocked until review. Previously accepted mail
+  was suppressed; an uncertain message stayed held despite normal retry.
+- OWNER released the reviewed queue; a later HOLD-to-RETRY decision submitted
+  exactly one PDF email. Repeating that decision did not duplicate the audit.
+- Two signatures and two earning entries (18.02 ILS total) stayed unchanged,
+  together with every other business row and non-recovery audit event.
+- Original synthetic source fingerprint remained unchanged; all owned containers,
+  network, volumes, dumps and temporary files were removed by the runner.
+- The negative controls still reproduce stale-backup duplication without an
+  activated fence and the SMTP-acceptance/failed-commit gap. These are not hidden
+  by the passing gated scenario; exactly-once SMTP is not promised.
+
+No working database, environment file, running service or frontend was changed.
+Claude-owned changes were not staged. The API implementation and acceptance code
+were backed up in the separate `codex/outbox-recovery-gate-20261024` branch.
 
 Deployment sequence (no working environment was changed during development):
 
