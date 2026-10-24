@@ -1,0 +1,90 @@
+name: Outbox Recovery Gate Acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/outbox-recovery-gate-20261024]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: outbox-recovery-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.12-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-ci-only
+          POSTGRES_DB: dimax_gate_tests
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dimax_gate_tests"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      APP_ENV: test
+      DIMAX_RECOVERY_GATE_TEST: synthetic-only
+      DATABASE_URL: postgresql+psycopg2://postgres:synthetic-ci-only@127.0.0.1:5432/dimax_gate_tests
+      TEST_DATABASE_URL: postgresql+psycopg2://postgres:synthetic-ci-only@127.0.0.1:5432/dimax_gate_tests
+      JWT_SECRET: synthetic-ci-only-not-a-production-secret
+      EMAIL_ENABLED: 'false'
+      WHATSAPP_ENABLED: 'false'
+      AI_ENABLED: 'false'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned application dependencies
+        run: python -m pip install --no-cache-dir -c constraints.txt -r requirements.txt
+      - name: Apply complete schema to synthetic database
+        run: python -m alembic upgrade head
+      - name: Gate, permissions, idempotency and worker regression
+        run: >-
+          python -m pytest -q tests/integration/test_outbox_recovery_gate.py
+          tests/test_outbox_commit_boundary.py tests/test_smtp_sender.py
+          tests/test_smtp_tls_transport.py
+      - name: Recovery runner safety checks
+        run: python -B -m unittest discover -s tests -p 'test_*restore_safety.py' -v
+
+  restored-pdf-delivery:
+    needs: gate-regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: maxsav2704-design/dimax-ops-workspace
+          ref: 971cc0ff5bf1af58cc3823aab4159adc399400d4
+          path: recovery-infra
+          sparse-checkout: infra/minio
+      - name: Build isolated runtime images
+        run: |
+          docker pull postgres:16.12-alpine
+          docker build -t dimax-recovery-app .
+          docker build --target server -t dimax-recovery-storage -f recovery-infra/infra/minio/Dockerfile recovery-infra/infra/minio
+      - name: Restore schema and PDFs, reconcile and resume queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/test_full_restore_acceptance.py --resume-outbox \
+            --postgres-image "$(docker image inspect postgres:16.12-alpine --format '{{.Id}}')" \
+            --app-image "$(docker image inspect dimax-recovery-app --format '{{.Id}}')" \
+            --storage-image "$(docker image inspect dimax-recovery-storage --format '{{.Id}}')" \
+            2>&1 | tee recovery-gate.log
+      - name: Publish synthetic execution log only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-gate-log
+          path: recovery-gate.log
+          if-no-files-found: ignore
+          retention-days: 7

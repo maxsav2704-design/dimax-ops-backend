@@ -26,6 +26,7 @@ _MODEL_MODULES = (
     "app.modules.journal.infrastructure.models",
     "app.modules.calendar.infrastructure.models",
     "app.modules.outbox.infrastructure.models",
+    "app.modules.outbox.infrastructure.recovery_models",
     "app.modules.files.infrastructure.models",
     "app.modules.documents.infrastructure.models",
     "app.webhooks.models",

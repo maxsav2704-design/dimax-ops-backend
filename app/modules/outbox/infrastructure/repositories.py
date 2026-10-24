@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.modules.journal.infrastructure.models import JournalORM
 from app.modules.outbox.domain.enums import DeliveryStatus, OutboxChannel, OutboxStatus
 from app.modules.outbox.infrastructure.models import OutboxMessageORM
+from app.modules.outbox.infrastructure.recovery_gate import dispatch_allowed, lock_delivery
 
 
 class OutboxRepository:
@@ -36,7 +37,10 @@ class OutboxRepository:
         company_id: uuid.UUID | None = None,
         limit: int = 20,
     ) -> list[OutboxMessageORM]:
+        if not lock_delivery(self.session, wait=False):
+            return []
         q = self.session.query(OutboxMessageORM).filter(
+            dispatch_allowed(),
             OutboxMessageORM.status == OutboxStatus.PENDING,
             OutboxMessageORM.scheduled_at <= datetime.now(timezone.utc),
         )

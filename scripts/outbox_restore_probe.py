@@ -19,10 +19,11 @@ from unittest.mock import patch
 from scripts import full_restore_probe as recovery
 
 DATABASES = {'dimax_full_source', 'dimax_full_restored', 'dimax_full_sent',
-             'dimax_full_replay', 'dimax_full_uncertain'}
+             'dimax_full_replay', 'dimax_full_uncertain', 'dimax_full_gate'}
 STEPS = {'prepare': 'dimax_full_source', 'offline': 'dimax_full_restored',
          'online': 'dimax_full_restored', 'sent-copy': 'dimax_full_sent',
-         'stale-copy': 'dimax_full_replay', 'commit-gap': 'dimax_full_uncertain'}
+         'stale-copy': 'dimax_full_replay', 'commit-gap': 'dimax_full_uncertain',
+         'gate': 'dimax_full_gate'}
 SMTP_HOST = 'smtp.dimax.example'
 
 
@@ -297,6 +298,103 @@ def commit_gap():
         db.dispose()
 
 
+def reconciled_restore():
+    from uuid import UUID, uuid4
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from app.core.config import settings
+    from app.modules.audit.infrastructure.repositories import AuditRepository
+    from app.modules.identity.infrastructure.models import UserORM, AdminProfileORM
+    from app.modules.outbox.api.recovery_schemas import RecoveryReason, RecoveryDecisionBody
+    from app.modules.outbox.application.recovery_service import OutboxRecoveryService as Service
+    from app.modules.outbox.application.admin_service import OutboxAdminService
+    from app.modules.outbox.infrastructure.recovery_models import OutboxRecoveryDecisionORM
+    from app.shared.domain.errors import Conflict
+
+    w = worker()
+    db = recovery.engine()
+    original = queue()
+    recovery.require(original == recovery.load('outbox-queue.json'), 'Expected stale pre-send backup')
+    users = []
+    try:
+        with Session(db) as session:
+            for company in sorted({row['company_id'] for row in original}):
+                actor = UserORM(company_id=UUID(company), email='recovery-owner@dimax.example',
+                                full_name='SYNTHETIC RECOVERY OWNER', role='ADMIN',
+                                password_hash='disabled-synthetic-login', is_active=True, status='ACTIVE')
+                session.add(actor)
+                session.flush()
+                session.add(AdminProfileORM(company_id=actor.company_id, user_id=actor.id, admin_scope='OWNER'))
+                users.append(SimpleNamespace(id=actor.id, company_id=actor.company_id, role='ADMIN'))
+            session.commit()
+
+        def business():
+            result = business_snapshot()
+            for table in ('outbox_recoveries', 'outbox_recovery_items', 'outbox_recovery_decisions'):
+                result.pop(table)
+            # Only new recovery audit events are expected; all other audit survives unchanged.
+            result['audit_logs'] = [row for row in result['audit_logs']
+                                    if not json.loads(row)['action'].startswith('OUTBOX_RECOVERY_')]
+            return result
+
+        baseline = business()
+        before_ids = set(recovery.load('outbox-accepted-ids.json'))
+        held = None
+        with patch.object(settings, 'OUTBOX_RECOVERY_EPOCH', uuid4()), smtp_capture() as server:
+            recovery.require(w.run_once() == 0 and not server.messages, 'Restored queue sent before reconciliation')
+            for user in users:
+                with Session(db) as session:
+                    uow = SimpleNamespace(session=session, audit=AuditRepository(session))
+                    Service.begin(uow, user, RecoveryReason(reason='Synthetic stale dump restoration'))
+                    session.commit()
+                    try:
+                        Service.release(uow, user, RecoveryReason(reason='Must reject unresolved items'))
+                    except Conflict:
+                        session.rollback()
+                    else:
+                        raise AssertionError('Unresolved review was released')
+                    for item in Service.items(uow, user):
+                        row = next(row for row in original if row['id'] == str(item.outbox_id))
+                        action = 'ACCEPTED' if row['id'] in before_ids else 'HOLD' if row['status'] == 'FAILED' else 'RETRY'
+                        body = RecoveryDecisionBody(request_id=uuid4(), expected_revision=0, action=action,
+                            reason='Synthetic provider reconciliation', evidence='Prior isolated SMTP capture',
+                            accepted_at=datetime.now(timezone.utc) if action == 'ACCEPTED' else None)
+                        Service.decide(uow, user, item.id, body)
+                        if action == 'HOLD':
+                            held = (user, item)
+                    Service.release(uow, user, RecoveryReason(reason='Reviewed; uncertain message remains held'))
+                    session.commit()
+            recovery.require(w.run_once() == 0 and not server.messages, 'Accepted/held/future mail was replayed')
+            user, item = held
+            with Session(db) as session:
+                uow = SimpleNamespace(session=session, audit=AuditRepository(session))
+                try:
+                    OutboxAdminService.retry_outbox(uow, company_id=user.company_id, outbox_id=item.outbox_id)
+                except Conflict:
+                    session.rollback()
+                else:
+                    raise AssertionError('Ordinary retry bypassed recovery hold')
+                body = RecoveryDecisionBody(request_id=uuid4(), expected_revision=1, action='RETRY',
+                    reason='Synthetic provider confirmed no acceptance', evidence='Synthetic SMTP trace 2')
+                decision = Service.decide(uow, user, item.id, body)
+                session.commit()
+                replay = Service.decide(uow, user, item.id, body)
+                recovery.require(replay.id == decision.id, 'Decision replay created duplicate history')
+                session.commit()
+            recovery.require(w.run_once() == 1 and w.run_once() == 0, 'Verified retry was lost or duplicated')
+            recovery.require(received(server) == [str(item.outbox_id)], 'Unexpected email or PDF after release')
+            with Session(db) as session:
+                recovery.require(len(session.scalars(select(OutboxRecoveryDecisionORM)).all()) == 5,
+                                 'Decision audit missing or duplicated')
+            with patch.object(settings, 'OUTBOX_RECOVERY_EPOCH', uuid4()):
+                recovery.require(w.run_once() == 0, 'New recovery epoch reused an old release')
+        recovery.require(business() == baseline, 'Recovery decisions repeated business actions')
+        recovery.require(len(queue()) == len(original), 'Recovery lost or duplicated queue entries')
+        print('PASS: stale restored queue blocked; OWNER release, accepted-mail suppression, durable hold, audited idempotent retry and exact PDF verified; 2 signatures and 18.02 ILS ledger unchanged', flush=True)
+    finally:
+        db.dispose()
+
+
 if __name__ == '__main__':
     from sqlalchemy.engine import make_url
     from app.core.config import settings
@@ -305,4 +403,4 @@ if __name__ == '__main__':
     validate_target(step, url.host, url.database, os.environ.get('DIMAX_OUTBOX_RESTORE'))
     recovery.guard(allowed_databases=DATABASES)
     {'prepare': prepare, 'offline': offline, 'online': online, 'sent-copy': sent_copy,
-     'stale-copy': stale_copy, 'commit-gap': commit_gap}[step]()
+     'stale-copy': stale_copy, 'commit-gap': commit_gap, 'gate': reconciled_restore}[step]()

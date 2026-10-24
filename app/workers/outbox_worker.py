@@ -78,7 +78,7 @@ def _enqueue_whatsapp_fallback_email(
 def _commit_message(session, message) -> bool:
     """Persist one message's outcome right away: a database error on a later
     message of the batch must not roll back (and later resend) this one.
-    The deployment runs a single outbox worker, so the released row lock is safe."""
+    Each next message is claimed in a fresh transaction after this commit."""
     message_id = message.id
     try:
         session.commit()
@@ -100,17 +100,14 @@ def run_once(limit: int = 20) -> int:
     session = SessionLocal()
     try:
         repo = OutboxRepository(session)
-        msgs = repo.lock_next_batch(company_id=None, limit=limit)
-        if msgs:
-            log_event(
-                logger,
-                "outbox.batch.locked",
-                batch_size=len(msgs),
-                limit=limit,
-            )
-
         processed = 0
-        for m in msgs:
+        attempted = 0
+        for _ in range(limit):
+            msgs = repo.lock_next_batch(company_id=None, limit=1)
+            if not msgs:
+                break
+            m = msgs[0]
+            attempted += 1
             try:
                 payload = m.payload
 
@@ -261,13 +258,13 @@ def run_once(limit: int = 20) -> int:
                     return processed
 
         session.commit()
-        if msgs:
+        if attempted:
             log_event(
                 logger,
                 "outbox.batch.completed",
-                batch_size=len(msgs),
+                batch_size=attempted,
                 processed=processed,
-                failed=(len(msgs) - processed),
+                failed=(attempted - processed),
             )
         record_heartbeat()
         return processed

@@ -27,8 +27,8 @@ def test_worker_counts_only_committed_jobs_and_stops_after_commit_error(
         commits += 1
         if commits == fail_on:
             raise RuntimeError("Synthetic commit failure")
-        if commits <= len(repo.lock_next_batch.return_value):
-            repo.lock_next_batch.return_value[commits - 1]._expired = True
+        if commits <= len(messages):
+            messages[commits - 1]._expired = True
 
     session.commit.side_effect = commit
     repo = MagicMock()
@@ -39,11 +39,12 @@ def test_worker_counts_only_committed_jobs_and_stops_after_commit_error(
                 raise AssertionError("Logging must not reload committed ORM rows")
             return super().__getattribute__(name)
 
-    repo.lock_next_batch.return_value = [ExpiringMessage(
+    messages = [ExpiringMessage(
         id=uuid4(), company_id=uuid4(), correlation_id=None, channel=OutboxChannel.EMAIL,
         attempts=0, max_attempts=5,
         payload={"to_email": "test@dimax.example", "subject": "TEST", "body_text": "Synthetic"},
     ) for _ in range(3)]
+    repo.lock_next_batch.side_effect = [[message] for message in messages] + [[]]
     sender = MagicMock()
     if send_error:
         sender.send.side_effect = ConnectionRefusedError("Synthetic SMTP outage")

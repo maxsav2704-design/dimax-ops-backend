@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Index, Integer, String, Text
+from sqlalchemy import DateTime, Enum, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +22,7 @@ from app.modules.outbox.domain.enums import (
 class OutboxMessageORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "outbox_messages"
     __table_args__ = (
+        UniqueConstraint("company_id", "id", name="uq_outbox_message_tenant"),
         Index("ix_outbox_company_id", "company_id"),
         Index("ix_outbox_status_channel", "status", "channel"),
         # Webhook delivery status lookups (migration 0075).

@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, SecretStr
 
@@ -77,6 +79,8 @@ class Settings(BaseSettings):
     TWILIO_WEBHOOK_VALIDATE: bool = False
     TWILIO_WEBHOOK_AUTH_TOKEN: str = ""
     OUTBOX_WEBHOOK_TOKEN: str = ""
+    # Rotate outside the database BEFORE starting any restored API or worker.
+    OUTBOX_RECOVERY_EPOCH: UUID | None = None
     OUTBOX_DELIVERY_RISK_AUTO_ISSUE_ENABLED: bool = True
     OUTBOX_DELIVERY_RISK_MIN_FAILED: int = 1
     OUTBOX_DELIVERY_RISK_WINDOW_HOURS: int = 72

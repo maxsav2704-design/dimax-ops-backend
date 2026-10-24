@@ -12,6 +12,7 @@ from app.api.v1.deps import (
 )
 from app.modules.audit.application.service import AuditService
 from app.modules.outbox.application.admin_service import OutboxAdminService
+from app.modules.outbox.api.recovery import router as recovery_router
 from app.modules.outbox.api.admin_schemas import (
     OutboxBulkRetryBody,
     OutboxBulkRetryResponse,
@@ -27,6 +28,7 @@ from app.modules.outbox.api.admin_schemas import (
 
 
 router = APIRouter(prefix="/admin/outbox", tags=["Admin / Outbox"])
+router.include_router(recovery_router)
 
 
 @router.get("", response_model=OutboxListResponse)

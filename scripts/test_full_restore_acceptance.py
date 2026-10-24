@@ -217,6 +217,7 @@ def exercise(root, temporary, resources, images, *, resume_outbox=False):
             ('sent-copy', 'dimax_full_sent', sent_dump),
             ('stale-copy', 'dimax_full_replay', initial_dump),
             ('commit-gap', 'dimax_full_uncertain', initial_dump),
+            ('gate', 'dimax_full_gate', initial_dump),
         ):
             docker('exec', pg, 'createdb', '-U', 'postgres', '--template=template0', database)
             docker('exec', pg, 'pg_restore', '-U', 'postgres', '-d', database, '--exit-on-error', '--single-transaction', archive)

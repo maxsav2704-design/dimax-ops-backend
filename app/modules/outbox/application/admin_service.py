@@ -329,12 +329,16 @@ class OutboxAdminService:
         company_id: uuid.UUID,
         outbox_id: uuid.UUID,
     ) -> tuple[OutboxItemDTO, dict, dict]:
+        from app.modules.outbox.infrastructure.recovery_gate import ensure_retry_allowed
+
+        ensure_retry_allowed(uow.session, company_id=company_id, outbox_id=outbox_id)
         row = (
             uow.session.query(OutboxMessageORM)
             .filter(
                 OutboxMessageORM.company_id == company_id,
                 OutboxMessageORM.id == outbox_id,
             )
+            .with_for_update()
             .one_or_none()
         )
         if not row:
