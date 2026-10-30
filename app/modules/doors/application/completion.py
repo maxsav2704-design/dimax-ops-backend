@@ -161,6 +161,62 @@ def create_completed_work_for_door(
     return completed_work
 
 
+def create_completed_work_for_stage_fact(
+    uow,
+    *,
+    company_id: uuid.UUID,
+    door,
+    fact,
+) -> CompletedWorkORM | None:
+    """Value one stage execution fact at the factory rate confirmed for (door type, stage) at execution time.
+
+    Returns None when factory pricing was not in effect at that time: there is no legacy stage rate and no
+    price is ever invented. A missing line in the effective version raises MissingFactoryPrice (caller decides).
+    Idempotent per fact; quantity is always one stage of one door.
+    """
+    existing = (
+        uow.session.query(CompletedWorkORM)
+        .filter(
+            active_completed_work_filter(company_id),
+            CompletedWorkORM.stage_fact_id == fact.id,
+            CompletedWorkORM.work_kind == "STAGE",
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+    quote = FactoryEarningsPricing.quote(
+        uow, company_id=company_id, kind="STAGE", target_id=door.door_type_id, stage_code=fact.stage_code,
+        performed_at=fact.happened_at,
+    )
+    if quote is None:
+        return None
+    if (getattr(door, "apply_surcharge_to_installer", False)
+            and Decimal(str(getattr(door, "surcharge_pct", None) or "100.00")) != 100):
+        raise Conflict("Installer surcharge is not part of the confirmed factory price", field="surcharge_pct")
+    quantity = Decimal("1.00")
+    completed_work = CompletedWorkORM(
+        company_id=company_id,
+        project_id=door.project_id,
+        door_id=door.id,
+        stage_fact_id=fact.id,
+        installer_id=fact.installer_id,
+        completed_at=fact.happened_at,
+        quantity=quantity,
+        rate_snapshot=quote.rate,
+        amount_snapshot=quote.amount(quantity),
+        work_kind="STAGE",
+        entry_type="ORIGINAL",
+        correction_ref_id=None,
+        reason=None,
+    )
+    uow.session.add(completed_work)
+    uow.session.flush()
+    # No client price snapshot: the client price belongs to the whole door, not to one of its stages.
+    FactoryEarningsPricing.attach(uow, completed_work, quote)
+    return completed_work
+
+
 def reverse_completed_work_for_door(
     uow,
     *,

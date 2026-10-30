@@ -67,7 +67,7 @@ class PriceConflictResolutionService:
             door = uow.doors.get(company_id=company_id, door_id=door_id, for_update=True, active_project_only=True)
             if door is None or door.project_id != row.project_id or door.installer_id != installer.id:
                 raise Conflict("Door assignment changed; price resolution cannot override it")
-            if work_query.filter_by(door_id=door_id).first() is not None:
+            if work_query.filter_by(door_id=door_id, work_kind="DOOR").first() is not None:
                 raise Conflict("Door already has an earning; use the separate correction process")
             payload["door_id"] = str(door_id)
         else:

@@ -50,8 +50,9 @@ class FactoryWorkPriceContext(BaseModel):
     version: int
     approval_id: UUID
     activation_id: UUID
-    kind: Literal["DOOR", "ADDON"]
+    kind: Literal["DOOR", "ADDON", "STAGE"]
     target_id: UUID
+    stage_code: str | None = None
     currency: Literal["ILS"]
     performed_at: datetime
     effective_from: datetime
@@ -74,7 +75,7 @@ def work_price_amount(kind: str, rate: Decimal, quantity: Decimal) -> Decimal:
         quantity = Decimal(str(quantity))
         if not quantity.is_finite() or not 0 < quantity <= Decimal("9999999999.99") or quantity != quantity.quantize(Decimal("0.01")):
             raise ValueError
-        if kind not in ("DOOR", "ADDON") or (kind == "DOOR" and quantity != 1):
+        if kind not in ("DOOR", "ADDON", "STAGE") or (kind in ("DOOR", "STAGE") and quantity != 1):
             raise ValueError
         amount = (quantity * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if not 0 < amount <= Decimal("9999999999.99"):

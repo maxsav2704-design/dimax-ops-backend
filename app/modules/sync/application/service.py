@@ -206,6 +206,15 @@ class InstallerSyncService:
         if change_type_value == SyncChangeType.ISSUE.value:
             return InstallerSyncService._only(payload, {"id", "door_id", "project_id", "status", "title", "details"})
 
+        if change_type_value == SyncChangeType.DOOR_STAGES.value:
+            sanitized = InstallerSyncService._only(payload, {"door_id", "project_id", "plan_version", "stages"})
+            sanitized["stages"] = [
+                InstallerSyncService._only(stage, {"stage_code", "name", "required", "sequence", "assigned_to_me",
+                                                   "completed_at", "completed_by_me"})
+                for stage in (sanitized.get("stages") or []) if isinstance(stage, dict)
+            ]
+            return sanitized
+
         if change_type_value == SyncChangeType.ADDON_FACT.value:
             return InstallerSyncService._only(
                 payload,
@@ -1289,6 +1298,13 @@ class InstallerSyncService:
             )
         ]
 
+        from app.modules.doors.application.stages_service import WorkStagesService
+
+        door_stages = WorkStagesService.snapshot_for_installer(
+            uow, company_id=company_id, installer_id=installer_id,
+            door_ids=[uuid.UUID(d["id"]) for d in doors],
+        )
+
         return {
             "projects": projects,
             "doors": doors,
@@ -1298,6 +1314,7 @@ class InstallerSyncService:
             "addon_plans": plans,
             "addon_facts": addon_facts,
             "issues": issues,
+            "door_stages": door_stages,
         }
 
     @staticmethod

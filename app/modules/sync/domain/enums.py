@@ -16,3 +16,5 @@ class SyncChangeType(str, Enum):
     PROJECT_ASSIGNMENTS = "PROJECT_ASSIGNMENTS"
     PROJECT_BASE = "PROJECT_BASE"
     CATALOG_ADDON_TYPES = "CATALOG_ADDON_TYPES"
+    # Stage plan, assignments and facts of one door, addressed to each installer of that door (0090).
+    DOOR_STAGES = "DOOR_STAGES"

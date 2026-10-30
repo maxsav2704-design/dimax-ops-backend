@@ -91,7 +91,7 @@ class WorkPriceAccrualService:
                 else:
                     InstallerSyncService._apply_door_set_status(uow, actor_user_id=actor_user_id, **args)
                 work = uow.session.query(CompletedWorkORM).filter(active_completed_work_filter(company_id)).filter_by(
-                    door_id=quote.door_id).one()
+                    door_id=quote.door_id, work_kind="DOOR").one()
             else:
                 InstallerSyncService._apply_addon_fact_create(uow, client_event_id=event_id, **args)
                 uow.session.flush()

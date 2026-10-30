@@ -67,6 +67,8 @@ class AdminEarningsLedgerItemDTO(EarningsLedgerEntryDTO):
     addon_type_id: uuid.UUID | None = None
     addon_type_name: str | None = None
     addon_comment: str | None = None
+    stage_fact_id: uuid.UUID | None = None
+    stage_code: str | None = None
     installer_id: uuid.UUID
     installer_name: str | None
     can_correct: bool

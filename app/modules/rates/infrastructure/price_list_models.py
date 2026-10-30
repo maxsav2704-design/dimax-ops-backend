@@ -5,8 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
-    CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Integer,
-    Numeric, String, UniqueConstraint,
+    CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer,
+    Numeric, String, UniqueConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -61,11 +61,20 @@ class FactoryPriceListItemORM(Base, UUIDPrimaryKeyMixin):
             ["company_id", "price_list_id"], ["factory_price_lists.company_id", "factory_price_lists.id"],
             ondelete="CASCADE", name="fk_factory_price_items_tenant_list",
         ),
-        UniqueConstraint("price_list_id", "door_type_id", name="uq_factory_price_items_door"),
+        ForeignKeyConstraint(
+            ["company_id", "stage_code"], ["work_stage_definitions.company_id", "work_stage_definitions.code"],
+            ondelete="RESTRICT", name="fk_factory_price_items_stage",
+        ),
+        # One DOOR line per door type; STAGE lines share the door type and are unique per stage (0090).
+        Index("uq_factory_price_items_door", "price_list_id", "door_type_id", unique=True,
+              postgresql_where=text("kind = 'DOOR'")),
+        Index("uq_factory_price_items_stage", "price_list_id", "door_type_id", "stage_code", unique=True,
+              postgresql_where=text("kind = 'STAGE'")),
         UniqueConstraint("price_list_id", "addon_type_id", name="uq_factory_price_items_addon"),
         CheckConstraint(
-            "(kind = 'DOOR' AND door_type_id IS NOT NULL AND addon_type_id IS NULL) OR "
-            "(kind = 'ADDON' AND addon_type_id IS NOT NULL AND door_type_id IS NULL)",
+            "(kind = 'DOOR' AND door_type_id IS NOT NULL AND addon_type_id IS NULL AND stage_code IS NULL) OR "
+            "(kind = 'ADDON' AND addon_type_id IS NOT NULL AND door_type_id IS NULL AND stage_code IS NULL) OR "
+            "(kind = 'STAGE' AND door_type_id IS NOT NULL AND stage_code IS NOT NULL AND addon_type_id IS NULL)",
             name="ck_factory_price_items_target",
         ),
         CheckConstraint("installer_price > 0 AND installer_price < 10000000000",
@@ -82,6 +91,8 @@ class FactoryPriceListItemORM(Base, UUIDPrimaryKeyMixin):
     addon_type_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addon_types.id", ondelete="RESTRICT"),
     )
+    # STAGE lines only: the stage of the door type this rate pays for (work_stage_definitions.code).
+    stage_code: Mapped[str | None] = mapped_column(String(40))
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     unit: Mapped[str] = mapped_column(String(20), nullable=False)
     installer_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)

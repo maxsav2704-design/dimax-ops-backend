@@ -7,6 +7,7 @@ from sqlalchemy import and_, desc, func, nulls_last, or_, text
 from sqlalchemy.orm import Session
 
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.doors.infrastructure.repositories import installer_door_filter
 from app.modules.earnings.infrastructure.work_price_models import WorkPriceAccrualORM
 from app.modules.installers.infrastructure.models import InstallerORM
 from app.modules.issues.infrastructure.models import IssueORM
@@ -219,7 +220,7 @@ class SyncChangeLogRepository:
                 .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
                 .filter(
                     DoorORM.company_id == company_id,
-                    DoorORM.installer_id == installer_id,
+                    installer_door_filter(installer_id),
                     ProjectORM.company_id == company_id,
                     ProjectORM.deleted_at.is_(None),
                 )

@@ -20,7 +20,7 @@ class CompletedWorkORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             name="ck_completed_work_entry_type",
         ),
         CheckConstraint(
-            "work_kind IN ('DOOR', 'ADDON')",
+            "work_kind IN ('DOOR', 'ADDON', 'STAGE')",
             name="ck_completed_work_work_kind",
         ),
         CheckConstraint(
@@ -38,8 +38,9 @@ class CompletedWorkORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             name="ck_completed_work_amount_sign",
         ),
         CheckConstraint(
-            "(work_kind = 'DOOR' AND door_id IS NOT NULL AND addon_fact_id IS NULL) OR "
-            "(work_kind = 'ADDON' AND door_id IS NULL AND addon_fact_id IS NOT NULL)",
+            "(work_kind = 'DOOR' AND door_id IS NOT NULL AND addon_fact_id IS NULL AND stage_fact_id IS NULL) OR "
+            "(work_kind = 'ADDON' AND door_id IS NULL AND addon_fact_id IS NOT NULL AND stage_fact_id IS NULL) OR "
+            "(work_kind = 'STAGE' AND door_id IS NOT NULL AND stage_fact_id IS NOT NULL AND addon_fact_id IS NULL)",
             name="ck_completed_work_subject",
         ),
         Index("ix_completed_work_company_completed_at", "company_id", "completed_at", "id"),
@@ -54,6 +55,13 @@ class CompletedWorkORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             postgresql_where=text(
                 "addon_fact_id IS NOT NULL AND entry_type = 'ORIGINAL'"
             ),
+        ),
+        # One ORIGINAL stage earning per stage execution fact (migration 0090).
+        Index(
+            "uq_completed_work_stage_fact_original",
+            "stage_fact_id",
+            unique=True,
+            postgresql_where=text("stage_fact_id IS NOT NULL AND entry_type = 'ORIGINAL'"),
         ),
         Index(
             "uq_completed_work_correction_ref_entry_type",
@@ -80,6 +88,12 @@ class CompletedWorkORM(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         ForeignKey("project_addon_facts.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    # STAGE rows: the immutable stage execution fact this earning values (the fact can never be deleted).
+    stage_fact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("door_stage_facts.id", ondelete="RESTRICT", name="fk_completed_work_stage_fact"),
+        nullable=True,
     )
     installer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

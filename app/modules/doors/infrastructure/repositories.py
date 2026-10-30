@@ -3,17 +3,30 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import distinct
+from sqlalchemy import distinct, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.infrastructure.models import DoorORM
 from app.modules.doors.infrastructure.history_models import DoorStatusHistoryORM
+from app.modules.doors.infrastructure.stage_models import DoorStageAssignmentORM
 from app.modules.projects.infrastructure.models import ProjectORM
 
 
 def _enum_value(value: object) -> str:
     return value.value if hasattr(value, "value") else str(value)
+
+
+def installer_door_filter(installer_id: uuid.UUID):
+    """A door is in an installer's view when they hold it or hold one of its current stages (0090)."""
+    return or_(
+        DoorORM.installer_id == installer_id,
+        select(DoorStageAssignmentORM.id).where(
+            DoorStageAssignmentORM.door_id == DoorORM.id,
+            DoorStageAssignmentORM.installer_id == installer_id,
+            DoorStageAssignmentORM.replaced_at.is_(None),
+        ).exists(),
+    )
 
 
 class DoorRepository:
@@ -111,7 +124,7 @@ class DoorRepository:
             .filter(
                 DoorORM.company_id == company_id,
                 DoorORM.project_id == project_id,
-                DoorORM.installer_id == installer_id,
+                installer_door_filter(installer_id),
             )
             .order_by(DoorORM.unit_label.asc())
             .all()
@@ -130,7 +143,7 @@ class DoorRepository:
             .filter(
                 DoorORM.company_id == company_id,
                 DoorORM.project_id == project_id,
-                DoorORM.installer_id == installer_id,
+                installer_door_filter(installer_id),
             )
             .first()
             is not None
@@ -147,7 +160,7 @@ class DoorRepository:
             .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(
                 DoorORM.company_id == company_id,
-                DoorORM.installer_id == installer_id,
+                installer_door_filter(installer_id),
                 ProjectORM.company_id == company_id,
                 ProjectORM.deleted_at.is_(None),
             )
@@ -187,7 +200,7 @@ class DoorRepository:
             .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(
                 DoorORM.company_id == company_id,
-                DoorORM.installer_id == installer_id,
+                installer_door_filter(installer_id),
                 ProjectORM.company_id == company_id,
                 ProjectORM.deleted_at.is_(None),
             )
@@ -230,7 +243,7 @@ class DoorRepository:
             .join(ProjectORM, ProjectORM.id == DoorORM.project_id)
             .filter(
                 DoorORM.company_id == company_id,
-                DoorORM.installer_id == installer_id,
+                installer_door_filter(installer_id),
                 ProjectORM.company_id == company_id,
                 ProjectORM.deleted_at.is_(None),
             )

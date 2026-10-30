@@ -70,7 +70,8 @@ class WorkPriceProposalService:
             if target is None or not target.is_active or target.deleted_at is not None:
                 raise Conflict("Door type is no longer available")
             if uow.session.query(CompletedWorkORM).filter(
-                    active_completed_work_filter(company_id), CompletedWorkORM.door_id == door.id).first():
+                    active_completed_work_filter(company_id), CompletedWorkORM.door_id == door.id,
+                    CompletedWorkORM.work_kind == "DOOR").first():
                 raise Conflict("Door already has an earning")
             if door.apply_surcharge_to_installer and Decimal(str(door.surcharge_pct or 100)) != 100:
                 raise Conflict("Installer surcharge must be resolved separately")

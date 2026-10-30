@@ -9,6 +9,7 @@ from sqlalchemy import and_, not_, or_, select
 
 from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.doors.infrastructure.stage_models import DoorStageFactORM, WorkStageDefinitionORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.earnings.api.installer_schemas import (
     InstallerEarningsDayDTO,
@@ -187,6 +188,28 @@ class InstallerEarningsApiService:
         return door_map, addon_map, project_map
 
     @staticmethod
+    def _stage_context(
+        uow, *, company_id: uuid.UUID, rows: list[CompletedWorkORM],
+    ) -> dict[uuid.UUID, tuple[str, str | None]]:
+        """stage_fact_id -> (stage_code, stage name) for STAGE earnings."""
+        fact_ids = {row.stage_fact_id for row in rows if row.stage_fact_id is not None}
+        if not fact_ids:
+            return {}
+        pairs = (
+            uow.session.query(DoorStageFactORM.id, DoorStageFactORM.stage_code, WorkStageDefinitionORM.name)
+            .outerjoin(
+                WorkStageDefinitionORM,
+                and_(
+                    WorkStageDefinitionORM.company_id == DoorStageFactORM.company_id,
+                    WorkStageDefinitionORM.code == DoorStageFactORM.stage_code,
+                ),
+            )
+            .filter(DoorStageFactORM.company_id == company_id, DoorStageFactORM.id.in_(fact_ids))
+            .all()
+        )
+        return {fact_id: (code, name) for fact_id, code, name in pairs}
+
+    @staticmethod
     def summary(
         uow,
         *,
@@ -236,6 +259,7 @@ class InstallerEarningsApiService:
         door_map, addon_map, project_map = InstallerEarningsApiService._lookup_context(
             uow, company_id=company_id, rows=rows
         )
+        stage_map = InstallerEarningsApiService._stage_context(uow, company_id=company_id, rows=rows)
         by_type: dict[str, dict] = {}
         by_project: dict[str, dict] = {}
         by_day: dict[str, dict] = {}
@@ -258,6 +282,13 @@ class InstallerEarningsApiService:
                     getattr(addon_type, "name", None) or "Additional work"
                 )
                 door_label = install_type_label
+            elif work_kind == "STAGE":
+                stage_code, stage_name = stage_map.get(row.stage_fact_id, ("unknown", None))
+                install_type_code = f"stage:{getattr(door_type, 'code', None) or 'unknown'}:{stage_code}"
+                install_type_label = (
+                    f"{getattr(door_type, 'name', None) or 'Unknown'}: {stage_name or stage_code}"
+                )
+                door_label = getattr(door, "unit_label", None) if door else None
             else:
                 install_type_code = str(getattr(door_type, "code", None) or "unknown")
                 install_type_label = str(getattr(door_type, "name", None) or "Unknown")

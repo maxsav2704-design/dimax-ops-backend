@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from app.core.config import settings
 from app.modules.audit.application.service import AuditService
 from app.modules.rates.application.price_list_dto import (
     CreatePriceList,
@@ -30,6 +31,7 @@ class FactoryPriceListsService:
                 PriceListLine(
                     kind=item.kind,
                     target_id=item.door_type_id or item.addon_type_id,
+                    stage_code=item.stage_code,
                     name=item.name,
                     unit=item.unit,
                     installer_price=item.installer_price,
@@ -59,13 +61,15 @@ class FactoryPriceListsService:
         cls, uow, *, company_id: UUID, actor_user_id: UUID, body: CreatePriceList,
     ) -> PriceListDetail:
         payload = body.model_dump(mode="json", exclude={"request_id", "items"})
+        # DOOR / ADDON fingerprints stay byte-identical to earlier versions; only STAGE lines carry stage_code.
         payload["items"] = sorted(
             [
                 {"kind": line.kind, "target_id": str(line.target_id),
-                 "installer_price": format(line.installer_price, ".2f")}
+                 "installer_price": format(line.installer_price, ".2f"),
+                 **({"stage_code": line.stage_code} if line.kind == "STAGE" else {})}
                 for line in body.items
             ],
-            key=lambda item: (item["kind"], item["target_id"]),
+            key=lambda item: (item["kind"], item["target_id"], item.get("stage_code", "")),
         )
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -88,10 +92,20 @@ class FactoryPriceListsService:
 
         catalogs = {
             kind: uow.price_lists.catalog(
-                company_id, kind, {item.target_id for item in body.items if item.kind == kind},
+                company_id, "DOOR" if kind == "STAGE" else kind,
+                {item.target_id for item in body.items if item.kind == kind},
             )
-            for kind in ("DOOR", "ADDON")
+            for kind in ("DOOR", "ADDON", "STAGE")
         }
+        stage_lines = [line for line in body.items if line.kind == "STAGE"]
+        stages = {}
+        if stage_lines:
+            if not settings.WORK_STAGES_ENABLED:
+                raise ValidationError("Work stages are not enabled on this server", field="items")
+            stages = uow.price_lists.stage_catalog(company_id, {line.stage_code for line in stage_lines})
+            unknown = sorted({line.stage_code for line in stage_lines} - set(stages))
+            if unknown:
+                raise ValidationError("Unknown or inactive stages: " + ", ".join(unknown), field="items")
         row = FactoryPriceListORM(
             id=uuid4(), company_id=company_id, version=latest + 1, request_id=body.request_id,
             request_fingerprint=fingerprint, reason=body.reason,
@@ -104,7 +118,10 @@ class FactoryPriceListsService:
             if target is None:
                 raise ValidationError("Work type is unavailable in this company", field="items")
             name = target.name.strip()
-            unit = "pcs" if line.kind == "DOOR" else target.unit.strip()
+            unit = "pcs" if line.kind in ("DOOR", "STAGE") else target.unit.strip()
+            if line.kind == "STAGE":
+                # One stage of one door: "<door type>: <stage>" at the stage's own rate, never a share of the door price.
+                name = f"{name}: {stages[line.stage_code].name.strip()}"[:256]
             if not name or not unit:
                 raise ValidationError(
                     "Work type name and unit must be filled in the catalog", field="items",
@@ -112,8 +129,9 @@ class FactoryPriceListsService:
             items.append(
                 FactoryPriceListItemORM(
                     company_id=company_id, price_list_id=row.id, kind=line.kind,
-                    door_type_id=line.target_id if line.kind == "DOOR" else None,
+                    door_type_id=line.target_id if line.kind in ("DOOR", "STAGE") else None,
                     addon_type_id=line.target_id if line.kind == "ADDON" else None,
+                    stage_code=line.stage_code if line.kind == "STAGE" else None,
                     name=name, unit=unit,
                     installer_price=line.installer_price.quantize(Decimal("0.01")),
                 )

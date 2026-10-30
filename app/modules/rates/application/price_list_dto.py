@@ -11,11 +11,23 @@ Reason = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, m
 Agreement = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 
 
+StageCode = Annotated[str, StringConstraints(strip_whitespace=True, to_upper=True, pattern=r"^[A-Za-z][A-Za-z0-9_]{0,39}$")]
+
+
 class PriceListLineInput(BaseModel):
+    """DOOR / ADDON: target_id is the catalog id. STAGE: target_id is the door type, stage_code its stage."""
+
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["DOOR", "ADDON"]
+    kind: Literal["DOOR", "ADDON", "STAGE"]
     target_id: UUID
+    stage_code: StageCode | None = None
     installer_price: Decimal = Field(gt=0, max_digits=12, decimal_places=2, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def stage_code_only_for_stages(self):
+        if (self.kind == "STAGE") != (self.stage_code is not None):
+            raise ValueError("stage_code is required for STAGE lines and not allowed otherwise")
+        return self
 
 
 class CreatePriceList(BaseModel):
@@ -28,7 +40,7 @@ class CreatePriceList(BaseModel):
 
     @model_validator(mode="after")
     def unique_targets(self):
-        keys = [(line.kind, line.target_id) for line in self.items]
+        keys = [(line.kind, line.target_id, line.stage_code) for line in self.items]
         if len(set(keys)) != len(keys):
             raise ValueError("Each work type may appear only once")
         return self
@@ -55,8 +67,9 @@ class PriceListSummary(BaseModel):
 
 
 class PriceListLine(BaseModel):
-    kind: Literal["DOOR", "ADDON"]
+    kind: Literal["DOOR", "ADDON", "STAGE"]
     target_id: UUID
+    stage_code: str | None = None
     name: str
     unit: str
     installer_price: Decimal

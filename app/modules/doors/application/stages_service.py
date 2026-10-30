@@ -17,7 +17,8 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.modules.audit.application.service import AuditService
-from app.modules.doors.application.completion import resolve_installation_time
+from app.modules.doors.application.completion import create_completed_work_for_stage_fact, resolve_installation_time
+from app.modules.doors.application.sync_payload import build_door_sync_payload
 from app.modules.doors.application.transition_recorder import record_door_transition
 from app.modules.doors.domain.enums import DoorStatus
 from app.modules.doors.domain.errors import DoorNotAssigned
@@ -27,9 +28,13 @@ from app.modules.doors.infrastructure.stage_models import (
 )
 from app.modules.door_types.infrastructure.models import DoorTypeORM
 from app.modules.earnings.application.factory_pricing import FactoryEarningsPricing
+from app.modules.earnings.infrastructure.ledger_queries import active_completed_work_filter
+from app.modules.earnings.infrastructure.models import CompletedWorkORM
 from app.modules.issues.application.sync_payload import publish_issue_change
 from app.modules.issues.domain.enums import IssueStatus, IssueWorkflowState
 from app.modules.projects.application.status_service import ProjectStatusService
+from app.modules.rates.application.timeline_service import MissingFactoryPrice
+from app.modules.sync.domain.enums import SyncChangeType
 from app.shared.domain.errors import Conflict, NotFound, ValidationError
 
 _CODE = re.compile(STAGE_CODE_PATTERN)
@@ -201,6 +206,7 @@ class WorkStagesService:
         AuditService.add(uow, company_id=company_id, actor_user_id=actor_user_id, entity_type="door", entity_id=door_id,
                          action="DOOR_WORK_PLAN", before={"plan_id": str(current.plan_id)} if current else None,
                          after={"plan_id": str(plan_id), "version": plan.version})
+        cls.publish_stage_changes(uow, company_id=company_id, door=door)
         return row
 
     @classmethod
@@ -231,6 +237,13 @@ class WorkStagesService:
         AuditService.add(uow, company_id=company_id, actor_user_id=actor_user_id, entity_type="door", entity_id=door_id,
                          action="DOOR_STAGE_ASSIGN", before={"installer_id": str(current.installer_id)} if current else None,
                          after={"stage_code": stage_code, "installer_id": str(installer_id)})
+        # The replaced installer learns that the stage is no longer theirs; the door itself is also sent to the
+        # newcomer, who may never have held a door of this project before.
+        cls.publish_stage_changes(uow, company_id=company_id, door=door,
+                                  extra_recipients=[current.installer_id] if current else [])
+        uow.sync_change_log.add_change(company_id=company_id, change_type=SyncChangeType.DOOR, entity_id=door.id,
+                                       project_id=door.project_id, installer_id=installer_id,
+                                       payload=build_door_sync_payload(door))
         return row
 
     # ---- view ---------------------------------------------------------------------------------
@@ -250,9 +263,11 @@ class WorkStagesService:
         definitions = {row.code: row for row in uow.session.scalars(select(WorkStageDefinitionORM).where(
             WorkStageDefinitionORM.company_id == company_id)).all()}
         version = uow.session.get(DoorTypeStagePlanORM, plan.plan_id)
+        earnings = cls._stage_earnings(uow, company_id, facts.values())
         stages = []
         for item in cls.plan_items(uow.session, plan.plan_id):
             assignment, fact = assignments.get(item.stage_code), facts.get(item.stage_code)
+            earning = earnings.get(fact.id) if fact else None
             stages.append({
                 "stage_code": item.stage_code, "name": definitions[item.stage_code].name, "required": item.required,
                 "sequence": item.sequence,
@@ -261,6 +276,8 @@ class WorkStagesService:
                 "completed_at": fact.happened_at if fact else None,
                 "completed_by": fact.installer_id if fact else None,
                 "fact_id": fact.id if fact else None,
+                "earning_id": earning.id if earning else None,
+                "earning_status": cls._earning_status(uow, company_id, fact, earning) if fact else None,
             })
         required_total = sum(1 for s in stages if s["required"])
         required_done = sum(1 for s in stages if s["required"] and s["fact_id"])
@@ -268,6 +285,96 @@ class WorkStagesService:
                 "door_version": int(door.version or 0), "plan_id": plan.plan_id, "plan_version": version.version,
                 "stages": stages, "required_total": required_total, "required_done": required_done,
                 "installed_by_stages": bool(door.is_locked and door.status == DoorStatus.INSTALLED)}
+
+    # ---- earnings (step 4) --------------------------------------------------------------------------
+    @staticmethod
+    def _stage_earnings(uow, company_id, facts) -> dict:
+        fact_ids = [fact.id for fact in facts]
+        if not fact_ids:
+            return {}
+        rows = uow.session.query(CompletedWorkORM).filter(
+            active_completed_work_filter(company_id), CompletedWorkORM.work_kind == "STAGE",
+            CompletedWorkORM.stage_fact_id.in_(fact_ids)).all()
+        return {row.stage_fact_id: row for row in rows}
+
+    @staticmethod
+    def _earning_status(uow, company_id, fact, earning) -> str:
+        """RECORDED: valued at the factory rate. NO_RATE: factory pricing was in effect at execution time but the
+        effective version has no line for this door type and stage. PRICING_INACTIVE: legacy mode at execution
+        time; stages have no legacy rate and are never valued by guesswork."""
+        if earning is not None:
+            return "RECORDED"
+        if uow.price_lists.activation_at(company_id, fact.happened_at) is None:
+            return "PRICING_INACTIVE"
+        return "NO_RATE"
+
+    @classmethod
+    def _value_fact(cls, uow, *, company_id, door, fact) -> tuple[object | None, str]:
+        """Value a fresh fact at the rate confirmed for its execution time; a missing rate keeps the fact (it is
+        proof of work) and leaves the money gap visible instead of inventing a price or a legacy fallback."""
+        try:
+            earning = create_completed_work_for_stage_fact(uow, company_id=company_id, door=door, fact=fact)
+        except MissingFactoryPrice:
+            return None, "NO_RATE"
+        return earning, "RECORDED" if earning is not None else "PRICING_INACTIVE"
+
+    # ---- sync: what the installers of a door see ---------------------------------------------------
+    @classmethod
+    def stage_payload(cls, uow, *, company_id, door, installer_id) -> dict | None:
+        plan = current_door_plan(uow.session, door.id)
+        if plan is None:
+            return None
+        assignments = cls.current_assignments(uow.session, door.id)
+        facts = {fact.stage_code: fact for fact in cls.facts(uow.session, door.id)}
+        definitions = {row.code: row.name for row in uow.session.scalars(select(WorkStageDefinitionORM).where(
+            WorkStageDefinitionORM.company_id == company_id)).all()}
+        version = uow.session.get(DoorTypeStagePlanORM, plan.plan_id)
+        stages = []
+        for item in cls.plan_items(uow.session, plan.plan_id):
+            assignment, fact = assignments.get(item.stage_code), facts.get(item.stage_code)
+            stages.append({
+                "stage_code": item.stage_code, "name": definitions.get(item.stage_code, item.stage_code),
+                "required": bool(item.required), "sequence": int(item.sequence),
+                "assigned_to_me": bool(assignment and assignment.installer_id == installer_id),
+                "completed_at": fact.happened_at.isoformat() if fact else None,
+                "completed_by_me": bool(fact and fact.installer_id == installer_id),
+            })
+        return {"door_id": str(door.id), "project_id": str(door.project_id), "plan_version": int(version.version),
+                "stages": stages}
+
+    @classmethod
+    def recipients(cls, uow, door) -> list:
+        holders = {a.installer_id for a in cls.current_assignments(uow.session, door.id).values()}
+        if door.installer_id is not None:
+            holders.add(door.installer_id)
+        return sorted(holders, key=str)
+
+    @classmethod
+    def publish_stage_changes(cls, uow, *, company_id, door, extra_recipients=()) -> None:
+        """One DOOR_STAGES change per installer of the door: the payload says only what is theirs, never a price."""
+        for installer_id in sorted(set(cls.recipients(uow, door)) | set(extra_recipients), key=str):
+            payload = cls.stage_payload(uow, company_id=company_id, door=door, installer_id=installer_id)
+            if payload is None:
+                continue
+            uow.sync_change_log.add_change(company_id=company_id, change_type=SyncChangeType.DOOR_STAGES,
+                                           entity_id=door.id, project_id=door.project_id, installer_id=installer_id,
+                                           payload=payload)
+
+    @classmethod
+    def snapshot_for_installer(cls, uow, *, company_id, installer_id, door_ids) -> list[dict]:
+        """Cold snapshot rows for the doors this installer sees; empty while the stage is switched off."""
+        if not cls.enabled() or not door_ids:
+            return []
+        planned = uow.session.scalars(select(DoorWorkPlanORM.door_id).where(
+            DoorWorkPlanORM.company_id == company_id, DoorWorkPlanORM.door_id.in_(door_ids),
+            DoorWorkPlanORM.replaced_at.is_(None))).all()
+        rows = []
+        for door_id in planned:
+            door = uow.doors.get(company_id=company_id, door_id=door_id)
+            payload = cls.stage_payload(uow, company_id=company_id, door=door, installer_id=installer_id) if door else None
+            if payload is not None:
+                rows.append(payload)
+        return rows
 
     # ---- execution --------------------------------------------------------------------------------
     @classmethod
@@ -291,7 +398,9 @@ class WorkStagesService:
             replay = (client_event_id is not None and existing.client_event_id == client_event_id) or \
                      (request_id is not None and existing.request_id == request_id)
             if replay and existing.installer_id == installer_id:
-                return cls._completion_result(door, items, facts, applied=False)
+                earning = cls._stage_earnings(uow, company_id, [existing]).get(existing.id)
+                return cls._completion_result(door, items, facts, applied=False,
+                                              earning_status=cls._earning_status(uow, company_id, existing, earning))
             raise Conflict("This stage is already completed", details={"door_id": str(door_id), "stage_code": stage_code})
         if door.is_locked:
             raise Conflict("Door is locked (already installed). Admin override required.", details={"door_id": str(door_id)})
@@ -303,21 +412,26 @@ class WorkStagesService:
         uow.session.add(fact)
         uow.session.flush()
         facts[stage_code] = fact
+        # Step 4: the fact is valued at the factory rate confirmed for (door type, stage) at execution time.
+        earning, earning_status = cls._value_fact(uow, company_id=company_id, door=door, fact=fact)
         AuditService.add(uow, company_id=company_id, actor_user_id=actor_user_id, entity_type="door", entity_id=door_id,
                          action="DOOR_STAGE_COMPLETE", after={"stage_code": stage_code, "installer_id": str(installer_id),
                                                               "happened_at": fact.happened_at.isoformat(), "source": source,
-                                                              "creates_earning": False})
+                                                              "creates_earning": earning is not None,
+                                                              "earning_id": str(earning.id) if earning else None,
+                                                              "earning_status": earning_status})
         if all(code in facts for code, item in items.items() if item.required):
             cls._install_by_stages(uow, company_id=company_id, actor_user_id=actor_user_id, door=door, facts=facts, source=source)
-        return cls._completion_result(door, items, facts, applied=True)
+        cls.publish_stage_changes(uow, company_id=company_id, door=door)
+        return cls._completion_result(door, items, facts, applied=True, earning_status=earning_status)
 
     @staticmethod
-    def _completion_result(door, items, facts, *, applied: bool) -> dict:
+    def _completion_result(door, items, facts, *, applied: bool, earning_status: str | None = None) -> dict:
         required = [code for code, item in items.items() if item.required]
         return {"id": door.id, "status": door.status.value if hasattr(door.status, "value") else str(door.status),
                 "version": int(door.version or 0), "applied": applied,
                 "required_total": len(required), "required_done": sum(1 for code in required if code in facts),
-                "door_installed": door.status == DoorStatus.INSTALLED}
+                "door_installed": door.status == DoorStatus.INSTALLED, "earning_status": earning_status}
 
     @staticmethod
     def _install_by_stages(uow, *, company_id, actor_user_id, door, facts, source) -> None:
@@ -339,3 +453,9 @@ class WorkStagesService:
         ProjectStatusService.recalc_and_set(uow=uow, company_id=company_id, project_id=door.project_id)
         record_door_transition(uow, company_id=company_id, actor_user_id=actor_user_id, door=door, from_status=from_status,
                                source=source, reason="All required stages completed")
+        # The transition record addresses the door holder only; every stage installer gets the installed door too.
+        for installer_id in WorkStagesService.recipients(uow, door):
+            if installer_id != door.installer_id:
+                uow.sync_change_log.add_change(company_id=company_id, change_type=SyncChangeType.DOOR, entity_id=door.id,
+                                               project_id=door.project_id, installer_id=installer_id,
+                                               payload=build_door_sync_payload(door))

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.modules.addons.infrastructure.models import AddonTypeORM, ProjectAddonFactORM
 from app.modules.audit.application.service import AuditService
 from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.doors.infrastructure.stage_models import DoorStageFactORM
 from app.modules.earnings.api.admin_schemas import (
     AdminEarningsLedgerItemDTO,
     AdminEarningsLedgerResponseDTO,
@@ -61,6 +62,7 @@ def _admin_ledger_item_dto(
     can_correct: bool,
     factory_price: FactoryEarningPriceORM | None = None,
     work_price: WorkPriceAccrualORM | None = None,
+    stage_code: str | None = None,
 ) -> AdminEarningsLedgerItemDTO:
     return AdminEarningsLedgerItemDTO(
         id=row.id,
@@ -81,6 +83,8 @@ def _admin_ledger_item_dto(
         addon_type_id=addon_type_id,
         addon_type_name=addon_type_name,
         addon_comment=addon_comment,
+        stage_fact_id=row.stage_fact_id,
+        stage_code=stage_code,
         installer_id=row.installer_id,
         installer_name=installer_name,
         can_correct=can_correct,
@@ -96,6 +100,7 @@ def _audit_entry_snapshot(row: CompletedWorkORM) -> dict:
         "project_id": str(row.project_id) if row.project_id else None,
         "door_id": str(row.door_id) if row.door_id else None,
         "addon_fact_id": str(row.addon_fact_id) if row.addon_fact_id else None,
+        "stage_fact_id": str(row.stage_fact_id) if row.stage_fact_id else None,
         "installer_id": str(row.installer_id),
         "work_kind": str(getattr(row, "work_kind", None) or "DOOR"),
         "completed_at": row.completed_at.isoformat(),
@@ -147,6 +152,12 @@ class EarningsAdminApiService:
                 ProjectAddonFactORM.comment.label("addon_comment"),
                 AddonTypeORM.name.label("addon_type_name"),
                 InstallerORM.full_name.label("installer_name"),
+                DoorStageFactORM.stage_code.label("stage_code"),
+            )
+            .outerjoin(
+                DoorStageFactORM,
+                (DoorStageFactORM.company_id == company_id)
+                & (DoorStageFactORM.id == CompletedWorkORM.stage_fact_id),
             )
             .outerjoin(
                 ProjectORM,
@@ -197,6 +208,7 @@ class EarningsAdminApiService:
                 _addon_comment,
                 _addon_type_name,
                 _installer_name,
+                _stage_code,
             ) in rows
             if str(row.entry_type) == "ORIGINAL"
         ]
@@ -245,6 +257,7 @@ class EarningsAdminApiService:
                     ),
                     factory_price=evidence.get(row.id),
                     work_price=work_evidence.get(row.correction_ref_id or row.id),
+                    stage_code=stage_code,
                 )
                 for (
                     row,
@@ -255,6 +268,7 @@ class EarningsAdminApiService:
                     addon_comment,
                     addon_type_name,
                     installer_name,
+                    stage_code,
                 ) in rows
             ],
             total=total,
@@ -313,6 +327,8 @@ class EarningsAdminApiService:
                 "correction_ref_id",
                 "can_correct",
                 "reason",
+                "stage_fact_id",
+                "stage_code",
             ]
         )
         for item in ledger.items:
@@ -339,6 +355,8 @@ class EarningsAdminApiService:
                     str(item.correction_ref_id) if item.correction_ref_id else "",
                     "true" if item.can_correct else "false",
                     item.reason or "",
+                    str(item.stage_fact_id) if item.stage_fact_id else "",
+                    item.stage_code or "",
                 ]
             )
         return output.getvalue()
@@ -418,6 +436,7 @@ class EarningsAdminApiService:
             project_id=original.project_id,
             door_id=original.door_id,
             addon_fact_id=original.addon_fact_id,
+            stage_fact_id=original.stage_fact_id,
             installer_id=original.installer_id,
             completed_at=original.completed_at,
             quantity=quantity,
@@ -433,6 +452,7 @@ class EarningsAdminApiService:
             project_id=original.project_id,
             door_id=original.door_id,
             addon_fact_id=original.addon_fact_id,
+            stage_fact_id=original.stage_fact_id,
             installer_id=original.installer_id,
             completed_at=original.completed_at,
             quantity=quantity,

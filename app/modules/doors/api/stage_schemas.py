@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -97,6 +97,9 @@ class DoorStageDTO(BaseModel):
     completed_at: datetime | None
     completed_by: UUID | None
     fact_id: UUID | None
+    # Step 4: the earning that values the fact, or why there is none (never an amount here).
+    earning_id: UUID | None = None
+    earning_status: Literal["RECORDED", "NO_RATE", "PRICING_INACTIVE"] | None = None
 
 
 class DoorStagesDTO(BaseModel):
@@ -119,3 +122,4 @@ class StageCompletionResponse(BaseModel):
     required_total: int
     required_done: int
     door_installed: bool
+    earning_status: Literal["RECORDED", "NO_RATE", "PRICING_INACTIVE"] | None = None

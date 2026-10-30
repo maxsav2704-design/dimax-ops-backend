@@ -51,9 +51,10 @@ class FactoryPriceTimelineService:
         return InstallerPriceSnapshot(
             price_list_id=price_list.id, version=price_list.version, currency=price_list.currency,
             effective_from=activation.effective_from,
+            # Devices only cache door and addon prices (the stage protocol carries no price); STAGE lines stay server-side.
             items=[InstallerPriceItem(kind=item.kind, target_id=item.door_type_id or item.addon_type_id,
                                       unit=item.unit, rate=item.installer_price)
-                   for item in uow.price_lists.items(company_id, price_list.id)],
+                   for item in uow.price_lists.items(company_id, price_list.id) if item.kind in ("DOOR", "ADDON")],
         )
 
     @staticmethod
@@ -122,9 +123,12 @@ class FactoryPriceTimelineService:
 
     @classmethod
     def quote(cls, uow, *, company_id: UUID, kind: str, target_id: UUID, performed_at: datetime,
-              seen_price_list_id: UUID | None = None, legacy_queue: bool = False) -> FactoryPriceQuote | None:
-        if kind not in ("DOOR", "ADDON"):
+              seen_price_list_id: UUID | None = None, legacy_queue: bool = False,
+              stage_code: str | None = None) -> FactoryPriceQuote | None:
+        if kind not in ("DOOR", "ADDON", "STAGE"):
             raise ValidationError("Unknown work kind", field="kind")
+        if (kind == "STAGE") != (stage_code is not None):
+            raise ValidationError("A stage quote needs the door type and its stage code", field="stage_code")
         if performed_at.tzinfo is None or performed_at.utcoffset() is None:
             raise ValidationError("Execution time must include its timezone", field="performed_at")
         performed_at = performed_at.astimezone(timezone.utc)
@@ -154,11 +158,12 @@ class FactoryPriceTimelineService:
             if seen_price_list_id is not None and seen_price_list_id != price_list.id:
                 raise Conflict("Cached price differs from the effective price at execution time", field="price_list_id")
         context = FactoryWorkPriceContext(price_list_id=price_list.id, version=price_list.version,
-            approval_id=receipt.id, activation_id=activation.id, kind=kind, target_id=target_id,
+            approval_id=receipt.id, activation_id=activation.id, kind=kind, target_id=target_id, stage_code=stage_code,
             currency=price_list.currency, performed_at=performed_at,
             effective_from=activation.effective_from, selection=selection, snapshot_hash=receipt.snapshot_hash)
         item = next((row for row in uow.price_lists.items(company_id, price_list.id)
-                     if row.kind == kind and (row.door_type_id or row.addon_type_id) == target_id), None)
+                     if row.kind == kind and (row.door_type_id or row.addon_type_id) == target_id
+                     and row.stage_code == stage_code), None)
         if item is None:
             raise MissingFactoryPrice(context)
         return FactoryPriceQuote(**context.model_dump(), price_list_item_id=item.id,

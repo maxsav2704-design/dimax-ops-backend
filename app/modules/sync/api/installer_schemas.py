@@ -154,6 +154,25 @@ class ColdSnapshotIssueDTO(_StrictSnapshotDTO):
     details: str | None
 
 
+class ColdSnapshotDoorStageDTO(_StrictSnapshotDTO):
+    """One stage of a door as this installer sees it: who does it is a yes/no, never a price."""
+
+    stage_code: str
+    name: str
+    required: bool
+    sequence: int
+    assigned_to_me: bool
+    completed_at: datetime | None
+    completed_by_me: bool
+
+
+class ColdSnapshotDoorStagesDTO(_StrictSnapshotDTO):
+    door_id: UUID
+    project_id: UUID
+    plan_version: int
+    stages: list[ColdSnapshotDoorStageDTO]
+
+
 class ColdSnapshotDTO(BaseModel):
     projects: list[ColdSnapshotProjectDTO]
     doors: list[ColdSnapshotDoorDTO]
@@ -163,6 +182,8 @@ class ColdSnapshotDTO(BaseModel):
     addon_plans: list[ColdSnapshotAddonPlanDTO]
     addon_facts: list[ColdSnapshotAddonFactDTO]
     issues: list[ColdSnapshotIssueDTO]
+    # Only filled while WORK_STAGES_ENABLED; same shape as the DOOR_STAGES change payload.
+    door_stages: list[ColdSnapshotDoorStagesDTO] = []
 
 
 class InstallerSyncResponse(BaseModel):

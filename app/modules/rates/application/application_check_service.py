@@ -31,7 +31,8 @@ class FactoryPriceApplicationCheckService:
 
         lines = uow.price_lists.items(price_list.company_id, price_list.id)
         block("NO_ITEMS", int(not lines))
-        prices = {(row.kind, row.door_type_id or row.addon_type_id): row for row in lines}
+        prices = {(row.kind, row.door_type_id or row.addon_type_id): row for row in lines if row.kind != "STAGE"}
+        stage_prices = {(row.door_type_id, row.stage_code) for row in lines if row.kind == "STAGE"}
         unavailable, changed, missing = 0, 0, {"DOOR": 0, "ADDON": 0}
         for work in uow.price_lists.required_work(price_list.company_id, price_list.id):
             if not work["available"]:
@@ -47,6 +48,9 @@ class FactoryPriceApplicationCheckService:
         block("UNAVAILABLE_WORK", unavailable)
         block("CATALOG_CHANGED", changed)
         block("INSTALLER_SURCHARGES", summary.door_surcharges)
+        # Stages planned on open doors without a rate in this version: their facts would stay unpriced.
+        # Review, not a blocker: stage rates are an owner decision (spec section 12), not a catalog requirement.
+        note("MISSING_STAGE_PRICES", len(uow.price_lists.required_stage_work(price_list.company_id) - stage_prices))
         note("LEGACY_DIFFERENCES", summary.different)
         note("DOOR_SNAPSHOTS", summary.door_snapshots)
         note("SCHEDULED_RATES", summary.scheduled_rates)

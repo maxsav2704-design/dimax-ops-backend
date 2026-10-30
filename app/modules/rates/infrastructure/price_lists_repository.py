@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.modules.addons.infrastructure.models import AddonTypeORM
 from app.modules.door_types.infrastructure.models import DoorTypeORM
+from app.modules.doors.domain.enums import DoorStatus
+from app.modules.doors.infrastructure.models import DoorORM
+from app.modules.doors.infrastructure.stage_models import DoorTypeStagePlanItemORM, DoorWorkPlanORM, WorkStageDefinitionORM
 from app.modules.identity.infrastructure.models import AdminProfileORM, CompanyORM, UserORM
 from app.modules.identity.domain.enums import UserRole
 from app.modules.rates.infrastructure.price_list_models import FactoryPriceListItemORM, FactoryPriceListORM
@@ -65,6 +68,25 @@ class FactoryPriceListsRepository:
             model.deleted_at.is_(None),
         )).all()
         return {row.id: row for row in rows}
+
+    def stage_catalog(self, company_id: UUID, codes: set[str]):
+        rows = self.session.scalars(select(WorkStageDefinitionORM).where(
+            WorkStageDefinitionORM.company_id == company_id, WorkStageDefinitionORM.code.in_(codes),
+            WorkStageDefinitionORM.is_active.is_(True),
+        )).all()
+        return {row.code: row for row in rows}
+
+    def required_stage_work(self, company_id: UUID) -> set[tuple[UUID, str]]:
+        """(door_type_id, stage_code) of every stage planned on a door that is not installed yet."""
+        rows = self.session.execute(
+            select(DoorORM.door_type_id, DoorTypeStagePlanItemORM.stage_code).distinct()
+            .select_from(DoorWorkPlanORM)
+            .join(DoorORM, DoorORM.id == DoorWorkPlanORM.door_id)
+            .join(DoorTypeStagePlanItemORM, DoorTypeStagePlanItemORM.plan_id == DoorWorkPlanORM.plan_id)
+            .where(DoorWorkPlanORM.company_id == company_id, DoorWorkPlanORM.replaced_at.is_(None),
+                   DoorORM.company_id == company_id, DoorORM.status != DoorStatus.INSTALLED)
+        ).all()
+        return {(row[0], row[1]) for row in rows}
 
     def add(self, row: FactoryPriceListORM, items: list[FactoryPriceListItemORM]):
         self.session.add(row)

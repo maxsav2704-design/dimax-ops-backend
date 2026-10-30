@@ -263,6 +263,9 @@ class DoorUseCases:
                 publish_issue_change(uow, issue=issue, door=door)
 
         elif cmd.new_status == "NOT_INSTALLED":
+            # A door installed by stages keeps its immutable stage facts and their earnings;
+            # redoing a stage after a defect is step 5, not a status override.
+            ensure_not_stage_door(uow, door)
             if not cmd.reason_id:
                 raise ValidationError(
                     "reason_id is required for NOT_INSTALLED"

@@ -21,7 +21,7 @@ class FactoryEarningsPricing:
 
     @staticmethod
     def quote(uow, *, company_id, kind, target_id, performed_at, legacy_queue=False, seen_price_list_id=None,
-              approved_work_price: ApprovedWorkPrice | None = None):
+              approved_work_price: ApprovedWorkPrice | None = None, stage_code=None):
         if approved_work_price is not None:
             approved_work_price.validate_target(company_id=company_id, kind=kind, target_id=target_id,
                                                 performed_at=performed_at)
@@ -32,7 +32,7 @@ class FactoryEarningsPricing:
             performed_at = performed_at.replace(tzinfo=timezone.utc)
         return FactoryPriceTimelineService.quote(uow, company_id=company_id, kind=kind, target_id=target_id,
                                                 performed_at=performed_at, legacy_queue=legacy_queue,
-                                                seen_price_list_id=seen_price_list_id)
+                                                seen_price_list_id=seen_price_list_id, stage_code=stage_code)
 
     @staticmethod
     def evidence(uow, company_id, work_id):

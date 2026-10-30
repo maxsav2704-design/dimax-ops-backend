@@ -22,12 +22,14 @@ from app.shared.infrastructure.db.base import utcnow
 
 def _snapshot(uow, price_list, company_name: str) -> dict:
     items = sorted(uow.price_lists.items(price_list.company_id, price_list.id),
-                   key=lambda item: (item.kind, str(item.door_type_id or item.addon_type_id)))
+                   key=lambda item: (item.kind, str(item.door_type_id or item.addon_type_id), item.stage_code or ""))
+    # DOOR / ADDON lines keep the exact shape hashed by earlier confirmations; STAGE lines add their stage code.
     return {
         "company_name": company_name, "version": price_list.version, "currency": price_list.currency,
         "reason": price_list.reason, "agreement_reference": price_list.agreement_reference,
         "items": [{"kind": item.kind, "target_id": str(item.door_type_id or item.addon_type_id),
-                   "name": item.name, "unit": item.unit, "installer_price": format(item.installer_price, ".2f")}
+                   "name": item.name, "unit": item.unit, "installer_price": format(item.installer_price, ".2f"),
+                   **({"stage_code": item.stage_code} if item.kind == "STAGE" else {})}
                   for item in items],
     }
 

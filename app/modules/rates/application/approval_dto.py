@@ -69,7 +69,8 @@ class ConfirmApproval(PreviewApproval):
 
 
 class PublicApprovalLine(BaseModel):
-    kind: Literal["DOOR", "ADDON"]
+    kind: Literal["DOOR", "ADDON", "STAGE"]
+    stage_code: str | None = None
     name: str
     unit: str
     installer_price: Decimal
