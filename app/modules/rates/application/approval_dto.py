@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, StringConstraints, field_validator, model_serializer
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=160)]
 Token = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{43}$", min_length=43, max_length=43)]
@@ -72,6 +72,14 @@ class PublicApprovalLine(BaseModel):
     kind: Literal["DOOR", "ADDON", "STAGE"]
     stage_code: str | None = None
     name: str
+
+    @model_serializer(mode="wrap")
+    def _stage_code_only_for_stages(self, handler):
+        # The public document keeps the exact DOOR / ADDON line shape the factory has always seen.
+        data = handler(self)
+        if data.get("stage_code") is None:
+            data.pop("stage_code", None)
+        return data
     unit: str
     installer_price: Decimal
 
